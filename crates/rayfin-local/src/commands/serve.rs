@@ -770,6 +770,7 @@ fn control_router(ctx: &ServeContext<'_>, token: &str, functions: &FunctionsSlot
         auth: Arc::clone(ctx.auth),
         db: ctx.db.clone(),
         data: ctx.data_api.clone(),
+        model: Arc::clone(ctx.model),
         functions: functions.clone(),
         storage_dir: ctx.state.storage_dir(),
         reload: Arc::new(ctx.reload.clone()),

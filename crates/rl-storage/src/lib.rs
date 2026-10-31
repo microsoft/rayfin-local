@@ -20,8 +20,9 @@
 //! `Succeeded`. Signed URLs live under `/.rayfin-local/storage/` and need no credentials (the
 //! client sends none): their HMAC token is the capability. Files are named by random ids under
 //! `objects/` (uploads are staged under `staging/` and moved in on commit); paths and metadata live
-//! in the `_rl_storage_*` tables.
+//! in the `_rl_storage_*` tables. [`admin`] reads and deletes them for the host's control API.
 
+pub mod admin;
 mod error;
 mod handlers;
 mod names;

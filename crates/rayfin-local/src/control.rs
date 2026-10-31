@@ -24,6 +24,8 @@ use rl_auth::{AuthError, AuthService, SignInAs, User};
 use rl_db::Db;
 use rl_graphql::DataApi;
 use rl_graphql::admin::{AdminError, MAX_ROWS, RowsQuery};
+use rl_model::AppModel;
+use rl_storage::admin::{self as storage_admin, AdminError as StorageAdminError};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -35,6 +37,8 @@ use crate::reload::{ReloadHandle, ReloadOutcome, Stopping};
 
 /// The rows `GET /entities/{name}/rows` reads without `limit`.
 const DEFAULT_ROWS: u32 = 50;
+/// The files `GET /storage/{folder}/files` reads without `limit`.
+const DEFAULT_FILES: u32 = 50;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -61,6 +65,8 @@ pub struct Control {
     pub db: Db,
     /// The data API (`None` when `services.data` is off): the served model and its rows.
     pub data: Option<Arc<DataApi>>,
+    /// The served model, for the storage folders it declares.
+    pub model: Arc<AppModel>,
     /// The functions that run, for `GET /status`.
     pub functions: FunctionsSlot,
     /// Where the stored files are (`.rayfin-local/storage`).
@@ -91,6 +97,15 @@ impl Control {
                 get(rows).delete(clear_rows),
             )
             .route("/.rayfin-local/control/data/reset", post(reset_data))
+            .route("/.rayfin-local/control/storage", get(storage))
+            .route(
+                "/.rayfin-local/control/storage/{folder}/files",
+                get(files).delete(clear_files),
+            )
+            .route(
+                "/.rayfin-local/control/storage/{folder}/files/{*path}",
+                get(file).delete(delete_file),
+            )
             .route("/.rayfin-local/control/reload", post(reload))
             .route_layer(middleware::from_fn_with_state(Arc::clone(&control), guard))
             .layer(middleware::map_response(no_store))
@@ -206,6 +221,12 @@ impl From<AdminError> for ApiError {
             }
             AdminError::Database(_) => Self::internal(&error),
         }
+    }
+}
+
+impl From<StorageAdminError> for ApiError {
+    fn from(error: StorageAdminError) -> Self {
+        Self::internal(error)
     }
 }
 
@@ -538,26 +559,7 @@ fn rows_query(query: &HashMap<String, String>) -> Result<RowsQuery, ApiError> {
             .map(|value| value.trim())
             .filter(|v| !v.is_empty())
     };
-    let offset = match text("offset") {
-        None => 0,
-        Some(offset) => offset.parse().map_err(|_| {
-            ApiError::invalid(format!(
-                "`offset` is the number of rows to skip, not `{offset}`."
-            ))
-        })?,
-    };
-    let limit = match text("limit") {
-        None => DEFAULT_ROWS,
-        Some(limit) => limit
-            .parse()
-            .ok()
-            .filter(|limit| (1..=MAX_ROWS).contains(limit))
-            .ok_or_else(|| {
-                ApiError::invalid(format!(
-                    "`limit` is a number of rows from 1 to {MAX_ROWS}, not `{limit}`."
-                ))
-            })?,
-    };
+    let (offset, limit) = page(query, "rows", DEFAULT_ROWS, MAX_ROWS)?;
     let desc = match text("desc").map(str::to_ascii_lowercase).as_deref() {
         None | Some("false" | "0") => false,
         Some("true" | "1") => true,
@@ -573,6 +575,42 @@ fn rows_query(query: &HashMap<String, String>) -> Result<RowsQuery, ApiError> {
         order_by: text("orderBy").map(str::to_owned),
         desc,
     })
+}
+
+/// A page's `offset` and `limit` (1 to `max`, `default` when absent), counting `noun`.
+fn page(
+    query: &HashMap<String, String>,
+    noun: &str,
+    default: u32,
+    max: u32,
+) -> Result<(u64, u32), ApiError> {
+    let text = |name: &str| {
+        query
+            .get(name)
+            .map(|value| value.trim())
+            .filter(|v| !v.is_empty())
+    };
+    let offset = match text("offset") {
+        None => 0,
+        Some(offset) => offset.parse().map_err(|_| {
+            ApiError::invalid(format!(
+                "`offset` is the number of {noun} to skip, not `{offset}`."
+            ))
+        })?,
+    };
+    let limit = match text("limit") {
+        None => default,
+        Some(limit) => limit
+            .parse()
+            .ok()
+            .filter(|limit| (1..=max).contains(limit))
+            .ok_or_else(|| {
+                ApiError::invalid(format!(
+                    "`limit` is a number of {noun} from 1 to {max}, not `{limit}`."
+                ))
+            })?,
+    };
+    Ok((offset, limit))
 }
 
 async fn clear_rows(
@@ -593,6 +631,93 @@ async fn reset_data(State(control): AppState) -> Result<Json<Value>, ApiError> {
         .map_err(ApiError::internal)?;
     tracing::info!("Deleted the local data: the entities' rows, the users and the stored files");
     Ok(Json(json!({ "ok": true })))
+}
+
+/// The storage folders: those the app declares, then those only stored files name.
+async fn storage(State(control): AppState) -> Result<Json<Value>, ApiError> {
+    let folders = storage_admin::folders(&control.db, &control.model).await?;
+    Ok(Json(json!({ "folders": folders })))
+}
+
+/// That `name` is a storage folder the app declares or stored files name.
+async fn find_folder(control: &Control, name: &str) -> Result<(), ApiError> {
+    let folders = storage_admin::folders(&control.db, &control.model).await?;
+    if folders.iter().any(|folder| folder.name == name) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::NOT_FOUND,
+        "folder-not-found",
+        format!("There is no storage folder {name}."),
+    )
+    .hint("GET /storage lists the storage folders."))
+}
+
+fn file_not_found(folder: &str, path: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        "file-not-found",
+        format!("There is no file {path} in storage folder {folder}."),
+    )
+    .hint("GET /storage/{folder}/files lists a folder's files.")
+}
+
+async fn files(
+    State(control): AppState,
+    Path(folder): Path<String>,
+    query: Result<Query<HashMap<String, String>>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|_| ApiError::invalid("The query string is malformed."))?;
+    let (offset, limit) = page(&query, "files", DEFAULT_FILES, storage_admin::MAX_FILES)?;
+    find_folder(&control, &folder).await?;
+    let files = storage_admin::files(&control.db, &folder, offset, limit).await?;
+    serde_json::to_value(files)
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+/// A file's bytes, as stored, with its content type.
+async fn file(
+    State(control): AppState,
+    Path((folder, path)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let stored = storage_admin::file(&control.db, &control.storage_dir, &folder, &path)
+        .await?
+        .ok_or_else(|| file_not_found(&folder, &path))?;
+    let bytes = tokio::fs::read(&stored.bytes)
+        .await
+        .map_err(ApiError::internal)?;
+    let content_type = HeaderValue::from_str(&stored.content_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+    let headers = [
+        (header::CONTENT_TYPE, content_type),
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+    ];
+    Ok((headers, bytes).into_response())
+}
+
+async fn delete_file(
+    State(control): AppState,
+    Path((folder, path)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    if !storage_admin::delete_file(&control.db, &control.storage_dir, &folder, &path).await? {
+        return Err(file_not_found(&folder, &path));
+    }
+    tracing::info!("Deleted a stored file from storage folder {folder}");
+    Ok(Json(json!({ "deleted": 1 })))
+}
+
+async fn clear_files(
+    State(control): AppState,
+    Path(folder): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    find_folder(&control, &folder).await?;
+    let deleted = storage_admin::clear_folder(&control.db, &control.storage_dir, &folder).await?;
+    tracing::info!("Deleted the {deleted} stored files of storage folder {folder}");
+    Ok(Json(json!({ "deleted": deleted })))
 }
 
 #[derive(Default, Deserialize)]

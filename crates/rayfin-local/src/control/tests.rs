@@ -36,6 +36,7 @@ struct Answer {
     status: StatusCode,
     headers: HeaderMap,
     body: Value,
+    raw: Bytes,
 }
 
 /// Who sends a request: a loopback host with the token, unless changed.
@@ -72,7 +73,12 @@ async fn harness_with(reload: Arc<dyn ReloadTrigger>) -> Harness {
         .unwrap(),
     );
     let callers: Arc<dyn CallerResolver> = auth.clone();
-    let data = DataApi::new(db.clone(), model, callers, DataApiSettings::default());
+    let data = DataApi::new(
+        db.clone(),
+        Arc::clone(&model),
+        callers,
+        DataApiSettings::default(),
+    );
     let storage_dir = dir.path().join("storage");
     let live = LiveState::default();
     let router = Control {
@@ -80,6 +86,7 @@ async fn harness_with(reload: Arc<dyn ReloadTrigger>) -> Harness {
         auth: Arc::clone(&auth),
         db: db.clone(),
         data: Some(Arc::new(data)),
+        model: Arc::clone(&model),
         functions: FunctionsSlot::default(),
         storage_dir: storage_dir.clone(),
         reload,
@@ -141,7 +148,38 @@ impl Harness {
             status,
             headers,
             body,
+            raw,
         }
+    }
+
+    /// Starts the storage service over the `basic` fixture, which creates its tables.
+    async fn start_storage(&self) {
+        let analysis = include_str!("../../../rl-model/tests/fixtures/basic.analysis.json");
+        let model = AppModel::from_analysis(&serde_json::from_str(analysis).unwrap()).unwrap();
+        let config = rl_storage::StorageConfig::new(&self.storage_dir, "http://localhost:7171");
+        let callers: Arc<dyn CallerResolver> = self.auth.clone();
+        // Only its tables are needed: the tests store files as an upload leaves them.
+        let _storage = rl_storage::router(config, self.db.clone(), Arc::new(model), callers)
+            .await
+            .unwrap();
+    }
+
+    /// `bytes` stored at `path` in `folder` by user `u1`, as an upload leaves them: a row of
+    /// the storage tables and a file under `objects/`.
+    fn store_file(&self, folder: &str, path: &str, content_type: &str, bytes: &[u8]) {
+        let blob = format!("{folder}-{}", path.replace('/', "_"));
+        std::fs::write(self.storage_dir.join("objects").join(&blob), bytes).unwrap();
+        let name = path.rsplit('/').next().unwrap();
+        let size = bytes.len();
+        let sql = format!(
+            "INSERT INTO _rl_storage_objects (id, folder, path, name, blob, size, content_type,
+               etag, owner_id, created_at, updated_at)
+             VALUES ('{blob}', '{folder}', '{path}', '{name}', '{blob}', {size}, '{content_type}',
+               '\"e1\"', 'u1', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
+        );
+        self.db
+            .call_blocking(|conn| conn.execute_batch(&sql))
+            .unwrap();
     }
 
     /// Two categories, the second the first's child, and a todo in the first.
@@ -519,6 +557,97 @@ async fn rows_are_cleared_unless_others_refer_to_them_and_the_data_is_reset() {
     assert!(h.auth.list_users().await.unwrap().is_empty());
     assert!(h.auth.resolve(Some(&session.access_token)).is_err());
     assert_eq!(std::fs::read_dir(&objects).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn stored_files_are_listed_read_and_deleted_whatever_the_rules() {
+    let h = harness().await;
+    let folder = |name: &str, display: Option<&str>, files: u64, bytes: u64| json!({ "name": name, "displayName": display, "files": files, "bytes": bytes });
+    // Before the storage service first starts, the folders the app declares are empty.
+    let empty = h.call(Method::GET, "/storage", None).await;
+    assert_eq!(empty.status, StatusCode::OK, "{}", empty.body);
+    let declared = [
+        folder("todo-attachments", Some("Attachments"), 0, 0),
+        folder("user-avatars", Some("Avatars"), 0, 0),
+    ];
+    assert_eq!(empty.body, json!({ "folders": declared }));
+
+    h.start_storage().await;
+    h.store_file("user-avatars", "ana/face.png", "image/png", b"png!");
+    h.store_file("user-avatars", "bob.png", "image/png", b"png");
+    // Files outlive their folder's @blob class.
+    h.store_file("retired", "old.txt", "text/plain", b"old");
+    let folders = h.call(Method::GET, "/storage", None).await;
+    let avatars = folder("user-avatars", Some("Avatars"), 2, 7);
+    assert_eq!(folders.body["folders"][1], avatars);
+    assert_eq!(folders.body["folders"][2], folder("retired", None, 1, 3));
+
+    let page = h
+        .call(
+            Method::GET,
+            "/storage/user-avatars/files?offset=1&limit=1",
+            None,
+        )
+        .await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(page.body["total"], 2);
+    assert_eq!(page.body["files"].as_array().unwrap().len(), 1);
+    assert_eq!(page.body["files"][0]["path"], "bob.png");
+    assert_eq!(page.body["files"][0]["ownerId"], "u1");
+    let invalid = h
+        .call(Method::GET, "/storage/user-avatars/files?limit=501", None)
+        .await;
+    assert_eq!(
+        (invalid.status, code(&invalid)),
+        (StatusCode::BAD_REQUEST, "invalid-request")
+    );
+    let unknown = h.call(Method::GET, "/storage/nowhere/files", None).await;
+    assert_eq!(
+        (unknown.status, code(&unknown)),
+        (StatusCode::NOT_FOUND, "folder-not-found")
+    );
+
+    // A file's bytes as stored, its path in segments or escaped as one.
+    for path in ["ana/face.png", "ana%2Fface.png"] {
+        let face = h
+            .call(
+                Method::GET,
+                &format!("/storage/user-avatars/files/{path}"),
+                None,
+            )
+            .await;
+        assert_eq!(face.status, StatusCode::OK, "{path}");
+        assert_eq!(face.headers[header::CONTENT_TYPE], "image/png");
+        assert_eq!(face.headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(face.raw.as_ref(), b"png!");
+    }
+    let missing = h
+        .call(
+            Method::GET,
+            "/storage/user-avatars/files/ana/none.png",
+            None,
+        )
+        .await;
+    assert_eq!(
+        (missing.status, code(&missing)),
+        (StatusCode::NOT_FOUND, "file-not-found")
+    );
+
+    let bob = "/storage/user-avatars/files/bob.png";
+    let deleted = h.call(Method::DELETE, bob, None).await;
+    assert_eq!(deleted.body, json!({ "deleted": 1 }));
+    assert_eq!(
+        code(&h.call(Method::DELETE, bob, None).await),
+        "file-not-found"
+    );
+    let cleared = h.call(Method::DELETE, "/storage/retired/files", None).await;
+    assert_eq!(cleared.body, json!({ "deleted": 1 }));
+    // A folder the app doesn't declare goes with its last file.
+    let left = h.call(Method::GET, "/storage", None).await;
+    let avatar = folder("user-avatars", Some("Avatars"), 1, 4);
+    assert_eq!(left.body["folders"], json!([declared[0], avatar]));
+    let objects = std::fs::read_dir(h.storage_dir.join("objects")).unwrap();
+    assert_eq!(objects.count(), 1);
 }
 
 /// Records each reload and answers what it is told to, or as live reload would.

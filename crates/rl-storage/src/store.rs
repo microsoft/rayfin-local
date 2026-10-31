@@ -231,13 +231,7 @@ pub(crate) fn delete_object(conn: &Connection, id: &str) -> rusqlite::Result<Opt
 /// Deletes every object and operation; returns how many objects there were (none before the
 /// tables exist).
 pub(crate) fn clear(conn: &mut Connection) -> rusqlite::Result<u64> {
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
-         '_rl_storage_objects')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !exists {
+    if !has_tables(conn)? {
         return Ok(0);
     }
     let tx = conn.transaction()?;
@@ -245,6 +239,66 @@ pub(crate) fn clear(conn: &mut Connection) -> rusqlite::Result<u64> {
     tx.execute("DELETE FROM _rl_storage_operations", [])?;
     tx.commit()?;
     Ok(u64::try_from(deleted).unwrap_or_default())
+}
+
+/// Whether the storage tables exist: the storage service creates them when it first starts.
+pub(crate) fn has_tables(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         '_rl_storage_objects')",
+        [],
+        |row| row.get(0),
+    )
+}
+
+/// Each folder that holds objects, by name: how many, and their bytes.
+pub(crate) fn folder_totals(conn: &Connection) -> rusqlite::Result<Vec<(String, u64, u64)>> {
+    let mut statement = conn.prepare(
+        "SELECT folder, COUNT(*), COALESCE(SUM(size), 0) FROM _rl_storage_objects
+         GROUP BY folder ORDER BY folder",
+    )?;
+    let totals = statement.query_map([], |row| {
+        let count = |index| {
+            row.get::<_, i64>(index)
+                .map(|n| u64::try_from(n).unwrap_or_default())
+        };
+        Ok((row.get(0)?, count(1)?, count(2)?))
+    })?;
+    totals.collect()
+}
+
+/// How many objects `folder` holds.
+pub(crate) fn count_objects(conn: &Connection, folder: &str) -> rusqlite::Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM _rl_storage_objects WHERE folder = ?1",
+        [folder],
+        |row| row.get(0),
+    )?;
+    Ok(u64::try_from(count).unwrap_or_default())
+}
+
+/// `limit` of `folder`'s objects in path (byte) order, after skipping `offset`.
+pub(crate) fn objects_page(
+    conn: &Connection,
+    folder: &str,
+    offset: u64,
+    limit: u32,
+) -> rusqlite::Result<Vec<Object>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {OBJECT_COLUMNS} FROM _rl_storage_objects WHERE folder = ?1
+         ORDER BY path LIMIT ?2 OFFSET ?3"
+    ))?;
+    let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+    let objects = statement.query_map(params![folder, limit, offset], Object::from_row)?;
+    objects.collect()
+}
+
+/// Deletes `folder`'s objects; the blobs of the versions it deleted.
+pub(crate) fn delete_folder(conn: &Connection, folder: &str) -> rusqlite::Result<Vec<String>> {
+    let mut statement =
+        conn.prepare("DELETE FROM _rl_storage_objects WHERE folder = ?1 RETURNING blob")?;
+    let blobs = statement.query_map([folder], |row| row.get(0))?;
+    blobs.collect()
 }
 
 /// The bytes of every stored object.

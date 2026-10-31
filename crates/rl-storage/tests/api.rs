@@ -287,6 +287,102 @@ async fn clearing_deletes_every_object_and_upload_while_serving() {
 }
 
 #[tokio::test]
+async fn the_host_lists_reads_and_deletes_files_whatever_the_rules() {
+    use rl_storage::admin;
+
+    let h = harness().await;
+    let summary = |folders: Vec<admin::Folder>| -> Vec<(String, Option<String>, u64, u64)> {
+        folders
+            .into_iter()
+            .map(|folder| (folder.name, folder.display_name, folder.files, folder.bytes))
+            .collect()
+    };
+    let declared = |name: &str, display: &str, files, bytes| {
+        (name.to_owned(), Some(display.to_owned()), files, bytes)
+    };
+    let alice = Some("alice");
+    h.upload(alice, note("b.txt", None), b"hello")
+        .await
+        .unwrap();
+    h.upload(alice, note("one.txt", Some("a")), b"hi")
+        .await
+        .unwrap();
+    assert_eq!(
+        summary(admin::folders(&h.db, &model()).await.unwrap()),
+        [
+            declared("todo-attachments", "Attachments", 0, 0),
+            declared("user-avatars", "Avatars", 0, 0),
+            declared("public-notes", "PublicNotes", 2, 7),
+        ]
+    );
+    // Files outlive their folder's @blob class, after the declared folders.
+    let mut without = model();
+    let storage = without.storage.as_mut().unwrap();
+    storage
+        .folders
+        .retain(|folder| folder.name != "public-notes");
+    let folders = summary(admin::folders(&h.db, &without).await.unwrap());
+    assert_eq!(
+        folders.last(),
+        Some(&("public-notes".to_owned(), None, 2, 7))
+    );
+
+    let first = admin::files(&h.db, "public-notes", 0, 1).await.unwrap();
+    assert_eq!(first.total, 2);
+    assert_eq!(first.files.len(), 1);
+    assert_eq!(first.files[0]["path"], "a/one.txt");
+    assert_eq!(first.files[0]["name"], "one.txt");
+    assert_eq!(first.files[0]["ownerId"], "alice");
+    let rest = admin::files(&h.db, "public-notes", 1, 50).await.unwrap();
+    assert_eq!(rest.files[0]["path"], "b.txt");
+
+    let file = admin::file(&h.db, &h.root, "public-notes", "b.txt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((file.content_type.as_str(), file.size), ("text/plain", 5));
+    assert_eq!(file.listing["path"], "b.txt");
+    assert_eq!(std::fs::read(&file.bytes).unwrap(), b"hello");
+    let missing = admin::file(&h.db, &h.root, "public-notes", "c.txt").await;
+    assert!(missing.unwrap().is_none());
+
+    let deleted = admin::delete_file(&h.db, &h.root, "public-notes", "b.txt").await;
+    assert!(deleted.unwrap());
+    assert!(!file.bytes.exists());
+    let again = admin::delete_file(&h.db, &h.root, "public-notes", "b.txt").await;
+    assert!(!again.unwrap());
+    assert_eq!(h.paths(None, "folder=public-notes").await, ["a/one.txt"]);
+
+    let cleared = admin::clear_folder(&h.db, &h.root, "public-notes").await;
+    assert_eq!(cleared.unwrap(), 1);
+    assert!(h.paths(None, "folder=public-notes").await.is_empty());
+    assert!(h.files("objects").is_empty());
+
+    // Before the storage service first starts, there are no tables and no files.
+    let fresh = Db::open_in_memory().unwrap();
+    let none = admin::folders(&fresh, &model()).await.unwrap();
+    assert!(none.iter().all(|folder| folder.files == 0));
+    assert_eq!(
+        admin::files(&fresh, "public-notes", 0, 50)
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    assert!(
+        !admin::delete_file(&fresh, &h.root, "public-notes", "a")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        admin::clear_folder(&fresh, &h.root, "public-notes")
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn upload_list_download_and_delete_like_the_client() {
     let h = harness().await;
     let alice = Some("alice");

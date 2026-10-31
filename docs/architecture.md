@@ -203,7 +203,7 @@ Programs such as Fabricator run `serve --json` as a child process; [embedding.md
 - **Control API.** `control.rs` serves `/.rayfin-local/control/*` when `RAYFIN_LOCAL_CONTROL_TOKEN` is set: `main` takes the token from the environment before anything else runs, so no child inherits it, and `serve` checks it before starting.
   Its router is one of `commands::serve::Features::routers`, so it is built again, over the services that run then, each time live reload swaps in a new router.
   A guard layer answers only loopback peers that send no `Origin` and the token as a bearer token (compared as SHA-256 digests in constant time).
-  The handlers use the services' own APIs: `rl-auth` for users, sessions and the sign-in identity, `rl-graphql`'s `admin` module for rows (formatted by the data API's SQL), and `rl_storage::clear`.
+  The handlers use the services' own APIs: `rl-auth` for users, sessions and the sign-in identity, `rl-graphql`'s `admin` module for rows (formatted by the data API's SQL), and `rl-storage`'s `admin` module and `rl_storage::clear` for stored files.
   `POST /reload` goes through `control::ReloadTrigger`, which `reload::ReloadHandle` implements; its failures answer with the code `errors::HostError::classify` gives them (`config-invalid`, `analysis-failed`), or `stopping` (`reload::Stopping`).
 
 ## Requests
