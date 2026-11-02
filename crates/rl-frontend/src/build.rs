@@ -1,4 +1,5 @@
-//! `--static`: the app's own build, run with the local Rayfin env.
+//! `--static`: the app's own build, run with the local Rayfin env, or an existing one with
+//! `--reuse-build`.
 
 use std::path::PathBuf;
 
@@ -30,6 +31,25 @@ pub struct StaticBuildConfig {
     pub sink: LineSink,
 }
 
+impl StaticBuildConfig {
+    /// The output folder, and the index document the build must leave in it.
+    fn output(&self) -> (PathBuf, PathBuf) {
+        let output_dir = dunce::simplified(&self.frontend_dir).join(&self.output_dir);
+        let index_document = non_blank(self.index_document.as_deref())
+            .unwrap_or(DEFAULT_INDEX_DOCUMENT)
+            .trim_start_matches(['/', '\\']);
+        let index = output_dir.join(index_document);
+        (output_dir, index)
+    }
+}
+
+/// For `--reuse-build`: the output folder of an earlier build, as [`build_static`] returns it,
+/// when it holds the index document; `None` when the app must be built.
+pub fn existing_static_build(config: &StaticBuildConfig) -> Option<PathBuf> {
+    let (output_dir, index) = config.output();
+    index.is_file().then_some(output_dir)
+}
+
 /// Runs the build command in the platform shell with `env` set, and returns the output folder
 /// once it holds the index document.
 ///
@@ -41,6 +61,7 @@ pub async fn build_static(config: StaticBuildConfig) -> Result<PathBuf, Frontend
     if !frontend_dir.is_dir() {
         return Err(FrontendError::MissingFrontendDir(frontend_dir));
     }
+    let (output_dir, index) = config.output();
     let command = non_blank(config.build_command.as_deref())
         .unwrap_or(DEFAULT_BUILD_COMMAND)
         .to_owned();
@@ -61,11 +82,6 @@ pub async fn build_static(config: StaticBuildConfig) -> Result<PathBuf, Frontend
         Err(error) => return Err(error.into()),
     }
 
-    let output_dir = frontend_dir.join(&config.output_dir);
-    let index_document = non_blank(config.index_document.as_deref())
-        .unwrap_or(DEFAULT_INDEX_DOCUMENT)
-        .trim_start_matches(['/', '\\']);
-    let index = output_dir.join(index_document);
     if !index.is_file() {
         return Err(FrontendError::MissingBuildOutput { command, index });
     }

@@ -699,28 +699,43 @@ fn rayfin_env(ctx: &ServeContext<'_>) -> RayfinEnv {
 }
 
 /// With `--static`: builds the app (`services.staticHosting.buildCommand`) for the backend to
-/// serve.
+/// serve, or with `--reuse-build` serves its existing build when there is one.
 pub async fn static_site(ctx: &ServeContext<'_>) -> anyhow::Result<Option<StaticSite>> {
     if !ctx.options.static_build {
         return Ok(None);
     }
     let hosting = &ctx.project.config().services.static_hosting;
     let index_document = hosting.index_document().to_owned();
-    let root = rl_frontend::build_static(StaticBuildConfig {
+    let config = StaticBuildConfig {
         frontend_dir: ctx.project.static_build_dir().to_path_buf(),
         build_command: hosting.build_command.clone(),
         output_dir: ctx.project.static_output_dir().to_path_buf(),
         index_document: Some(index_document.clone()),
         env: rl_frontend::frontend_env(&rayfin_env(ctx)),
         sink: ui::child_sink(),
-    })
-    .await
-    .context("Could not build the app for --static")?;
-    ui::step(format_args!("Built the app into {}", root.display()));
+    };
+    let root = app_build(config, ctx.options.reuse_build).await?;
     Ok(Some(StaticSite {
         root,
         index_document,
     }))
+}
+
+/// Builds the app and returns its output folder; with `reuse`, an output folder that already
+/// holds the index document is returned without building.
+async fn app_build(config: StaticBuildConfig, reuse: bool) -> anyhow::Result<PathBuf> {
+    if reuse && let Some(root) = rl_frontend::existing_static_build(&config) {
+        ui::step(format_args!(
+            "Serving the existing build in {}",
+            root.display()
+        ));
+        return Ok(root);
+    }
+    let root = rl_frontend::build_static(config)
+        .await
+        .context("Could not build the app for --static")?;
+    ui::step(format_args!("Built the app into {}", root.display()));
+    Ok(root)
 }
 
 /// Starts the app's Vite dev server; returns its URL. When Vite exits on its own it is started
@@ -1104,5 +1119,35 @@ connectors:
             None
         );
         installing.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reuse_build_serves_an_existing_build_and_builds_when_there_is_none() {
+        /// Whether the build ran: it exits with 3.
+        fn build_ran(result: anyhow::Result<PathBuf>) -> bool {
+            result.is_err_and(|err| {
+                matches!(
+                    err.downcast_ref::<rl_frontend::FrontendError>(),
+                    Some(rl_frontend::FrontendError::BuildFailed { status, .. })
+                        if status.code() == Some(3)
+                )
+            })
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = || StaticBuildConfig {
+            frontend_dir: dir.path().to_owned(),
+            build_command: Some("exit 3".to_owned()),
+            output_dir: "dist".into(),
+            index_document: Some("/index.html".to_owned()),
+            env: vec![],
+            sink: Arc::new(|_, _, _| {}),
+        };
+        let dist = dir.path().join("dist");
+        std::fs::create_dir(&dist).unwrap();
+        assert!(build_ran(app_build(config(), true).await));
+
+        std::fs::write(dist.join("index.html"), "<!doctype html>").unwrap();
+        assert_eq!(app_build(config(), true).await.unwrap(), dist);
+        assert!(build_ran(app_build(config(), false).await));
     }
 }

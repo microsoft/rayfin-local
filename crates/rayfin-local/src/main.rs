@@ -101,6 +101,10 @@ struct ServeArgs {
     /// Build the app once and serve it from the backend instead of running the Vite dev server.
     #[arg(long = "static")]
     static_build: bool,
+    /// With --static, serve the app's existing build instead of building it again; builds when
+    /// there is none.
+    #[arg(long, requires = "static_build")]
+    reuse_build: bool,
     /// Run only the backend.
     #[arg(long)]
     no_frontend: bool,
@@ -165,6 +169,7 @@ impl ServeArgs {
             port: self.port,
             frontend_port: self.frontend_port,
             static_build: self.static_build,
+            reuse_build: self.reuse_build,
             no_frontend: self.no_frontend,
             no_functions: self.no_functions,
             host: self.host,
@@ -349,6 +354,8 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex};
 
+    use clap::error::ErrorKind;
+
     use super::*;
 
     #[derive(Clone, Default)]
@@ -387,5 +394,21 @@ mod tests {
             "building the functions\nwarning: port in use port=7171\ndebug: http{status=200}: \
              answered\n"
         );
+    }
+
+    #[test]
+    fn reuse_build_needs_static() {
+        let Err(error) = Cli::try_parse_from(["rayfin-local", "serve", "--reuse-build"]) else {
+            panic!("--reuse-build was accepted without --static");
+        };
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        assert!(error.to_string().contains("--static"), "{error}");
+
+        let cli = Cli::try_parse_from(["rayfin-local", "serve", "--static", "--reuse-build"]);
+        let Command::Serve(args) = cli.unwrap().command else {
+            panic!("not serve");
+        };
+        let options = args.into_options(false);
+        assert!(options.static_build && options.reuse_build, "{options:?}");
     }
 }

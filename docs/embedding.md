@@ -22,7 +22,7 @@ Anything else bumps it.
 ## Starting
 
 ```sh
-rayfin-local serve --json -C <project> [--sign-in-as developer|none|user:<username>] [--force-schema] [--reset] [--no-functions] [--port N] [--frontend-port N]
+rayfin-local serve --json -C <project> [--sign-in-as developer|none|user:<username>] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
 
 With `--json`:
@@ -177,7 +177,7 @@ It comes again after each `config-changed` that applied, with the new features; 
 {"v":1,"type":"log","time":"…","source":"vite","level":"info","line":"page reload src/App.tsx"}
 ```
 
-- `source`: `vite`, `functions` (the function host and its build), `build` (the data package build, and the app's build with `--static`), or `rayfin-local` (its own logs, including failed requests).
+- `source`: `vite`, `functions` (the function host and its build), `build` (the data package build, and the app's build with `--static`, which doesn't run when `--reuse-build` finds an existing build), or `rayfin-local` (its own logs, including failed requests).
 - `level`: `debug`, `info`, `warn` or `error` (child output on stderr is `warn`).
   `debug` lines are emitted only with `--verbose`.
 

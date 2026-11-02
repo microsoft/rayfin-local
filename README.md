@@ -199,11 +199,12 @@ Press Ctrl+C to stop everything.
 Other ways to run it:
 
 ```sh
-rayfin-local serve --static        # build the app once and serve it from the backend
-rayfin-local serve --no-frontend   # only the backend, for your own dev server or tests
-rayfin-local serve -C path/to/app  # a project other than the current directory
-rayfin-local serve --reset         # start from an empty database
-rayfin-local serve --json          # for programs: JSON events on stdout, stops when stdin closes
+rayfin-local serve --static                # build the app once and serve it from the backend
+rayfin-local serve --static --reuse-build  # serve the app's existing build; build it only if there is none
+rayfin-local serve --no-frontend           # only the backend, for your own dev server or tests
+rayfin-local serve -C path/to/app          # a project other than the current directory
+rayfin-local serve --reset                 # start from an empty database
+rayfin-local serve --json                  # for programs: JSON events on stdout, stops when stdin closes
 ```
 
 Programs that run rayfin-local for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator), use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
@@ -427,6 +428,7 @@ Every command takes these options:
 | `--port <PORT>` | Backend port. Default: `[server] port`, else this project's last port, else 7171. |
 | `--frontend-port <PORT>` | Vite port. Default: `[frontend] port`, else `RAYFIN_PUBLIC_FRONTEND_PORT` from `rayfin/.env`, else 5173. |
 | `--static` | Build the app once and serve it from the backend instead of running Vite. |
+| `--reuse-build` | With `--static`, serve the app's existing build instead of building it again; builds when there is none. |
 | `--no-frontend` | Run only the backend. |
 | `--no-functions` | Don't build or run the functions. |
 | `--host <HOST>` | Interface to listen on. Default: `[server] host`, else `127.0.0.1`. **Anything but loopback exposes your Azure identity** to the network, through functions and connectors. With `0.0.0.0` or `::` the app's URLs still point at `localhost`, so to use the app from another device pass this machine's LAN address instead. |

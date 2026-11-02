@@ -332,6 +332,7 @@ Each value is set under its `RAYFIN_PUBLIC_*` name, which `rayfinLocalDev()` rea
 
 `rl-frontend` runs `services.staticHosting.buildCommand` (default `npm run build`) in the platform shell, in the frontend folder, with the same environment.
 The output folder (`services.staticHosting.folder`) must then hold the index document (`indexDocument`, default `index.html`).
+With `--reuse-build`, an output folder that already holds it is served as it is, without running the build command, so it keeps the values it was built with.
 `rl-server` serves it from the backend origin with an SPA fallback, and `/rayfin.config.json` gives the backend origin as `apiUrl`, so the app and the API share one origin.
 
 ## Functions

@@ -8,7 +8,8 @@
 //! - [`DevServer`] runs the app's Vite through `js/vite-dev.mjs`, never `npm run dev` (which may
 //!   call `rayfin up` or `rayfin dev`).
 //! - [`build_static`] runs `services.staticHosting.buildCommand` and checks its output, for
-//!   `rl_server::StaticSite`.
+//!   `rl_server::StaticSite`; [`existing_static_build`] finds the output of an earlier build
+//!   instead (`--reuse-build`).
 
 mod build;
 mod dev;
@@ -20,7 +21,10 @@ use std::time::Duration;
 
 use rl_node::NodeError;
 
-pub use build::{DEFAULT_BUILD_COMMAND, DEFAULT_INDEX_DOCUMENT, StaticBuildConfig, build_static};
+pub use build::{
+    DEFAULT_BUILD_COMMAND, DEFAULT_INDEX_DOCUMENT, StaticBuildConfig, build_static,
+    existing_static_build,
+};
 pub use dev::{DevServer, DevServerConfig};
 pub use env::{RayfinEnv, frontend_env};
 

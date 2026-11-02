@@ -65,6 +65,8 @@ pub struct ServeOptions {
     pub port: Option<u16>,
     pub frontend_port: Option<u16>,
     pub static_build: bool,
+    /// `--reuse-build`: with `static_build`, serve the existing build when there is one.
+    pub reuse_build: bool,
     pub no_frontend: bool,
     pub no_functions: bool,
     pub host: Option<String>,
