@@ -1,18 +1,18 @@
 #!/bin/sh
 # Installs rayfin-local from its GitHub releases, on macOS and Linux:
 #
-#   curl -fsSL https://raw.githubusercontent.com/spatney/rayfin-local/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
 #
 # Environment variables:
 #   RAYFIN_LOCAL_VERSION      the version to install, such as 0.1.0 (default: the latest release)
 #   RAYFIN_LOCAL_INSTALL_DIR  the folder for the binary (default: ~/.local/bin)
-#   RAYFIN_LOCAL_REPO         the GitHub repository to install from (default: spatney/rayfin-local)
+#   RAYFIN_LOCAL_REPO         the GitHub repository to install from (default: microsoft/rayfin-local)
 #
 # The download is checked against the release's SHA256SUMS.txt. Run the script again to update.
 
 set -eu
 
-REPO="${RAYFIN_LOCAL_REPO:-spatney/rayfin-local}"
+REPO="${RAYFIN_LOCAL_REPO:-microsoft/rayfin-local}"
 VERSION="${RAYFIN_LOCAL_VERSION:-}"
 INSTALL_DIR="${RAYFIN_LOCAL_INSTALL_DIR:-}"
 

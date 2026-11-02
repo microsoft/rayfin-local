@@ -47,6 +47,11 @@ rayfin-local serve
 - [Commands and flags](#commands-and-flags)
 - [Troubleshooting](#troubleshooting)
 - [More documentation](#more-documentation)
+- [License](#license)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Support](#support)
+- [Trademarks](#trademarks)
 
 ## Why use it
 
@@ -131,19 +136,23 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 
 ## Install
 
+Prebuilt releases from the original repository are not included in the Git history migration.
+Until a release is published in this repository, [build from source](#requirements) with
+`cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
+
 **macOS and Linux:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/spatney/rayfin-local/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/spatney/rayfin-local/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 ```
 
-The script downloads the latest [release](https://github.com/spatney/rayfin-local/releases) for your platform, checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
+The script downloads the latest [release](https://github.com/microsoft/rayfin-local/releases) for your platform, checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
 
 - **macOS and Linux:** into `~/.local/bin`. If that folder isn't on your `PATH`, the script prints the line to add to your shell's profile.
 - **Windows:** into `%LOCALAPPDATA%\Programs\rayfin-local`, which it adds to your user `PATH`. Open a new terminal to pick it up there.
@@ -153,11 +162,11 @@ Run the script again to update.
 `RAYFIN_LOCAL_VERSION` installs a given version and `RAYFIN_LOCAL_INSTALL_DIR` picks another folder:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/spatney/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.1.0 sh
 ```
 
 ```powershell
-$env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/spatney/rayfin-local/main/install.ps1 | iex
+$env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 ```
 
 | Platform | Release build |
@@ -168,10 +177,10 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/spatn
 
 Other ways to install:
 
-- **Download** the archive for your platform from the [releases page](https://github.com/spatney/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
+- **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
   The macOS binaries are not notarized: if Gatekeeper blocks one you downloaded with a browser, run `xattr -d com.apple.quarantine rayfin-local`.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
-  `cargo install --locked --git https://github.com/spatney/rayfin-local rayfin-local`.
+  `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
 To uninstall, delete the binary. On Windows, also remove `%LOCALAPPDATA%\Programs\rayfin-local` from your user `PATH`.
 
@@ -458,7 +467,7 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
 
 - **Windows: "Access is denied" when you run `rayfin-local`, or the installer warns that Windows refused to start it.**
   On managed devices, Microsoft Defender's attack surface reduction rules can block new, unsigned programs downloaded from the internet, depending on the program that starts them (in our tests: blocked from `cmd` and sometimes Windows PowerShell 5.1, allowed from PowerShell 7).
-  Run it from PowerShell 7 (`pwsh`), or build it on your machine instead: `cargo install --locked --git https://github.com/spatney/rayfin-local rayfin-local`.
+  Run it from PowerShell 7 (`pwsh`), or build it on your machine instead: `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
 - **"Node.js was not found" or "Node.js … is too old".**
   Install Node.js 20 or later from <https://nodejs.org>, or set `RAYFIN_LOCAL_NODE` to a `node` executable.
@@ -508,3 +517,35 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
 ## License
 
 [MIT](LICENSE).
+
+## Contributing
+
+This project welcomes contributions and suggestions.  Most contributions require you to agree to a
+Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
+the rights to use your contribution. For details, visit [Contributor License Agreements](https://cla.opensource.microsoft.com).
+
+When you submit a pull request, a CLA bot will automatically determine whether you need to provide
+a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
+provided by the bot. You will only need to do this once across all repos using our CLA.
+
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
+contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for additional resources.
+
+## Security
+
+**Please do not report security vulnerabilities through public GitHub issues.**
+See [SECURITY.md](SECURITY.md) for Microsoft's security reporting guidance.
+
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for information about filing issues and getting help.
+
+## Trademarks
+
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
+trademarks or logos is subject to and must follow
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
+Any use of third-party trademarks or logos are subject to those third-party's policies.

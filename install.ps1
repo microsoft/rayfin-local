@@ -1,12 +1,12 @@
 # Installs rayfin-local from its GitHub releases, on Windows:
 #
-#   irm https://raw.githubusercontent.com/spatney/rayfin-local/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 #
 # Environment variables:
 #   RAYFIN_LOCAL_VERSION         the version to install, such as 0.1.0 (default: the latest release)
 #   RAYFIN_LOCAL_INSTALL_DIR     the folder for rayfin-local.exe
 #                                (default: %LOCALAPPDATA%\Programs\rayfin-local)
-#   RAYFIN_LOCAL_REPO            the GitHub repository to install from (default: spatney/rayfin-local)
+#   RAYFIN_LOCAL_REPO            the GitHub repository to install from (default: microsoft/rayfin-local)
 #   RAYFIN_LOCAL_NO_MODIFY_PATH  set to 1 to leave your user PATH alone
 #
 # The download is checked against the release's SHA256SUMS.txt. Run the script again to update.
@@ -19,7 +19,7 @@
     # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires, by default.
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $repo = if ($env:RAYFIN_LOCAL_REPO) { $env:RAYFIN_LOCAL_REPO } else { 'spatney/rayfin-local' }
+    $repo = if ($env:RAYFIN_LOCAL_REPO) { $env:RAYFIN_LOCAL_REPO } else { 'microsoft/rayfin-local' }
     $installDir = if ($env:RAYFIN_LOCAL_INSTALL_DIR) {
         $env:RAYFIN_LOCAL_INSTALL_DIR
     } else {
