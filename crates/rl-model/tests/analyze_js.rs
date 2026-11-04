@@ -114,6 +114,92 @@ fn analyze_js_writes_inside_a_project_only_under_rayfin_local() {
     assert!(!input.out_dir.exists());
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// SDK 1.37 moved `@microsoft/rayfin-core/schema` and `/analysis` to `/_internal/schema` and
+/// `/_internal/analysis`, with the same exports. The fixture's model analyzes the same with its
+/// rayfin-core exported that way.
+#[test]
+fn analyze_js_loads_the_analyzer_where_sdk_1_37_moved_it() {
+    let Some((node, fixture)) = prerequisites() else {
+        return;
+    };
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-1-37");
+    let project = scratch.join("project");
+    let _ = fs::remove_dir_all(&project);
+    for folder in ["rayfin/data", "rayfin/storage"] {
+        copy_dir(&fixture.join(folder), &project.join(folder));
+    }
+    for file in [
+        "package.json",
+        "tsconfig.json",
+        "rayfin/rayfin.yml",
+        "rayfin/tsconfig.json",
+    ] {
+        fs::copy(fixture.join(file), project.join(file)).unwrap();
+    }
+    let modules = fixture.join("node_modules");
+    let packages = [
+        "@microsoft/rayfin-core",
+        "@microsoft/rayfin-lib",
+        "@standard-schema/spec",
+        "pluralize",
+    ];
+    for package in packages {
+        copy_dir(
+            &modules.join(package),
+            &project.join("node_modules").join(package),
+        );
+    }
+    let manifest_path = project.join("node_modules/@microsoft/rayfin-core/package.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let exports = manifest["exports"].as_object_mut().unwrap();
+    for name in ["schema", "analysis"] {
+        let target = exports.remove(&format!("./{name}")).unwrap();
+        exports.insert(format!("./_internal/{name}"), target);
+    }
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    // The helper imports TypeScript from the project: the fixture's.
+    let typescript = project.join("node_modules").join("typescript");
+    fs::create_dir_all(&typescript).unwrap();
+    fs::write(
+        typescript.join("package.json"),
+        r#"{"name":"typescript","main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let real = serde_json::to_string(&modules.join("typescript")).unwrap();
+    fs::write(
+        typescript.join("index.cjs"),
+        format!("module.exports = require({real});\n"),
+    )
+    .unwrap();
+
+    let mut input = AnalyzeInput::for_project(&project, Dialect::Mssql, true);
+    input.out_dir = scratch.join("compiled");
+    let output = run(&node, &project, &input.to_json(), &scratch.join("run"));
+    assert_eq!(output["ok"], true, "{output}");
+    let golden: Value = serde_json::from_str(include_str!("fixtures/basic.analysis.json")).unwrap();
+    for key in ["coreVersion", "entities", "config", "policies", "storage"] {
+        assert!(
+            output["result"][key] == golden[key],
+            "{key} differs from tests/fixtures/basic.analysis.json: {}",
+            output["result"][key]
+        );
+    }
+}
+
 /// The `connectors` fixture app (the `inventory` SQL connector), with its packages installed.
 fn connectors_prerequisites() -> Option<(OsString, PathBuf)> {
     let project = fixture_project().parent().unwrap().join("connectors");
