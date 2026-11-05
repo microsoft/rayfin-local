@@ -134,6 +134,8 @@ pub struct Ready {
     pub portal_url: String,
     pub data_dir: String,
     pub sign_in_as: SignInAs,
+    /// `--open-sign-in`: automatic sign-in answers any page or program on this machine.
+    pub open_sign_in: bool,
     pub sdk: Sdk,
     pub features: Features,
 }
@@ -296,6 +298,7 @@ pub enum WarningCode {
     ConnectorUnsupported,
     FunctionsBuildFailed,
     AzureSignIn,
+    OpenSignIn,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -979,6 +982,13 @@ mod tests {
                 r#"{"v":1,"type":"warning","time":"2026-10-30T03:12:09.512Z","code":"secret-missing","message":"secret API_KEY has no local value","hint":null,"details":{"name":"API_KEY"}}"#
             )
         );
+        let open_sign_in = Event::Warning(Warning {
+            code: WarningCode::OpenSignIn,
+            message: "Open sign-in is on".into(),
+            hint: None,
+            details: json!({}),
+        });
+        assert_eq!(line(open_sign_in)["code"], "open-sign-in");
         assert_eq!(
             line(Event::Ready(Box::new(ready()))),
             parse(
@@ -990,6 +1000,7 @@ mod tests {
                   "portalUrl": "http://localhost:7171/.rayfin-local/portal",
                   "dataDir": "C:\\apps\\notes\\.rayfin-local",
                   "signInAs": {"kind": "developer"},
+                  "openSignIn": false,
                   "sdk": {"version": "1.36.2", "supported": true},
                   "features": {
                     "data": {"enabled": true, "entities": ["Note", "Tag"]},
@@ -1024,6 +1035,7 @@ mod tests {
             portal_url: "http://localhost:7171/.rayfin-local/portal".into(),
             data_dir: "C:\\apps\\notes\\.rayfin-local".into(),
             sign_in_as: SignInAs::Developer,
+            open_sign_in: false,
             sdk: Sdk {
                 version: Some("1.36.2".into()),
                 supported: true,

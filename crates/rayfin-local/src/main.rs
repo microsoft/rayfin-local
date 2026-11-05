@@ -137,6 +137,16 @@ struct ServeArgs {
     /// `[auth] sign_in_as` in rayfin-local.toml, else developer).
     #[arg(long, value_name = "WHO")]
     sign_in_as: Option<SignInAs>,
+    /// Let pages that another dev server or proxy serves sign in automatically: the backend's
+    /// `/.rayfin-local/dev/session-token` answers any request from this machine and the app's
+    /// own origin, not only rayfin-local's Vite, and the developer signs in as
+    /// developer@example.com. Needs a loopback --host. Also RAYFIN_LOCAL_OPEN_SIGN_IN=1.
+    #[arg(
+        long,
+        env = "RAYFIN_LOCAL_OPEN_SIGN_IN",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    open_sign_in: bool,
     /// Open the app in the browser once it is ready (not with --json).
     #[arg(long)]
     open: bool,
@@ -179,6 +189,7 @@ impl ServeArgs {
             reset: self.reset,
             inspect: self.inspect,
             sign_in_as: self.sign_in_as,
+            open_sign_in: self.open_sign_in,
             open: self.open,
             verbose,
         }

@@ -211,6 +211,7 @@ Other ways to run it:
 rayfin-local serve --static                # build the app once and serve it from the backend
 rayfin-local serve --static --reuse-build  # serve the app's existing build; build it only if there is none
 rayfin-local serve --no-frontend           # only the backend, for your own dev server or tests
+rayfin-local serve --no-frontend --open-sign-in  # ...and let your dev server's pages sign in automatically
 rayfin-local serve -C path/to/app          # a project other than the current directory
 rayfin-local serve --reset                 # start from an empty database
 rayfin-local serve --json                  # for programs: JSON events on stdout, stops when stdin closes
@@ -237,7 +238,7 @@ Its port is remembered per project; when it is busy, rayfin-local takes the next
 | `/.rayfin-local/portal` | The local "Sign in with Fabric" page. |
 | `/.rayfin-local/portal/embed` | The local Fabric host, for apps that sign in embedded. |
 | `/.rayfin-local/health` | `{"ok":true}` once the backend is up. |
-| `/.rayfin-local/dev/session-token`, `/.rayfin-local/dev/session-stamp` | Automatic sign-in, and the stamp of the sessions the backend accepts, for rayfin-local's own dev server only. |
+| `/.rayfin-local/dev/session-token`, `/.rayfin-local/dev/session-stamp` | Automatic sign-in, and the stamp of the sessions the backend accepts, for rayfin-local's own dev server only; with `--open-sign-in`, for any page or program on this machine (see [Pages your own dev server serves](#pages-your-own-dev-server-serves)). |
 | `/.rayfin-local/control/*` | The control API, for programs that run rayfin-local, with `RAYFIN_LOCAL_CONTROL_TOKEN` (see [docs/embedding.md](docs/embedding.md#control-api)). |
 
 As on Fabric, `/api/*`, `/graphql`, `/functions/*`, `/connector-invoke/*` and `/connectors/*` need an `X-Publishable-Key` header; the local key is in `/rayfin.config.json`.
@@ -271,6 +272,25 @@ Users are local: they live in `.rayfin-local/db.sqlite`, not in Entra ID.
   Policies that compare `claims.email` need such a user.
 
 `rayfin-local users` lists, adds and deletes local users and resets their passwords.
+
+### Pages your own dev server serves
+
+With `--no-frontend`, no rayfin-local Vite runs, so a page your own dev server, test runner or preview proxy serves can't sign in automatically: the backend's `GET /.rayfin-local/dev/session-token` answers only rayfin-local's Vite, which holds a secret of the run, and refuses everything else with 403.
+`--open-sign-in` (or `RAYFIN_LOCAL_OPEN_SIGN_IN=1`) opens it:
+
+```sh
+rayfin-local serve --no-frontend --open-sign-in
+curl http://localhost:7171/.rayfin-local/dev/session-token   # {"accessToken", "refreshToken", ...}
+```
+
+- It answers any request from this machine without a foreign `Origin` (the page must call it on the backend's own origin, for example through a proxy that keeps the `Host`), with a session (access and refresh tokens) for the sign-in identity, which the page installs with `signInWithBrokeredToken()`.
+  `/.rayfin-local/dev/session-stamp` opens likewise.
+  Without rayfin-local's Vite nothing removes a stale stored session, so pages should sign in again after a 401.
+- The `developer` identity then always signs in as `developer@example.com`, never as your Entra user; `user:<username>` and `none` are unchanged.
+- `serve` refuses to start unless it listens on a loopback `--host`, and warns that it is on.
+- "This machine" is any process on it, and anything that reaches it through port forwarding; the same holds for rayfin-local's own Vite route today.
+  Functions' `ctx.Tokens` and connectors still use your Azure sign-in.
+- It is a command-line flag and environment variable only: `rayfin-local.toml` can't turn it on, so a cloned project can't open it.
 
 ## Identity and Azure tokens
 
@@ -444,6 +464,7 @@ Every command takes these options:
 | `--token-source <auto\|az\|rayfin>` | Where Azure tokens come from. Default: `[tokens] source`, else `auto`. |
 | `--tenant <TENANT>` | Entra tenant for tokens. Default: your login's tenant. |
 | `--sign-in-as <WHO>` | Who apps that sign in automatically sign in as: `developer` (you), `user:<username>` (a local user) or `none`. Default: `[auth] sign_in_as`, else `developer`. See [Signing in](#signing-in). |
+| `--open-sign-in` | Let pages another dev server or proxy serves sign in automatically: the backend's automatic sign-in answers any request from this machine on its own origin, and `developer` signs in as `developer@example.com`. Needs a loopback `--host`. Also `RAYFIN_LOCAL_OPEN_SIGN_IN=1`. See [Pages your own dev server serves](#pages-your-own-dev-server-serves). |
 | `--force-schema` | Apply schema changes that lose data. |
 | `--reset` | Start from an empty database: delete the database and stored files (keeps ports, keys and secrets). |
 | `--inspect[=PORT]` | Start the function host with the Node.js inspector, on port 9229 by default. |
@@ -457,6 +478,7 @@ Every command takes these options:
 | `RAYFIN_LOCAL_NODE` | The `node` executable to use instead of the one on `PATH`. |
 | `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` | A fixed token for one audience (see [Identity and Azure tokens](#identity-and-azure-tokens)). |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the control API for programs that run rayfin-local; at least 32 characters (see [docs/embedding.md](docs/embedding.md#control-api)). |
+| `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `serve --open-sign-in`; `0`, `false` or empty leave it off. |
 | `RAYFIN_ENV_FILE` | The env file to read instead of `rayfin/.env`, as for the Rayfin CLI. |
 | `RUST_LOG` | Log filters, such as `rl_graphql=debug`. |
 | `NO_COLOR` | Turn off colored output. |
