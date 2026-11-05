@@ -2,7 +2,7 @@
 //! edits applied on the same ports, a data package built before its entities are analyzed again,
 //! new secret values restarting only the function host, the Vite dev server started again after
 //! it is killed (still signing the app in), and a host's control API and automatic sign-in across
-//! changes, with `POST /reload`.
+//! changes, with `POST /reload`, and its seed data checked against the entities served now.
 //!
 //! They need Node.js and the fixture's npm packages (`npm ci` in `tests/fixtures/apps/basic` and
 //! in its `rayfin/functions`); without them they print a note and pass.
@@ -887,6 +887,51 @@ fn a_reload_on_request_answers_a_refused_schema_change_and_forces_it() {
     let (status, labels) = graphql(&api_url, &key, &token, "{ labels { items { name } } }");
     assert_eq!(status, 200, "{labels}");
     assert_eq!(labels["data"]["labels"]["items"], json!([]), "{labels}");
+
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
+
+#[test]
+fn the_seed_data_is_checked_against_the_entities_served_now() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let mut serve = Serve::start_hosted(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let ready = serve.next("ready");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let seed = app.path().join("rayfin").join("seed").join("data");
+    std::fs::create_dir_all(&seed).unwrap();
+    std::fs::write(seed.join("Label.json"), r#"[{ "name": "Urgent" }]"#).unwrap();
+    let (status, before) = control(&api_url, "GET", "/seed", None);
+    assert_eq!(status, 200, "{before}");
+    assert!(
+        before["problems"]
+            .to_string()
+            .contains("There is no entity Label"),
+        "{before}"
+    );
+
+    // A new entity applies without a new `ready`; the reload on request waits for it.
+    let data = app.path().join("rayfin").join("data");
+    std::fs::write(data.join("Label.ts"), LABEL).unwrap();
+    serve.until("the new entity", STEP, |event| {
+        event["type"] == "schema" && event["result"] == "applied"
+    });
+    let (status, reloaded) = control(&api_url, "POST", "/reload", Some(&json!({})));
+    assert_eq!(status, 200, "{reloaded}");
+    let (status, checked) = control(&api_url, "GET", "/seed", None);
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["problems"], json!([]), "{checked}");
+    let (status, loaded) = control(&api_url, "POST", "/seed", Some(&json!({})));
+    assert_eq!(status, 200, "{loaded}");
+    let label = json!([{ "name": "Label", "rows": 1 }]);
+    assert_eq!(loaded["entities"], label, "{loaded}");
+    let (status, exported) = control(&api_url, "GET", "/seed/export", None);
+    assert_eq!(status, 200, "{exported}");
+    assert_eq!(exported["data"][0]["entity"], "Label", "{exported}");
 
     assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
 }
