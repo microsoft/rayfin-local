@@ -5,7 +5,6 @@
 
 use std::fmt::Write as _;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
@@ -48,8 +47,8 @@ pub enum UsersCommand {
     },
 }
 
-pub async fn run(dir: &Path, command: UsersCommand) -> anyhow::Result<ExitCode> {
-    let project = Project::discover(dir)?;
+pub async fn run(at: &super::Location, command: UsersCommand) -> anyhow::Result<ExitCode> {
+    let project = at.discover()?;
     let state = LocalState::load_or_create(&project)?;
     let auth = open_auth(&state).await?;
     match command {
@@ -67,7 +66,7 @@ pub async fn run(dir: &Path, command: UsersCommand) -> anyhow::Result<ExitCode> 
 
 /// The auth service over the project database. Only its users are used, so the token settings
 /// of `rayfin.yml` don't matter here.
-async fn open_auth(state: &LocalState) -> anyhow::Result<AuthService> {
+pub(crate) async fn open_auth(state: &LocalState) -> anyhow::Result<AuthService> {
     let path = state.db_path();
     let db = Db::open(&path).with_context(|| {
         format!(
@@ -468,7 +467,7 @@ mod tests {
     }
 
     /// The project's users, as a running `serve` sees them: through another connection.
-    async fn open(dir: &Path) -> AuthService {
+    async fn open(dir: &std::path::Path) -> AuthService {
         let project = Project::discover(dir).unwrap();
         let state = LocalState::load_or_create(&project).unwrap();
         open_auth(&state).await.unwrap()
@@ -486,17 +485,28 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let dir = project();
         let root = dir.path();
-        run(root, add_command(" Ana@Contoso.com ", "first-pass"))
-            .await
-            .unwrap();
+        run(
+            &crate::commands::Location::at(root),
+            add_command(" Ana@Contoso.com ", "first-pass"),
+        )
+        .await
+        .unwrap();
         let auth = open(root).await;
 
         // Usernames are unique case-insensitively.
-        let err = run(root, add_command("ana@contoso.com", "other"))
-            .await
-            .unwrap_err();
+        let err = run(
+            &crate::commands::Location::at(root),
+            add_command("ana@contoso.com", "other"),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("already exists"), "{err:#}");
-        let err = run(root, add_command("bob", " ")).await.unwrap_err();
+        let err = run(
+            &crate::commands::Location::at(root),
+            add_command("bob", " "),
+        )
+        .await
+        .unwrap_err();
         assert!(
             format!("{err:#}").contains("Password is required"),
             "{err:#}"
@@ -522,7 +532,7 @@ mod tests {
         assert_eq!(rows[1].last(), Some(&"Entra"), "{table}");
 
         run(
-            root,
+            &crate::commands::Location::at(root),
             UsersCommand::ResetPassword {
                 user: "ANA@contoso.com".to_owned(),
                 password: Some("second-pass".to_owned()),
@@ -543,11 +553,18 @@ mod tests {
             user: user.to_owned(),
             yes: true,
         };
-        run(root, delete(&users[0].id)).await.unwrap();
+        run(&crate::commands::Location::at(root), delete(&users[0].id))
+            .await
+            .unwrap();
         let remaining = auth.list_users().await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, users[1].id);
-        let err = run(root, delete("ana@contoso.com")).await.unwrap_err();
+        let err = run(
+            &crate::commands::Location::at(root),
+            delete("ana@contoso.com"),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("There is no user"), "{err:#}");
     }
 }

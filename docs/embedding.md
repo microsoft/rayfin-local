@@ -22,7 +22,7 @@ Anything else bumps it.
 ## Starting
 
 ```sh
-rayfin-local serve --json -C <project> [--sign-in-as developer|none|user:<username>] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
+rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
 
 With `--json`:
@@ -42,6 +42,7 @@ The environment configures the rest:
 | --- | --- |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the [control API](#control-api); requests must send it as a bearer token. At least 32 characters; shorter values are refused with a fatal `config-invalid` error. An empty value counts as unset. rayfin-local removes it from its environment, so the processes it starts (Vite, the function host, the app's code) don't see it. |
 | `RAYFIN_LOCAL_NODE` | The `node` executable. |
+| `RAYFIN_LOCAL_STATE_DIR` | The state folder (the database, stored files, keys, `state.json`, secrets and `serve.lock`) instead of `<project>/.rayfin-local`, for every command; `--state-dir` wins over it. Hosts that keep the project in a synced folder can keep the live state elsewhere on local disk. Paths in this page under `.rayfin-local/` are then under this folder. |
 | `RAYFIN_CONFIG_DIR` | The Rayfin CLI's config folder, for the `rayfin` token source (the account a host has signed in). |
 | `NO_COLOR` | Ignored with `--json` (there are no colors). |
 
@@ -211,6 +212,7 @@ A `fatal` error is followed by `stopped`; other errors leave `serve` running.
 | `anonymous-role` | warning | Entities grant the `anonymous` role, which most Fabric tenants refuse. `details`: `{"entities"}`. |
 | `connector-unsupported` | warning | A connector's type runs only on Fabric. `details`: `{"name","type"}`. |
 | `azure-sign-in` | warning | No Azure token could be had for what needs one: functions' `ctx.Tokens` and connectors; once per audience. `details`: `{"audience","scope"}` (`audience` is `null` for other scopes). The developer identity needs none: without one it signs in as the local developer account, which a `log` line says. |
+| `serve-lock-unavailable` | warning | The state folder's file system doesn't support file locks (some network shares), so `serve` runs without the check that keeps a second `serve`, `reset` or `restore` off the folder. `details`: `{"stateDir"}`. |
 | `internal` | error | Anything else. |
 
 ### `stopped`
@@ -319,9 +321,52 @@ Leave out `Authorization` to call as an anonymous user.
 `rayfin-local secret list --json` prints `{"secrets":[{"name","declared":true,"description":null,"source":"env"}]}` with `source` one of `env`, `local` (`.rayfin-local/secrets.json`), `settings` (`local.settings.json`) or `none`; values are never printed.
 A running `serve` picks up a change made with `secret set` or `secret delete` by itself and restarts only its function host (a `config-changed` event with `"what": ["secrets"]` follows), so hosts don't restart it.
 
+## Backup and restore
+
+```sh
+rayfin-local backup <out> --json -C <project> [--state-dir <dir>]
+rayfin-local restore <from> --yes --json -C <project> [--state-dir <dir>]
+```
+
+A backup is a folder: `manifest.json` (`format` `"rayfin-local-backup"`, `formatVersion` 1, `createdAt`, `rayfinLocalVersion`, `database`, and `files`, each `{"path","size","sha256"}`), `db.sqlite` and `storage/objects/*`.
+It holds the app's rows, the local users (password hashes), the schema and the stored files: exactly what `serve --reset` deletes, without sessions, refresh tokens or sign-in codes.
+It never holds the signing keys, `state.json`, `secrets.json` or the caches, so hosts can sync or upload it.
+
+- `backup` doesn't take `serve.lock`, so hosts can run it while `serve` runs, as often as every few seconds: it reads one consistent snapshot of the database (SQLite's online backup) without blocking the backend's writes, then copies the stored files the snapshot refers to.
+  `<out>` must be missing or empty and outside the state folder; the backup appears there only once complete.
+  Without a database yet, it succeeds with `"database": false` and an empty backup.
+- `restore` takes `serve.lock`, so it is refused while `serve` runs (stop it first), and needs `--yes` with `--json`.
+  It checks every file against the manifest and the database's integrity before it changes anything, then replaces the database and stored files at once and signs every session out.
+  The state folder may be new (another machine): keys and `state.json` are created as `serve` would, so the app id differs.
+  The next `serve` applies the app's schema to the restored data with the usual rules (a `schema` event, possibly `refused`).
+
+On success they print one object and exit 0:
+
+```json
+{"ok":true,"command":"backup","stateDir":"…","path":"…","database":true,"files":3,"bytes":40960,"createdAt":"2026-10-30T03:12:09Z","formatVersion":1}
+```
+
+`restore` prints the same fields with `"command":"restore"`, plus `signedOutSessions` (the number of sessions it revoked).
+On failure they print `{"ok":false,"error":{"code","message"}}` and exit 1; `code` is stable:
+
+| Code | Meaning |
+| --- | --- |
+| `project-not-found` | No `rayfin/rayfin.yml` in the folder or its parents. |
+| `config-invalid` | The project or the state folder is invalid (such as a `--state-dir` inside `rayfin/`, or with files that aren't rayfin-local's). |
+| `already-serving` | `restore` only: `serve` runs on this state folder. |
+| `output-not-empty` | `backup` only: `<out>` has files. |
+| `output-invalid` | `backup` only: `<out>` is inside the state folder, or not a folder. |
+| `storage-changed` | `backup` only: stored files kept disappearing while they were copied; try again. |
+| `backup-invalid` | `restore` only: no or unreadable manifest, a file that is missing or doesn't match its hash, or a database that isn't a sound rayfin-local database. |
+| `backup-unsupported` | `restore` only: the backup comes from a newer rayfin-local. |
+| `internal` | Anything else, such as a disk error. |
+
+Exit code 2 means bad arguments (such as `restore --json` without `--yes`), with clap's message on stderr.
+
 ## Doctor
 
 `rayfin-local doctor --json -C <project>` prints `{"ok":true,"checks":[{"id":"node","status":"ok","message":"Node.js 24.13.0 (…)","hint":null}, …]}` and exits 0 when no check failed.
 `status` is `ok`, `warn` or `fail`; `id` is one of `node`, `project`, `packages`, `sdk`, `state`, `azure`, `port-backend`, `port-frontend`, each at most once.
 A check with several findings (the project's warnings) has the worst status, and the further findings in `hint`, one per line.
 `packages`, `sdk` and `state` are left out when the project isn't found.
+The `state` check's message names the state folder (`--state-dir`, `RAYFIN_LOCAL_STATE_DIR` or `.rayfin-local/`).

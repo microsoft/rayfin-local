@@ -263,6 +263,83 @@ fn serve_json_starts_the_app_and_stops_when_stdin_closes() {
     }
 }
 
+/// A state folder outside the project: `serve` keeps everything there (the compiled entities
+/// too, which still load the project's packages), a backup taken while it serves restores into
+/// a new state folder, and `serve` runs on it.
+#[test]
+fn serve_backup_and_restore_with_a_state_dir_outside_the_project() {
+    let Some(project) = fixture() else {
+        return;
+    };
+    let outside = tempfile::tempdir().unwrap();
+    let first = outside.path().join("first");
+    let args = |state: &Path| -> Vec<String> {
+        [
+            "--state-dir",
+            state.to_str().unwrap(),
+            "--no-functions",
+            "--port",
+            "0",
+            "--frontend-port",
+            "0",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    };
+    let first_args = args(&first);
+    let first_args: Vec<&str> = first_args.iter().map(String::as_str).collect();
+    let mut serve = Serve::start(&project, &first_args, &[]);
+    let ready = serve.until("ready", Duration::from_secs(300));
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    assert!(first.join("db.sqlite").is_file());
+    assert!(first.join("cache").join("compiled").is_dir());
+
+    let backup = outside.path().join("backup");
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&first)
+        .args(["backup", backup.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["database"], true, "{result}");
+    assert_eq!(get(&format!("{api_url}/.rayfin-local/health")).0, 200);
+
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&first)
+        .args(["restore", backup.to_str().unwrap(), "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "already-serving", "{result}");
+    assert_eq!(serve.close_stdin(Duration::from_secs(60)).code(), Some(0));
+
+    let second = outside.path().join("second");
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&second)
+        .args(["restore", backup.to_str().unwrap(), "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let second_args = args(&second);
+    let second_args: Vec<&str> = second_args.iter().map(String::as_str).collect();
+    let mut serve = Serve::start(&project, &second_args, &[]);
+    let ready = serve.until("ready", Duration::from_secs(300));
+    let api_url = ready["apiUrl"].as_str().unwrap();
+    assert_eq!(get(&format!("{api_url}/.rayfin-local/health")).0, 200);
+    assert_eq!(serve.close_stdin(Duration::from_secs(60)).code(), Some(0));
+}
+
 /// `GET url` over plain HTTP: the status and the whole response.
 fn get(url: &str) -> (u16, String) {
     let rest = url.strip_prefix("http://").unwrap();

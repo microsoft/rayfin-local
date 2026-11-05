@@ -1,15 +1,15 @@
 //! `rayfin-local reset`: delete the project's `.rayfin-local/` folder.
 
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::Path;
 use std::process::ExitCode;
 
-use rl_project::{LocalState, Project};
+use rl_project::LocalState;
 
+use super::Location;
 use crate::ui;
 
-pub fn run(dir: &Path, yes: bool) -> anyhow::Result<ExitCode> {
-    let project = Project::discover(dir)?;
+pub fn run(at: &Location, yes: bool) -> anyhow::Result<ExitCode> {
+    let project = at.discover()?;
     let state_dir = project.state_dir();
     if !state_dir.exists() {
         ui::status(format_args!(
@@ -39,7 +39,7 @@ pub fn run(dir: &Path, yes: bool) -> anyhow::Result<ExitCode> {
 }
 
 /// Asks on stderr and reads the answer from stdin; anything but `y`/`yes` (or end of input) is no.
-fn confirm(question: &str) -> anyhow::Result<bool> {
+pub(super) fn confirm(question: &str) -> anyhow::Result<bool> {
     let mut stderr = io::stderr().lock();
     stderr.write_all(question.as_bytes())?;
     stderr.flush()?;

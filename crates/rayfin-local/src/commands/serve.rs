@@ -91,20 +91,20 @@ enum Outcome {
     BackendExited(anyhow::Error),
 }
 
-pub async fn run(dir: &Path, options: ServeOptions) -> anyhow::Result<ExitCode> {
+pub async fn run(at: &super::Location, options: ServeOptions) -> anyhow::Result<ExitCode> {
     let mut running = Running::new();
     let outcome = if options.json {
         // From the start: a host may give up on a start that takes long.
         let mut stop = StopListener::with_input(io::stdin());
         tokio::select! {
-            outcome = serve(dir, &options, &mut running) => outcome,
+            outcome = serve(at, &options, &mut running) => outcome,
             request = stop.requested() => match request {
                 Ok(request) => Outcome::Stop(request),
                 Err(err) => Outcome::Failed(anyhow!(err).context("Could not listen for Ctrl+C")),
             },
         }
     } else {
-        serve(dir, &options, &mut running).await
+        serve(at, &options, &mut running).await
     };
     finish(outcome, running, options.json).await
 }
@@ -160,19 +160,19 @@ async fn finish(outcome: Outcome, running: Running, json: bool) -> anyhow::Resul
 
 /// Starts everything and serves until a stop request (without `--json`; with it, [`run`] listens
 /// for them) or until the backend stops.
-async fn serve(dir: &Path, options: &ServeOptions, running: &mut Running) -> Outcome {
-    match start(dir, options, running).await {
+async fn serve(at: &super::Location, options: &ServeOptions, running: &mut Running) -> Outcome {
+    match start(at, options, running).await {
         Ok(outcome) => outcome,
         Err(err) => Outcome::Failed(err),
     }
 }
 
 async fn start(
-    dir: &Path,
+    at: &super::Location,
     options: &ServeOptions,
     running: &mut Running,
 ) -> anyhow::Result<Outcome> {
-    let project = Project::discover(dir)?;
+    let project = at.discover()?;
     events::emit(Event::Starting(Starting {
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -310,12 +310,14 @@ pub(crate) fn sign_in_identity(project: &Project, options: &ServeOptions) -> Ide
     }
 }
 
-/// The project's `.rayfin-local/` (created on first use), locked against a second `serve`.
-/// `--reset` then empties the database and storage, which hold the users, the entity data and
-/// the stored files.
+/// The project's state folder (created on first use), locked against a second `serve` before
+/// `state.json` is read or created. `--reset` then empties the database and storage, which hold
+/// the users, the entity data and the stored files.
 fn open_state(project: &Project, reset: bool) -> anyhow::Result<(LocalState, ServeLock)> {
-    let state = LocalState::load_or_create(project)?;
-    let lock = state.lock_serve()?;
+    let (state, lock) = LocalState::open_for_serve(project)?;
+    if !lock.is_exclusive() {
+        warn_lock_unavailable(&state);
+    }
     if reset {
         let cleared = clear_data(&state)?;
         let what = if cleared.is_empty() {
@@ -332,9 +334,26 @@ fn open_state(project: &Project, reset: bool) -> anyhow::Result<(LocalState, Ser
     Ok((state, lock))
 }
 
+/// Says that the state folder's file system can't lock files, so nothing keeps a second `serve`,
+/// a `reset` or a `restore` off the same state while this one runs. Serving goes on: refusing
+/// would make state folders on such file systems (some network shares and mounted folders)
+/// unusable.
+pub(crate) fn warn_lock_unavailable(state: &LocalState) {
+    ui::warning(
+        WarningCode::ServeLockUnavailable,
+        format_args!(
+            "The file system of {} can't lock files, so nothing stops another rayfin-local from \
+             using the same state at the same time. Run one at a time, or use a state folder on \
+             a local disk (--state-dir).",
+            state.dir().display()
+        ),
+        json!({ "stateDir": state.dir() }),
+    );
+}
+
 /// Deletes the database (with its SQLite side files) and the stored files; returns the names of
 /// those that existed.
-fn clear_data(state: &LocalState) -> anyhow::Result<Vec<String>> {
+pub(crate) fn clear_data(state: &LocalState) -> anyhow::Result<Vec<String>> {
     let in_use = "Stop any other rayfin-local serving this project and close programs that have \
                   its database or files open, then try again.";
     let mut cleared = Vec::new();

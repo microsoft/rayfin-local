@@ -1,5 +1,6 @@
 //! The subcommands, and the startup stages they share.
 
+pub mod backup;
 pub mod doctor;
 pub mod reset;
 pub mod schema;
@@ -8,18 +9,48 @@ pub mod serve;
 pub mod users;
 pub mod version;
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use rl_node::NodeRuntime;
-use rl_project::Project;
+use rl_project::{LoadOptions, Project, ProjectError};
 use serde_json::json;
 
 use crate::events::WarningCode;
 use crate::ui;
 
-/// Finds the project from `dir`, shows its warnings and checks its packages are installed.
-pub fn load_project(dir: &Path) -> anyhow::Result<Project> {
-    let project = Project::discover(dir)?;
+/// Where a command runs: the directory to find the project from, and the state folder given
+/// with `--state-dir` (`RAYFIN_LOCAL_STATE_DIR`), absolute; `None` for `<project>/.rayfin-local`.
+#[derive(Clone, Debug, Default)]
+pub struct Location {
+    pub dir: PathBuf,
+    pub state_dir: Option<PathBuf>,
+}
+
+impl Location {
+    /// The project's location for `dir`, with the default state folder.
+    #[cfg(test)]
+    pub fn at(dir: &std::path::Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            state_dir: None,
+        }
+    }
+
+    /// Finds the project from [`Location::dir`] (without the checks of [`load_project`]).
+    pub fn discover(&self) -> Result<Project, ProjectError> {
+        Project::discover_with(
+            &self.dir,
+            &LoadOptions {
+                state_dir: self.state_dir.clone(),
+                ..LoadOptions::default()
+            },
+        )
+    }
+}
+
+/// Finds the project, shows its warnings and checks its packages are installed.
+pub fn load_project(at: &Location) -> anyhow::Result<Project> {
+    let project = at.discover()?;
     check_project(&project)?;
     Ok(project)
 }

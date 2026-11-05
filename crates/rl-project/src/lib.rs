@@ -49,5 +49,6 @@ pub use package::{
 pub use paths::resolve_node_package;
 pub use project::{DEFAULT_FRONTEND_PORT, LoadOptions, Project};
 pub use state::{
-    LocalState, PUBLISHABLE_KEY_PREFIX, STATE_DIR, ServeInfo, ServeLock, StateData, write_atomic,
+    LocalState, PUBLISHABLE_KEY_PREFIX, STATE_DIR, ServeInfo, ServeLock, StateData, TEMP_PREFIX,
+    write_atomic,
 };

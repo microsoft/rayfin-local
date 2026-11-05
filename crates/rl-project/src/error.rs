@@ -112,6 +112,14 @@ pub enum ProjectError {
     #[error("{}", already_serving(.info.as_ref()))]
     AlreadyServing { info: Option<crate::ServeInfo> },
 
+    /// The state folder given with `--state-dir` (`RAYFIN_LOCAL_STATE_DIR`) can't be used.
+    #[error(
+        "Can't use {} as the state folder: {reason}. Pass --state-dir (or set \
+         RAYFIN_LOCAL_STATE_DIR to) an empty folder, or one rayfin-local already uses.",
+        .path.display()
+    )]
+    InvalidStateDir { path: PathBuf, reason: String },
+
     /// An explicitly requested env file does not exist.
     #[error(
         "Environment file not found: {}. Create it or omit the explicit env file.",

@@ -112,6 +112,18 @@ fn analyze_js_writes_inside_a_project_only_under_rayfin_local() {
     let message = output["error"]["message"].as_str().unwrap();
     assert!(message.contains(".rayfin-local"), "{message}");
     assert!(!input.out_dir.exists());
+
+    // With `--state-dir` inside the project, the output goes under it, and nowhere else.
+    let state = project.join(".rl-test-state-dir");
+    let _ = fs::remove_dir_all(&state);
+    input.state_dir = Some(state.clone());
+    input.out_dir = project.join(".rayfin-local").join("cache").join("compiled");
+    let output = run(&node, &project, &input.to_json(), &scratch);
+    assert_eq!(output["ok"], false, "{output}");
+    input.out_dir = state.join("cache").join("compiled");
+    let output = run(&node, &project, &input.to_json(), &scratch);
+    let _ = fs::remove_dir_all(&state);
+    assert_eq!(output["ok"], true, "{output}");
 }
 
 /// The `connectors` fixture app (the `inventory` SQL connector), with its packages installed.
