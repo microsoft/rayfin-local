@@ -22,7 +22,7 @@ Anything else bumps it.
 ## Starting
 
 ```sh
-rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
+rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
 
 With `--json`:
@@ -41,6 +41,7 @@ The environment configures the rest:
 | Variable | Effect |
 | --- | --- |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the [control API](#control-api); requests must send it as a bearer token. At least 32 characters; shorter values are refused with a fatal `config-invalid` error. An empty value counts as unset. rayfin-local removes it from its environment, so the processes it starts (Vite, the function host, the app's code) don't see it. |
+| `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `--open-sign-in` ([open sign-in](#open-sign-in)); `0`, `false` or empty leave it off. |
 | `RAYFIN_LOCAL_NODE` | The `node` executable. |
 | `RAYFIN_LOCAL_STATE_DIR` | The state folder (the database, stored files, keys, `state.json`, secrets and `serve.lock`) instead of `<project>/.rayfin-local`, for every command; `--state-dir` wins over it. Hosts that keep the project in a synced folder can keep the live state elsewhere on local disk. Paths in this page under `.rayfin-local/` are then under this folder. |
 | `RAYFIN_CONFIG_DIR` | The Rayfin CLI's config folder, for the `rayfin` token source (the account a host has signed in). |
@@ -135,6 +136,7 @@ It comes again after each `config-changed` that applied, with the new features; 
   "portalUrl": "http://localhost:7171/.rayfin-local/portal",
   "dataDir": "C:\\apps\\notes\\.rayfin-local",
   "signInAs": {"kind": "developer"},
+  "openSignIn": false,
   "sdk": {"version": "1.36.2", "supported": true},
   "features": {
     "data": {"enabled": true, "entities": ["Note", "Tag"]},
@@ -152,6 +154,7 @@ It comes again after each `config-changed` that applied, with the new features; 
 - `appUrl` is `null` with `--no-frontend`; with `--static` it is the backend's origin.
 - `embedUrl` is `null` when the app has no Fabric sign-in, or no `appUrl`.
 - `signInAs` is the [automatic sign-in](#automatic-sign-in) identity: `{"kind":"developer"}`, `{"kind":"user","username":"ana@example.com"}` or `{"kind":"none"}`.
+- `openSignIn` is `true` with [open sign-in](#open-sign-in) (`--open-sign-in`).
 - `features.data.enabled` is `false` while the data service is off, or when it was turned on while serving with a schema change that was refused.
 - `connectors[].supported` is `false` for connector types rayfin-local answers with 501.
 
@@ -199,7 +202,7 @@ A `fatal` error is followed by `stopped`; other errors leave `serve` running.
 | `node-missing` | error | Node.js was not found. |
 | `node-too-old` | error | Node.js is older than 20. `details`: `{"version"}`. |
 | `project-not-found` | error | No `rayfin/rayfin.yml` in the folder or its parents. |
-| `config-invalid` | error | `rayfin.yml`, `rayfin-local.toml`, `.rayfin-local/state.json`, the functions' folder, `package.json` or `local.settings.json`, or the control token is invalid. Not fatal when `rayfin.yml` or `rayfin-local.toml` changes while serving: the previous configuration stays in use. |
+| `config-invalid` | error | `rayfin.yml`, `rayfin-local.toml`, `.rayfin-local/state.json`, the functions' folder, `package.json` or `local.settings.json`, or the control token is invalid, or `--open-sign-in` was given with a host that isn't loopback (`details`: `{"host"}`). Not fatal when `rayfin.yml` or `rayfin-local.toml` changes while serving: the previous configuration stays in use. |
 | `packages-missing` | error | The project's npm packages (or the functions') aren't installed. `details`: `{"dir"}`, the folder to run `npm install` in. For the functions' packages it is not fatal: it comes before their build, which then fails, once they have stayed missing for five seconds (an `npm install` that is still running when the functions start doesn't raise it). |
 | `sdk-unsupported` | warning | The app's Rayfin packages are outside `sdk.supported`. `details`: `{"version","supported"}`. |
 | `analysis-failed` | error | The model could not be analyzed, or `rayfin-local.toml` refuses it (`[fabric] anonymous_data_access = false` and entities that grant `anonymous`). |
@@ -214,6 +217,7 @@ A `fatal` error is followed by `stopped`; other errors leave `serve` running.
 | `connector-unsupported` | warning | A connector's type runs only on Fabric. `details`: `{"name","type"}`. |
 | `azure-sign-in` | warning | No Azure token could be had for what needs one: functions' `ctx.Tokens` and connectors; once per audience. `details`: `{"audience","scope"}` (`audience` is `null` for other scopes). The developer identity needs none: without one it signs in as the local developer account, which a `log` line says. |
 | `serve-lock-unavailable` | warning | The state folder's file system doesn't support file locks (some network shares), so `serve` runs without the check that keeps a second `serve`, `reset` or `restore` off the folder. `details`: `{"stateDir"}`. |
+| `open-sign-in` | warning | [Open sign-in](#open-sign-in) is on, at start. |
 | `internal` | error | Anything else. |
 
 ### `stopped`
@@ -249,6 +253,29 @@ The answer is a session like any other, in the shape `fetchRayfinLocalSessionTok
 Failures are `{"error","hint"}`, which the page shows: 403 for requests from other machines or other origins, 404 when the app's auth is off (`services.auth.enabled: false`), 500 when signing in failed.
 Changing the identity (through the control API, or `[auth] sign_in_as` while `serve` runs) revokes every local session, so an app that reloads signs in again as the new identity.
 The dev server gets the session from the backend's `GET /.rayfin-local/dev/session-token`, which answers only rayfin-local's own dev server: loopback requests that carry a secret of the run, which no page and none of the app's code sees.
+
+### Open sign-in
+
+With `--no-frontend`, a page that another dev server, a test runner or a preview proxy serves has no rayfin-local Vite to sign it in: the backend's route answers it 403.
+`--open-sign-in` (or `RAYFIN_LOCAL_OPEN_SIGN_IN=1`) lets it ask the backend itself:
+
+```sh
+rayfin-local serve --no-frontend --json                        # session-token: 403
+rayfin-local serve --no-frontend --open-sign-in --json         # warning open-sign-in, ready.openSignIn: true
+curl http://localhost:7171/.rayfin-local/dev/session-token     # 200 {"accessToken",…,"refreshToken",…}
+curl -H "Origin: https://evil.example" http://localhost:7171/.rayfin-local/dev/session-token  # 403
+rayfin-local serve --no-frontend --open-sign-in --host 0.0.0.0 # fatal config-invalid: needs a loopback host
+```
+
+- `GET /.rayfin-local/dev/session-token` and `GET /.rayfin-local/dev/session-stamp` answer without the run's secret.
+  The other checks stay: loopback peers only, no `Origin` other than the backend's own (call it same-origin, or through a proxy that keeps the `Host`), and the backend's `Host` check.
+  The answer is the session described above, access and refresh tokens; the page installs it with `signInWithBrokeredToken()`.
+- `developer` signs in as `developer@example.com`, never as the developer's Entra user (also for the sign-in page and `POST /token`); `user` and `none` are unchanged.
+- `serve` refuses to start unless it listens on a loopback address (a fatal `config-invalid` error with `details.host`), then emits an `open-sign-in` warning, and `ready` has `openSignIn: true`.
+- It works with and without `--no-frontend`; rayfin-local's Vite keeps working as before.
+- Without rayfin-local's Vite, nothing removes a stale stored session ([stale sessions](#stale-sessions)): pages should ask again after a 401.
+- "Loopback" is every process on this machine, and anything port forwarding makes look local, as for rayfin-local's own dev server route. Functions' `ctx.Tokens` and connectors still use the developer's Azure sign-in.
+- `rayfin-local.toml` can't turn it on, so a cloned project can't.
 
 ### Stale sessions
 
