@@ -10,6 +10,10 @@
 //!
 //! The answer is the `POST /api/auth/v1/token` body: a session like any other. Refusals are
 //! `{"error", "hint"}`, which `fetchRayfinLocalSessionToken()` shows as `<error> <hint>`.
+//!
+//! With open sign-in (`serve --open-sign-in`, [`AuthService::with_open_dev_sign_in`]), both routes
+//! also answer without the secret, for pages another dev server or proxy serves; the loopback
+//! and origin checks stay.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -63,8 +67,12 @@ pub(crate) struct AutoSignIn {
     /// Held while a session is issued for the identity, and taken alone to change it, so that no
     /// session of the previous identity outlives the change.
     switching: tokio::sync::RwLock<()>,
-    /// The SHA-256 of the dev server's secret; without one the route stays closed.
+    /// The SHA-256 of the dev server's secret; without one (and not `open`) the route stays
+    /// closed.
     secret: Option<[u8; 32]>,
+    /// Open sign-in: the route answers any loopback request from no other origin, without the
+    /// secret, and the developer identity is always [`LOCAL_DEVELOPER`].
+    open: bool,
     /// The user the developer identity signed in as last.
     developer: RwLock<Option<String>>,
     /// Until when the developer identity doesn't ask for their Entra identity again.
@@ -80,6 +88,20 @@ impl AuthService {
     pub fn with_dev_sign_in_secret(mut self, secret: &str) -> Self {
         self.auto_sign_in.secret = Some(sha256(secret.as_bytes()));
         self
+    }
+
+    /// Opens [`DEV_SESSION_TOKEN_PATH`] and [`DEV_SESSION_STAMP_PATH`] to every loopback request
+    /// from no other origin, without the dev server's secret, for pages that another dev server
+    /// or proxy serves. The developer identity then signs in as [`LOCAL_DEVELOPER`], never as the
+    /// developer's Entra user, since any local process can get its sessions.
+    pub fn with_open_dev_sign_in(mut self) -> Self {
+        self.auto_sign_in.open = true;
+        self
+    }
+
+    /// Whether [`Self::with_open_dev_sign_in`] opened automatic sign-in.
+    pub fn open_dev_sign_in(&self) -> bool {
+        self.auto_sign_in.open
     }
 
     /// Who the app is signed in as automatically.
@@ -116,9 +138,10 @@ impl AuthService {
         self.auto_sign_in.switching.read().await
     }
 
-    /// The developer's account: their Entra user when Entra sign-in is on and a token for it
-    /// comes without a prompt, else [`LOCAL_DEVELOPER`] (created when missing). After a failure it
-    /// asks again only five minutes later, or once the identity is switched.
+    /// The developer's account: their Entra user when Entra sign-in is on, sign-in isn't open
+    /// ([`Self::with_open_dev_sign_in`]) and a token for it comes without a prompt, else
+    /// [`LOCAL_DEVELOPER`] (created when missing). After a failure it asks again only five
+    /// minutes later, or once the identity is switched.
     pub async fn developer_account(&self) -> Result<User, AuthError> {
         let unavailable = || {
             self.auto_sign_in
@@ -126,8 +149,9 @@ impl AuthService {
                 .lock()
                 .is_some_and(|until| Instant::now() < until)
         };
-        let entra = if self.settings().entra_signin.enabled && !unavailable() {
-            self.developer_identity_silently()
+        let entra =
+            if self.settings().entra_signin.enabled && !self.auto_sign_in.open && !unavailable() {
+                self.developer_identity_silently()
                 .await
                 .inspect_err(|failure| {
                     tracing::debug!(
@@ -146,9 +170,9 @@ impl AuthService {
                     }
                 })
                 .ok()
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let user = match entra {
             Some(identity) => {
                 self.auto_sign_in
@@ -221,15 +245,18 @@ impl AuthService {
         Ok(tokens)
     }
 
-    /// Only rayfin-local's dev server: a loopback peer, no other origin, and the run's secret.
+    /// Only rayfin-local's dev server: a loopback peer, no other origin, and the run's secret
+    /// (unless sign-in is open).
     fn check_dev_server(&self, request: &Parts) -> Result<(), Refusal> {
-        let Some(secret) = &self.auto_sign_in.secret else {
+        let open = self.auto_sign_in.open;
+        let secret = self.auto_sign_in.secret.as_ref();
+        if secret.is_none() && !open {
             return Err(Refusal::new(
                 StatusCode::NOT_FOUND,
                 "Automatic sign-in is not available here.",
                 Some("It answers the Vite dev server that `rayfin-local serve` starts."),
             ));
-        };
+        }
         if !from_loopback(request) {
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
@@ -244,15 +271,24 @@ impl AuthService {
                 None,
             ));
         }
+        if open {
+            return Ok(());
+        }
         let presented = request
             .headers
             .get(DEV_SIGN_IN_SECRET_HEADER)
             .map(|value| sha256(value.as_bytes()));
-        if !presented.is_some_and(|presented| constant_time_eq(&presented, secret)) {
+        let matches = presented
+            .zip(secret)
+            .is_some_and(|(presented, secret)| constant_time_eq(&presented, secret));
+        if !matches {
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
                 "Automatic sign-in only answers rayfin-local's own dev server.",
-                None,
+                Some(
+                    "Pages served by another dev server or proxy can use it when `rayfin-local \
+                     serve` runs with --open-sign-in.",
+                ),
             ));
         }
         Ok(())
@@ -670,6 +706,125 @@ mod tests {
             2,
             "not asked after a switch"
         );
+    }
+
+    /// An app with open sign-in, with or without the dev server's secret.
+    async fn open_app(settings: AuthSettings, secret: bool) -> App {
+        let (dir, auth) = service_with(settings).await;
+        let auth = if secret {
+            auth.with_dev_sign_in_secret(SECRET)
+        } else {
+            auth
+        };
+        app_from(dir, auth.with_open_dev_sign_in())
+    }
+
+    #[tokio::test]
+    async fn open_sign_in_answers_this_machine_without_the_secret() {
+        let app = open_app(AuthSettings::new(APP_ID), false).await;
+        assert!(app.auth.open_dev_sign_in());
+        let answer = app.send(request(None, LOOPBACK, None)).await;
+        assert_eq!(answer.headers[header::CACHE_CONTROL], "no-store");
+        assert!(answer.body["refreshToken"].is_string(), "{}", answer.body);
+        let developer = user_of(&app, &answer).await;
+        assert_eq!(developer.username, LOCAL_DEVELOPER);
+        let own_origin = request(None, LOOPBACK, Some("http://localhost:7171"));
+        assert_eq!(
+            user_of(&app, &app.send(own_origin).await).await.id,
+            developer.id
+        );
+
+        let refused = [
+            ("remote", request(None, Some([192, 168, 1, 20]), None)),
+            ("no peer", request(None, None, None)),
+            (
+                "another origin",
+                request(None, LOOPBACK, Some("http://localhost:5173")),
+            ),
+            (
+                "another site",
+                request(None, LOOPBACK, Some("https://evil.example")),
+            ),
+        ];
+        for (case, refused) in refused {
+            let answer = app.send(refused).await;
+            assert_eq!(
+                answer.status,
+                StatusCode::FORBIDDEN,
+                "{case}: {}",
+                answer.body
+            );
+            assert!(answer.body.get("accessToken").is_none(), "{case}");
+        }
+
+        // rayfin-local's own dev server still signs in with the secret.
+        let app = open_app(AuthSettings::new(APP_ID), true).await;
+        assert_eq!(sign_in(&app).await.status, StatusCode::OK);
+        let without = app.send(request(None, LOOPBACK, None)).await;
+        assert_eq!(without.status, StatusCode::OK, "{}", without.body);
+    }
+
+    #[tokio::test]
+    async fn without_open_sign_in_the_secret_is_needed_and_the_refusal_says_how_to_open_it() {
+        let app = app(AuthSettings::new(APP_ID)).await;
+        assert!(!app.auth.open_dev_sign_in());
+        let answer = app.send(request(None, LOOPBACK, None)).await;
+        assert_eq!(answer.status, StatusCode::FORBIDDEN);
+        assert!(
+            answer.body["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("--open-sign-in")),
+            "{}",
+            answer.body
+        );
+    }
+
+    #[tokio::test]
+    async fn open_sign_in_signs_in_named_users_and_nobody_as_usual() {
+        let app = open_app(AuthSettings::new(APP_ID), false).await;
+        app.auth
+            .set_sign_in_as(SignInAs::User("ana@example.com".into()));
+        let page = || request(None, LOOPBACK, None);
+        let ana = user_of(&app, &app.send(page()).await).await;
+        assert_eq!(ana.username, "ana@example.com");
+        app.auth.set_sign_in_as(SignInAs::None);
+        let answer = app.send(page()).await;
+        assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(answer.body["error"], "Automatic sign-in is off.");
+
+        let mut settings = AuthSettings::new(APP_ID);
+        settings.enabled = false;
+        let off = open_app(settings, false).await;
+        assert_eq!(off.send(page()).await.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_sign_in_answers_the_session_stamp_to_this_machine_only() {
+        let app = open_app(AuthSettings::new(APP_ID), false).await;
+        let stamp = |peer, origin| request_to(DEV_SESSION_STAMP_PATH, None, peer, origin);
+        let answer = app.send(stamp(LOOPBACK, None)).await;
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+        let expected = app.auth.session_stamp().await.unwrap();
+        assert_eq!(answer.body, json!({ "stamp": expected }));
+        for refused in [
+            stamp(Some([10, 0, 0, 2]), None),
+            stamp(LOOPBACK, Some("https://evil.example")),
+        ] {
+            assert_eq!(app.send(refused).await.status, StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[tokio::test]
+    async fn open_sign_in_never_signs_the_developer_in_as_their_entra_user() {
+        let tokens = SilentTokens::new(Ok(user_claims()));
+        let (dir, auth) = service_with(entra_settings()).await;
+        let app = app_from(dir, auth.with_entra(tokens.clone()).with_open_dev_sign_in());
+        let answer = app.send(request(None, LOOPBACK, None)).await;
+        let developer = user_of(&app, &answer).await;
+        assert_eq!(developer.username, LOCAL_DEVELOPER);
+        assert!(developer.entra_oid.is_none());
+        assert_eq!(app.auth.developer_account().await.unwrap().id, developer.id);
+        assert_eq!(tokens.asked.load(Ordering::SeqCst), 0);
     }
 
     #[test]

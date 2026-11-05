@@ -945,7 +945,8 @@ impl Reloader {
     /// restart is needed. A file that can't be read is reported (`config-invalid`), and the
     /// previous configuration stays in use.
     fn reload_config(&mut self, update: &mut Update) -> anyhow::Result<()> {
-        let project = Project::load(self.live.project.root()).map_err(|err| {
+        let live = &self.live.project;
+        let project = Project::load_with(live.root(), &live.reload_options()).map_err(|err| {
             let err = coded(
                 ErrorCode::ConfigInvalid,
                 events::no_details(),

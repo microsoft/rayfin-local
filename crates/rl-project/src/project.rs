@@ -27,6 +27,10 @@ pub struct LoadOptions {
     /// The environment for `${VAR}` interpolation in `rayfin.yml` (it wins over the env file) and
     /// for `RAYFIN_ENV_FILE`. `None` uses the process environment.
     pub process_env: Option<BTreeMap<String, String>>,
+    /// The state folder to use instead of `<root>/.rayfin-local` (relative to the project root
+    /// or absolute; created on first use). It may be anywhere but the project root, one of its
+    /// parents, or `rayfin/`.
+    pub state_dir: Option<PathBuf>,
 }
 
 /// A loaded Rayfin project: the directory that contains `rayfin/rayfin.yml`, its configuration,
@@ -43,6 +47,7 @@ pub struct Project {
     frontend_package: Option<PackageJson>,
     rayfin_packages: Vec<RayfinPackage>,
     paths: ServicePaths,
+    state_dir: PathBuf,
     warnings: Vec<String>,
 }
 
@@ -111,6 +116,7 @@ impl Project {
         let manifests: Vec<&PackageJson> =
             frontend_package.iter().chain(root_package.iter()).collect();
         let rayfin_packages = collect_rayfin_packages(&paths.frontend_dir, &root, &manifests);
+        let state_dir = resolve_state_dir(&root, options.state_dir.as_deref())?;
 
         Ok(Self {
             root,
@@ -121,8 +127,18 @@ impl Project {
             frontend_package,
             rayfin_packages,
             paths,
+            state_dir,
             warnings,
         })
+    }
+
+    /// The options that load this project again the same way: its state folder (an env file
+    /// or environment given to the first load is not kept).
+    pub fn reload_options(&self) -> LoadOptions {
+        LoadOptions {
+            state_dir: (!self.has_default_state_dir()).then(|| self.state_dir.clone()),
+            ..LoadOptions::default()
+        }
     }
 
     /// The project root: the directory that contains `rayfin/rayfin.yml`.
@@ -160,9 +176,15 @@ impl Project {
         self.root.join(LocalConfig::FILE_NAME)
     }
 
-    /// `<root>/.rayfin-local`, where everything rayfin-local writes goes.
+    /// Where everything rayfin-local writes goes: `<root>/.rayfin-local`, or the folder given
+    /// with [`LoadOptions::state_dir`] (`--state-dir`).
     pub fn state_dir(&self) -> PathBuf {
-        self.root.join(STATE_DIR)
+        self.state_dir.clone()
+    }
+
+    /// Whether the state folder is the default `<root>/.rayfin-local`.
+    pub fn has_default_state_dir(&self) -> bool {
+        self.state_dir == self.root.join(STATE_DIR)
     }
 
     /// The name to show: `name`, else `id`, else the root folder's name.
@@ -524,6 +546,62 @@ fn canonicalize(path: &Path) -> Result<PathBuf, ProjectError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// The state folder: `explicit` (relative to `root`), else `<root>/.rayfin-local`. An explicit
+/// folder is made absolute (its existing part canonical, like `root`) and must not be the project
+/// root, one of its parents or inside `rayfin/`, where it would hold or delete the project's
+/// sources.
+fn resolve_state_dir(root: &Path, explicit: Option<&Path>) -> Result<PathBuf, ProjectError> {
+    let Some(explicit) = explicit.filter(|dir| !dir.as_os_str().is_empty()) else {
+        return Ok(root.join(STATE_DIR));
+    };
+    let dir = canonical_prefix(&normalize(&root.join(explicit)));
+    let invalid = |reason: &str| ProjectError::InvalidStateDir {
+        path: dir.clone(),
+        reason: reason.to_owned(),
+    };
+    if root.starts_with(&dir) {
+        return Err(invalid(
+            "it is the project folder or one of its parents, which hold the project's files",
+        ));
+    }
+    if dir.starts_with(root.join("rayfin")) {
+        return Err(invalid(
+            "it is inside rayfin/, which holds the project's sources",
+        ));
+    }
+    Ok(dir)
+}
+
+/// `path` without `.` and `..` components (`path` is absolute).
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `path` with its longest existing ancestor canonicalized (the rest may not exist yet).
+fn canonical_prefix(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = dunce::canonicalize(ancestor) {
+            let rest = path.strip_prefix(ancestor).unwrap_or(Path::new(""));
+            return if rest.as_os_str().is_empty() {
+                canonical
+            } else {
+                canonical.join(rest)
+            };
+        }
+    }
+    path.to_path_buf()
 }
 
 fn process_env() -> BTreeMap<String, String> {

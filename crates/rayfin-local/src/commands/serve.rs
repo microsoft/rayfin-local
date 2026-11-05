@@ -77,6 +77,8 @@ pub struct ServeOptions {
     pub inspect: Option<u16>,
     /// `--sign-in-as`: who apps are signed in as automatically.
     pub sign_in_as: Option<rl_project::SignInAs>,
+    /// `--open-sign-in`: automatic sign-in answers pages another dev server or proxy serves.
+    pub open_sign_in: bool,
     pub open: bool,
     pub verbose: bool,
 }
@@ -91,20 +93,20 @@ enum Outcome {
     BackendExited(anyhow::Error),
 }
 
-pub async fn run(dir: &Path, options: ServeOptions) -> anyhow::Result<ExitCode> {
+pub async fn run(at: &super::Location, options: ServeOptions) -> anyhow::Result<ExitCode> {
     let mut running = Running::new();
     let outcome = if options.json {
         // From the start: a host may give up on a start that takes long.
         let mut stop = StopListener::with_input(io::stdin());
         tokio::select! {
-            outcome = serve(dir, &options, &mut running) => outcome,
+            outcome = serve(at, &options, &mut running) => outcome,
             request = stop.requested() => match request {
                 Ok(request) => Outcome::Stop(request),
                 Err(err) => Outcome::Failed(anyhow!(err).context("Could not listen for Ctrl+C")),
             },
         }
     } else {
-        serve(dir, &options, &mut running).await
+        serve(at, &options, &mut running).await
     };
     finish(outcome, running, options.json).await
 }
@@ -160,19 +162,19 @@ async fn finish(outcome: Outcome, running: Running, json: bool) -> anyhow::Resul
 
 /// Starts everything and serves until a stop request (without `--json`; with it, [`run`] listens
 /// for them) or until the backend stops.
-async fn serve(dir: &Path, options: &ServeOptions, running: &mut Running) -> Outcome {
-    match start(dir, options, running).await {
+async fn serve(at: &super::Location, options: &ServeOptions, running: &mut Running) -> Outcome {
+    match start(at, options, running).await {
         Ok(outcome) => outcome,
         Err(err) => Outcome::Failed(err),
     }
 }
 
 async fn start(
-    dir: &Path,
+    at: &super::Location,
     options: &ServeOptions,
     running: &mut Running,
 ) -> anyhow::Result<Outcome> {
-    let project = Project::discover(dir)?;
+    let project = at.discover()?;
     events::emit(Event::Starting(Starting {
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -182,6 +184,7 @@ async fn start(
         },
     }));
     let control_token = check_control_token()?;
+    check_open_sign_in(&project, options)?;
     super::check_project(&project)?;
     let (mut state, serve_lock) = open_state(&project, options.reset)?;
     running.lock = Some(serve_lock);
@@ -207,8 +210,16 @@ async fn start(
     );
     let host = listen_host(&project, options);
     let sign_in_secret = new_secret()?;
-    let (auth, auth_settings) =
-        start_auth(&project, &state, &db, &host, &broker, &sign_in_secret).await?;
+    let (auth, auth_settings) = start_auth(
+        &project,
+        &state,
+        &db,
+        &host,
+        &broker,
+        &sign_in_secret,
+        options.open_sign_in,
+    )
+    .await?;
     auth.set_sign_in_as(sign_in_identity(&project, options));
     let bound = bind_ports(&project, &mut state, options, &host).await?;
     let api_origin = format!("http://{}:{}", origin_host(&host), bound.api_port);
@@ -310,12 +321,14 @@ pub(crate) fn sign_in_identity(project: &Project, options: &ServeOptions) -> Ide
     }
 }
 
-/// The project's `.rayfin-local/` (created on first use), locked against a second `serve`.
-/// `--reset` then empties the database and storage, which hold the users, the entity data and
-/// the stored files.
+/// The project's state folder (created on first use), locked against a second `serve` before
+/// `state.json` is read or created. `--reset` then empties the database and storage, which hold
+/// the users, the entity data and the stored files.
 fn open_state(project: &Project, reset: bool) -> anyhow::Result<(LocalState, ServeLock)> {
-    let state = LocalState::load_or_create(project)?;
-    let lock = state.lock_serve()?;
+    let (state, lock) = LocalState::open_for_serve(project)?;
+    if !lock.is_exclusive() {
+        warn_lock_unavailable(&state);
+    }
     if reset {
         let cleared = clear_data(&state)?;
         let what = if cleared.is_empty() {
@@ -332,9 +345,26 @@ fn open_state(project: &Project, reset: bool) -> anyhow::Result<(LocalState, Ser
     Ok((state, lock))
 }
 
+/// Says that the state folder's file system can't lock files, so nothing keeps a second `serve`,
+/// a `reset` or a `restore` off the same state while this one runs. Serving goes on: refusing
+/// would make state folders on such file systems (some network shares and mounted folders)
+/// unusable.
+pub(crate) fn warn_lock_unavailable(state: &LocalState) {
+    ui::warning(
+        WarningCode::ServeLockUnavailable,
+        format_args!(
+            "The file system of {} can't lock files, so nothing stops another rayfin-local from \
+             using the same state at the same time. Run one at a time, or use a state folder on \
+             a local disk (--state-dir).",
+            state.dir().display()
+        ),
+        json!({ "stateDir": state.dir() }),
+    );
+}
+
 /// Deletes the database (with its SQLite side files) and the stored files; returns the names of
 /// those that existed.
-fn clear_data(state: &LocalState) -> anyhow::Result<Vec<String>> {
+pub(crate) fn clear_data(state: &LocalState) -> anyhow::Result<Vec<String>> {
     let in_use = "Stop any other rayfin-local serving this project and close programs that have \
                   its database or files open, then try again.";
     let mut cleared = Vec::new();
@@ -404,14 +434,48 @@ async fn open_database(
 }
 
 /// `--host`, else `[server] host`, else loopback.
-fn listen_host(project: &Project, options: &ServeOptions) -> String {
-    let host = options
+fn configured_host(project: &Project, options: &ServeOptions) -> String {
+    options
         .host
         .clone()
         .or_else(|| project.local_config().server.host.clone())
         .map(|host| host.trim().to_owned())
         .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| DEFAULT_HOST.to_owned());
+        .unwrap_or_else(|| DEFAULT_HOST.to_owned())
+}
+
+/// With `--open-sign-in`, refuses a host other machines can reach, and warns that any local
+/// process can now sign in as the identity.
+fn check_open_sign_in(project: &Project, options: &ServeOptions) -> anyhow::Result<()> {
+    if !options.open_sign_in {
+        return Ok(());
+    }
+    let host = configured_host(project, options);
+    if !integrations::is_loopback(&host) {
+        return Err(coded(
+            ErrorCode::ConfigInvalid,
+            json!({ "host": host }),
+            anyhow!(
+                "--open-sign-in needs the backend on a loopback address, but it would listen on \
+                 {host}. Use `--host 127.0.0.1` (or `localhost`), or leave out --open-sign-in."
+            ),
+        ));
+    }
+    ui::warning(
+        WarningCode::OpenSignIn,
+        "Open sign-in is on (--open-sign-in): any program or page on this machine, on the app's \
+         own origin, can get a session for the sign-in identity from \
+         /.rayfin-local/dev/session-token, without rayfin-local's dev server. The developer \
+         identity signs in as developer@example.com. Leave it off unless a page another dev \
+         server or proxy serves needs to sign in automatically.",
+        events::no_details(),
+    );
+    Ok(())
+}
+
+/// [`configured_host`], with a warning when other machines can reach it.
+fn listen_host(project: &Project, options: &ServeOptions) -> String {
+    let host = configured_host(project, options);
     if !integrations::is_loopback(&host) {
         let mut message = format!(
             "The backend listens on {host}, so other machines can reach it. It acts with your \
@@ -440,7 +504,8 @@ fn is_wildcard(host: &str) -> bool {
 /// Entra exchange and automatic sign-in) is on only on loopback, with the developer's tokens
 /// from `broker`. They are optional there: without one, automatic sign-in signs in as the local
 /// developer account and the sign-in page says why, so a missing token is no `azure-sign-in`
-/// warning. Automatic sign-in answers the holder of `sign_in_secret` (the app's dev server).
+/// warning. Automatic sign-in answers the holder of `sign_in_secret` (the app's dev server), and
+/// with `open_sign_in` any loopback request from the app's own origin.
 async fn start_auth(
     project: &Project,
     state: &LocalState,
@@ -448,17 +513,21 @@ async fn start_auth(
     host: &str,
     broker: &Arc<TokenBroker>,
     sign_in_secret: &str,
+    open_sign_in: bool,
 ) -> anyhow::Result<(Arc<AuthService>, AuthSettings)> {
     let settings = integrations::auth_settings(
         project,
         &state.data().app_id,
         integrations::is_loopback(host),
     );
-    let auth = AuthService::new(db.clone(), state.keys_dir(), settings.clone())
+    let mut auth = AuthService::new(db.clone(), state.keys_dir(), settings.clone())
         .await
         .context("Could not start the local auth service")?
         .with_entra(broker.clone())
         .with_dev_sign_in_secret(sign_in_secret);
+    if open_sign_in {
+        auth = auth.with_open_dev_sign_in();
+    }
     Ok((Arc::new(auth), settings))
 }
 
@@ -835,6 +904,7 @@ pub(crate) fn ready_event(
         portal_url: format!("{}{}", ctx.api_origin, rl_auth::PORTAL_PATH),
         data_dir: ctx.state.dir().display().to_string(),
         sign_in_as: SignInAs::of(&ctx.auth.sign_in_as()),
+        open_sign_in: ctx.auth.open_dev_sign_in(),
         sdk: Sdk::of(ctx.project),
         features: events::Features {
             data: DataFeature {
@@ -938,6 +1008,16 @@ pub(crate) fn banner_rows(
         ("Data", ctx.state.dir().display().to_string()),
         ("Sign in", sign_in_hint(auth_settings)),
     ]);
+    if ctx.auth.open_dev_sign_in() {
+        rows.push((
+            "Open sign-in",
+            format!(
+                "on: pages on this machine get sessions from {}{}",
+                ctx.api_origin,
+                rl_auth::DEV_SESSION_TOKEN_PATH
+            ),
+        ));
+    }
     rows
 }
 

@@ -191,6 +191,74 @@ fn fatal_errors_come_with_a_code_then_stopped() {
     assert_eq!(serve.seen[0]["project"]["name"], "app");
 }
 
+#[test]
+fn open_sign_in_needs_a_loopback_host_and_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("rayfin")).unwrap();
+    std::fs::write(dir.path().join("rayfin").join("rayfin.yml"), "name: app\n").unwrap();
+    let refused = |args: &[&str], env: &[(&str, &str)]| {
+        let mut serve = Serve::start(dir.path(), args, env);
+        let error = serve.until("error", Duration::from_secs(30));
+        assert_eq!(serve.wait(Duration::from_secs(30)).code(), Some(1));
+        assert_eq!(
+            serve.milestones(),
+            ["starting", "stopped"],
+            "{args:?} {env:?}"
+        );
+        error
+    };
+    let error = refused(&["--open-sign-in", "--host", "0.0.0.0"], &[]);
+    assert_eq!(error["code"], "config-invalid");
+    assert_eq!(error["fatal"], true);
+    assert_eq!(error["details"]["host"], "0.0.0.0");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--open-sign-in")
+    );
+    let by_env = refused(
+        &["--host", "192.168.1.20"],
+        &[("RAYFIN_LOCAL_OPEN_SIGN_IN", "1")],
+    );
+    assert_eq!(by_env["details"]["host"], "192.168.1.20");
+    std::fs::write(
+        dir.path().join("rayfin-local.toml"),
+        "[server]\nhost = \"0.0.0.0\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        refused(&["--open-sign-in"], &[])["details"]["host"],
+        "0.0.0.0"
+    );
+
+    // On loopback it starts with a warning (this project then stops: no packages installed).
+    std::fs::remove_file(dir.path().join("rayfin-local.toml")).unwrap();
+    for (args, env) in [
+        (&["--open-sign-in", "--host", "localhost"][..], &[][..]),
+        (&[][..], &[("RAYFIN_LOCAL_OPEN_SIGN_IN", "true")][..]),
+    ] {
+        let mut serve = Serve::start(dir.path(), args, env);
+        let warning = serve.until("warning", Duration::from_secs(30));
+        assert_eq!(warning["code"], "open-sign-in", "{args:?} {env:?}");
+        serve.wait(Duration::from_secs(30));
+    }
+    // Off: no warning, and the non-loopback host is only warned about.
+    for env in [&[][..], &[("RAYFIN_LOCAL_OPEN_SIGN_IN", "0")][..]] {
+        let mut serve = Serve::start(dir.path(), &["--host", "0.0.0.0"], env);
+        let error = serve.until("error", Duration::from_secs(30));
+        assert_ne!(error["code"], "config-invalid", "{env:?}: {error}");
+        serve.wait(Duration::from_secs(30));
+        assert!(
+            !serve
+                .seen
+                .iter()
+                .any(|event| event["code"] == "open-sign-in"),
+            "{env:?}"
+        );
+    }
+}
+
 /// `tests/fixtures/apps/basic`, when its packages and Node.js are installed.
 fn fixture() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/apps/basic");
@@ -230,10 +298,13 @@ fn serve_json_starts_the_app_and_stops_when_stdin_closes() {
         serve.report()
     );
     assert_eq!(ready["features"]["functions"]["enabled"], false);
+    assert_eq!(ready["openSignIn"], false);
     let api_url = ready["apiUrl"].as_str().unwrap();
     let (status, body) = get(&format!("{api_url}/.rayfin-local/health"));
     assert_eq!(status, 200, "{body}");
     assert!(body.contains(r#"{"ok":true}"#), "{body}");
+    let (status, body) = get(&format!("{api_url}/.rayfin-local/dev/session-token"));
+    assert_eq!(status, 403, "only rayfin-local's Vite signs in: {body}");
     let (status, _) = get(&format!("{api_url}/.rayfin-local/control/status"));
     assert_eq!(
         status, 404,
@@ -241,6 +312,10 @@ fn serve_json_starts_the_app_and_stops_when_stdin_closes() {
     );
     let app_url = ready["appUrl"].as_str().unwrap();
     assert_eq!(get(app_url).0, 200);
+    // rayfin-local's Vite signs its pages in (with the run's secret).
+    let (status, body) = get(&format!("{app_url}.rayfin/dev/session-token"));
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("\"refreshToken\""), "{body}");
 
     let started = descendants(serve.child.id());
     assert!(!started.is_empty(), "Vite is not a child of rayfin-local");
@@ -261,19 +336,143 @@ fn serve_json_starts_the_app_and_stops_when_stdin_closes() {
         assert!(Instant::now() < deadline, "still running: {left:?}");
         std::thread::sleep(Duration::from_millis(250));
     }
+
+    // With --open-sign-in and no frontend, pages another dev server serves sign in themselves.
+    let mut serve = Serve::start(
+        &project,
+        &[
+            "--no-functions",
+            "--no-frontend",
+            "--open-sign-in",
+            "--port",
+            "0",
+        ],
+        &[],
+    );
+    let ready = serve.until("ready", Duration::from_secs(300));
+    assert!(
+        serve
+            .seen
+            .iter()
+            .any(|event| event["type"] == "warning" && event["code"] == "open-sign-in"),
+        "{}",
+        serve.report()
+    );
+    assert_eq!(ready["openSignIn"], true);
+    assert_eq!(ready["appUrl"], Value::Null);
+    let api_url = ready["apiUrl"].as_str().unwrap();
+    let token_url = format!("{api_url}/.rayfin-local/dev/session-token");
+    let (status, body) = get(&token_url);
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains("\"accessToken\"") && body.contains("\"refreshToken\""),
+        "{body}"
+    );
+    let (status, body) = get_with(&token_url, &[("Origin", "https://evil.example")]);
+    assert_eq!(status, 403, "{body}");
+    let (status, body) = get(&format!("{api_url}/.rayfin-local/dev/session-stamp"));
+    assert_eq!(status, 200, "{body}");
+    let status = serve.close_stdin(Duration::from_secs(60));
+    assert_eq!(status.code(), Some(0), "{}", serve.report());
+}
+
+/// A state folder outside the project: `serve` keeps everything there (the compiled entities
+/// too, which still load the project's packages), a backup taken while it serves restores into
+/// a new state folder, and `serve` runs on it.
+#[test]
+fn serve_backup_and_restore_with_a_state_dir_outside_the_project() {
+    let Some(project) = fixture() else {
+        return;
+    };
+    let outside = tempfile::tempdir().unwrap();
+    let first = outside.path().join("first");
+    let args = |state: &Path| -> Vec<String> {
+        [
+            "--state-dir",
+            state.to_str().unwrap(),
+            "--no-functions",
+            "--port",
+            "0",
+            "--frontend-port",
+            "0",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    };
+    let first_args = args(&first);
+    let first_args: Vec<&str> = first_args.iter().map(String::as_str).collect();
+    let mut serve = Serve::start(&project, &first_args, &[]);
+    let ready = serve.until("ready", Duration::from_secs(300));
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    assert!(first.join("db.sqlite").is_file());
+    assert!(first.join("cache").join("compiled").is_dir());
+
+    let backup = outside.path().join("backup");
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&first)
+        .args(["backup", backup.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["database"], true, "{result}");
+    assert_eq!(get(&format!("{api_url}/.rayfin-local/health")).0, 200);
+
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&first)
+        .args(["restore", backup.to_str().unwrap(), "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "already-serving", "{result}");
+    assert_eq!(serve.close_stdin(Duration::from_secs(60)).code(), Some(0));
+
+    let second = outside.path().join("second");
+    let output = rayfin_local()
+        .arg("-C")
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&second)
+        .args(["restore", backup.to_str().unwrap(), "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let second_args = args(&second);
+    let second_args: Vec<&str> = second_args.iter().map(String::as_str).collect();
+    let mut serve = Serve::start(&project, &second_args, &[]);
+    let ready = serve.until("ready", Duration::from_secs(300));
+    let api_url = ready["apiUrl"].as_str().unwrap();
+    assert_eq!(get(&format!("{api_url}/.rayfin-local/health")).0, 200);
+    assert_eq!(serve.close_stdin(Duration::from_secs(60)).code(), Some(0));
 }
 
 /// `GET url` over plain HTTP: the status and the whole response.
 fn get(url: &str) -> (u16, String) {
+    get_with(url, &[])
+}
+
+/// `GET url` with `headers` over plain HTTP: the status and the whole response.
+fn get_with(url: &str, headers: &[(&str, &str)]) -> (u16, String) {
     let rest = url.strip_prefix("http://").unwrap();
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
     let mut stream = TcpStream::connect(authority).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     write!(
         stream,
-        "GET /{path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+        "GET /{path} HTTP/1.1\r\nHost: {authority}\r\n{extra}Connection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();

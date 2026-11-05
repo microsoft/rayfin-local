@@ -41,7 +41,7 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
    Small JavaScript helpers, embedded in the binary, drive these packages on the developer's Node.js.
    The behavior therefore follows the project's package versions, and decorator and policy semantics match the Rayfin CLI's exactly.
 3. **Leave the project alone.**
-   All state lives in `.rayfin-local/`, which carries its own `.gitignore`.
+   All state lives in `.rayfin-local/` (or the folder given with `--state-dir`), which carries its own `.gitignore` when git could see it.
    Local settings reach Vite through the process environment rather than `.env` files.
    The only files written outside `.rayfin-local/` are build outputs the Rayfin CLI writes too: the app's build folder and the functions' `runtimemetadata.json`.
 4. **Local and safe by default.**
@@ -242,6 +242,8 @@ Under rayfin-local, the sign-in identity answers instead:
   Live reload changes the auth service's settings in place, so the identity, the secret and the developer's account stay.
 - `developer` is the Entra user of a Power BI token that the broker gets without a prompt (`TokenSource::token_silently`: the environment, its cache, the Azure CLI, or the Rayfin CLI's cache), signed in as "Continue as" does; without one, `developer@example.com`.
   Without an Azure sign-in, asking takes a second or more, so after a failure it asks again only after five minutes or a switch of the identity.
+- `serve --open-sign-in` (`AuthService::with_open_dev_sign_in`) drops only the secret from the route's checks, for pages another dev server serves; the loopback peer, foreign `Origin` and server `Host` checks stay, `serve` refuses a host that isn't loopback, and `developer` is always `developer@example.com`, since any local process can then get its sessions.
+  It is a flag and an environment variable, never a `rayfin-local.toml` setting, so a cloned project can't turn it on.
 - Switching the identity revokes every session while it holds the identity's write lock, so no session for the old identity is issued during the switch.
 - Pages keep the SDK's session in their origin's `localStorage`, and the dev server's port serves other apps over time, so the `rayfin-local:session-stamp` plugin puts a script first in each page (`js/session-stamp.mjs`): it removes the SDK's stored session when the origin's stamp isn't the backend's, `<appId>:<sessionEpoch>`, which the plugin asks `GET /.rayfin-local/dev/session-stamp` for with the secret, for each page.
   The epoch is a random value in the database (`_rl_auth_session_epoch`), replaced whenever every session is signed out (`sessions::revoke_every_session`, for identity switches and data resets); a new database (`--reset`) comes with a new one.

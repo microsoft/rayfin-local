@@ -1,7 +1,7 @@
 # JavaScript helpers
 
 These ES modules are compiled into the `rayfin-local` binary with `include_str!`.
-Before one runs, `rl_node::Helper` writes it to `<project>/.rayfin-local/cache/js/<name>-<hash>.mjs`.
+Before one runs, `rl_node::Helper` writes it to `<state folder>/cache/js/<name>-<hash>.mjs`.
 They run on the developer's own Node.js (20 or later), in a folder of the project (its root, the functions package or the frontend folder), so they can import the project's installed packages (`@microsoft/rayfin-core`, `typescript`, `@microsoft/rayfin-cli`, `vite`, ...).
 
 | Helper | Owner crate | Kind | Purpose |
@@ -24,12 +24,12 @@ They run on the developer's own Node.js (20 or later), in a folder of the projec
 They follow the `rl_node::run_helper` protocol: `node <helper> --input <in.json> --output <out.json>`.
 The helper reads its JSON input from the `--input` file and writes exactly one JSON document to the `--output` file: `{"ok": true, "result": ...}` or `{"ok": false, "error": {"message": "...", "stack": "..."}}`.
 Stdout and stderr are free for logs, since user modules may print while being imported.
-Both files live in `.rayfin-local/cache/tmp/` and are deleted after the run.
+Both files live in `<state folder>/cache/tmp/` and are deleted after the run.
 
 | Helper | Input | Result |
 | --- | --- | --- |
-| `analyze.mjs` | `projectRoot`, `dataDir`, `storageDir?`, `tsconfigPath`, `outDir`, `dialect`, `storage`, `verbose?` | `coreVersion`, `typescriptVersion`, `dialect`, `featureFlags`, `entities`, `config`, `policies`, `storage`, `sources`, `diagnostics` |
-| `analyze.mjs` with `mode: "connectors"` | `projectRoot`, `tsconfigPath`, `outDir`, `connectors` (`name`, `dir`, `dialect`), `verbose?` | `coreVersion`, `typescriptVersion`, `featureFlags`, `connectors` (`name`, `dialect`, then `entities`, `config` and `policies`, or `error`), `sources`, `diagnostics` |
+| `analyze.mjs` | `projectRoot`, `dataDir`, `storageDir?`, `tsconfigPath`, `outDir`, `stateDir?`, `dialect`, `storage`, `verbose?` | `coreVersion`, `typescriptVersion`, `dialect`, `featureFlags`, `entities`, `config`, `policies`, `storage`, `sources`, `diagnostics` |
+| `analyze.mjs` with `mode: "connectors"` | `projectRoot`, `tsconfigPath`, `outDir`, `stateDir?`, `connectors` (`name`, `dir`, `dialect`), `verbose?` | `coreVersion`, `typescriptVersion`, `featureFlags`, `connectors` (`name`, `dialect`, then `entities`, `config` and `policies`, or `error`), `sources`, `diagnostics` |
 | `rayfin-token.mjs` | `scopes`, `tenantId?`, `silent?` (fail rather than sign in interactively) | `token`, `expiresOnTimestamp` (ms since the epoch), `tenantId?` |
 | `udf-metadata.mjs` | `functionsDir`, `resolvePaths?`, `outputPath?` | `json`, `metadata`, `written`, `diagnostics`, `typescript` (`version`, `path`), `typeChecked`, `sourceFiles` |
 

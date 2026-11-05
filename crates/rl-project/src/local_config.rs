@@ -345,6 +345,18 @@ mod tests {
     }
 
     #[test]
+    fn open_sign_in_cannot_be_turned_on_from_the_project() {
+        // A cloned repository must not open automatic sign-in: only `serve --open-sign-in` can.
+        for text in [
+            "open_sign_in = true\n",
+            "[auth]\nopen_sign_in = true\n",
+            "[server]\nopen_sign_in = true\n",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn rejects_unknown_keys_with_their_name_and_position() {
         let err = parse("[server]\nport = 1\nhots = \"x\"\n").unwrap_err();
         let message = err.to_string();

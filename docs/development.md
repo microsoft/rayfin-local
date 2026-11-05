@@ -67,7 +67,7 @@ They print a `skipped: …` note and pass when Node.js or the packages they need
 | `rl-connectors` `tests/sql_sdk.rs` | The SDK's Category A connector client (`createConnectorsApi` with the entity classes, for a SQL database, a Warehouse and a SQL analytics endpoint) through rayfin-local on a real SQL Server. | `npm install` in `tests/fixtures/apps/connectors`, and [SQL Server](#sql-server-tests) |
 | `rl-functions` `tests/host.rs`, `tests/invoke.rs` | The function host and the invoke routes on `tests/fixtures/functions/basic`, which they install and build on first use; also the reference app's functions when present. | Node.js and npm |
 | `rl-frontend` `tests/vite.rs` | The Vite dev server and the static build, on copies of the reference app and small Vite apps; automatic sign-in answered before `rayfinLocalDev()`'s, on the fixture app and the apps in `RAYFIN_LOCAL_TEST_VITE_APPS`. | The reference app; `npm ci` in `tests/fixtures/apps/basic` |
-| `rayfin-local` `tests/host_contract.rs` | `serve --json` of the fixture app ([embedding.md](embedding.md)): its events from `starting` to `ready`, the app and the backend answering, and a clean stop when stdin closes. | `npm ci` in `tests/fixtures/apps/basic` |
+| `rayfin-local` `tests/host_contract.rs` | `serve --json` of the fixture app ([embedding.md](embedding.md)): its events from `starting` to `ready`, the app and the backend answering, and a clean stop when stdin closes; with a `--state-dir` outside the project, a backup while it serves, a refused restore, and a restore into a new state folder that `serve` then runs on. | `npm ci` in `tests/fixtures/apps/basic` |
 | `rayfin-local` `tests/control_api.rs` | The control API and automatic sign-in of the fixture app under `serve --json`: status, users, identities, the dev server's session token used on `/graphql`, rows, a reload and a data reset. | `npm ci` in `tests/fixtures/apps/basic` |
 | `rayfin-local` `tests/live_reload.rs` | `serve --json` of a copy of the fixture app (its `node_modules` linked): `rayfin.yml` edits applied on the same ports, `secret set` restarting only the function host, Vite started again after it is killed, and the control API, `POST /reload` (refused and forced schema changes, invalid files) and automatic sign-in across changes. | `npm ci` in `tests/fixtures/apps/basic` and its `rayfin/functions` |
 
@@ -175,7 +175,7 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 - **Crate contracts:** feature crates take `Arc<dyn CallerResolver>` and `Arc<dyn TokenSource>`, and expose an `axum::Router` with its state applied.
 - **Errors are actionable:** say what failed and what to do.
 - **Privacy:** never log tokens, passwords, secrets or Entra tokens, and keep identity claims out of info-level logs.
-- **Local state:** everything rayfin-local writes goes under `<project>/.rayfin-local/`.
+- **Local state:** everything rayfin-local writes goes under the state folder: `<project>/.rayfin-local/`, or `--state-dir`.
 - **Rayfin behavior:** check the SDK 1.36.2 dist, not memory; `AGENTS.md` lists the sources of truth.
 - **Tests:** focused tests for the behavior you add; never test constants or framework behavior.
 - **JS helpers:** plain ESM with no dependencies of their own; see [`js/README.md`](../js/README.md).

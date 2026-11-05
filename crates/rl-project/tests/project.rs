@@ -183,6 +183,7 @@ fn honors_rayfin_env_file_and_explicit_env_files() {
     let options = LoadOptions {
         env_file: Some(PathBuf::from("config/missing.env")),
         process_env: Some(BTreeMap::new()),
+        ..Default::default()
     };
     let err = Project::load_with(&root, &options).unwrap_err();
     assert!(matches!(err, ProjectError::EnvFileNotFound { .. }), "{err}");
@@ -403,4 +404,122 @@ fn state_folder_lives_in_the_project_and_resets() {
         drop(held);
         assert!(LocalState::reset(&project).unwrap());
     }
+}
+
+fn load_with_state_dir(root: &Path, state_dir: &Path) -> Result<Project, ProjectError> {
+    Project::load_with(
+        root,
+        &LoadOptions {
+            process_env: Some(BTreeMap::new()),
+            state_dir: Some(state_dir.to_path_buf()),
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn a_state_dir_outside_the_project_holds_only_the_state() {
+    let (_temp, root) = project_dir(&[("rayfin/rayfin.yml", MINIMAL)]);
+    let outside = tempfile::tempdir().unwrap();
+    let dir = dunce::canonicalize(outside.path()).unwrap().join("state");
+    let project = load_with_state_dir(&root, &dir).unwrap();
+    assert_eq!(project.state_dir(), dir);
+    assert!(!project.has_default_state_dir());
+    assert_eq!(
+        project.reload_options().state_dir.as_deref(),
+        Some(dir.as_path())
+    );
+
+    let state = LocalState::load_or_create(&project).unwrap();
+    assert_eq!(state.dir(), dir);
+    assert!(state.state_path().is_file() && state.keys_dir().is_dir());
+    assert!(!root.join(".rayfin-local").exists());
+    // Outside any git working tree, no `.gitignore` is written.
+    assert!(!dir.join(".gitignore").exists());
+
+    // Files the developer added survive a reset, and so does the folder that holds them.
+    std::fs::write(dir.join("notes.txt"), "mine").unwrap();
+    std::fs::write(dir.join(".rl-restore-leftover"), "").unwrap();
+    assert!(LocalState::reset(&project).unwrap());
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["notes.txt"]);
+
+    std::fs::remove_file(dir.join("notes.txt")).unwrap();
+    LocalState::load_or_create(&project).unwrap();
+    assert!(LocalState::reset(&project).unwrap());
+    assert!(!dir.exists(), "an emptied state folder is removed");
+}
+
+#[test]
+fn a_state_dir_in_the_project_or_a_git_tree_is_git_ignored() {
+    let (_temp, root) = project_dir(&[("rayfin/rayfin.yml", MINIMAL)]);
+    let inside = root.join("data").join("state");
+    let project = load_with_state_dir(&root, Path::new("data/state")).unwrap();
+    assert_eq!(project.state_dir(), inside);
+    LocalState::load_or_create(&project).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(inside.join(".gitignore")).unwrap(),
+        "*\n"
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    let dir = repo.path().join("nested").join("state");
+    let project = load_with_state_dir(&root, &dir).unwrap();
+    LocalState::load_or_create(&project).unwrap();
+    assert!(dir.join(".gitignore").is_file());
+}
+
+#[test]
+fn refuses_unsafe_state_dirs() {
+    let (_temp, root) = project_dir(&[("rayfin/rayfin.yml", MINIMAL), ("src/main.ts", "")]);
+    for bad in [
+        root.clone(),
+        root.join(".."),
+        root.join("rayfin").join("state"),
+    ] {
+        assert!(
+            matches!(
+                load_with_state_dir(&root, &bad),
+                Err(ProjectError::InvalidStateDir { .. })
+            ),
+            "{}",
+            bad.display()
+        );
+    }
+
+    // A folder with someone else's files (a typo such as a home folder) is not taken over.
+    let foreign = root.join("src");
+    let project = load_with_state_dir(&root, &foreign).unwrap();
+    let err = LocalState::load_or_create(&project).unwrap_err();
+    assert!(matches!(err, ProjectError::InvalidStateDir { .. }), "{err}");
+    assert!(!foreign.join("state.json").exists());
+    assert!(err.to_string().contains("src"), "{err}");
+}
+
+#[test]
+fn serve_takes_the_lock_before_creating_the_state() {
+    let (_temp, root) = project_dir(&[("rayfin/rayfin.yml", MINIMAL)]);
+    let project = load(&root, &[]).unwrap();
+    let (state, lock) = LocalState::open_for_serve(&project).unwrap();
+    assert!(lock.is_exclusive());
+    let dir = state.dir().to_path_buf();
+    std::fs::remove_file(state.state_path()).unwrap();
+
+    // A second first run waits for nothing and writes nothing: it is refused before `state.json`.
+    assert!(matches!(
+        LocalState::open_for_serve(&project),
+        Err(ProjectError::AlreadyServing { .. })
+    ));
+    assert!(matches!(
+        LocalState::open_locked(&project),
+        Err(ProjectError::AlreadyServing { .. })
+    ));
+    assert!(!dir.join("state.json").exists());
+    drop(lock);
+    let (again, _lock) = LocalState::open_locked(&project).unwrap();
+    assert!(again.state_path().is_file());
 }
