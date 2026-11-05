@@ -266,7 +266,7 @@ With `RAYFIN_LOCAL_CONTROL_TOKEN` set, the backend serves `{apiUrl}/.rayfin-loca
 - Requests with an `Origin` header (from a browser) get 403, and CORS never allows these routes.
   They need no publishable key.
 - Bodies are JSON; a route that takes one also takes an empty body, as `{}`.
-  Errors are `{"error":{"code","message","hint"}}` with a 4xx or 5xx status; `code` is stable, and is one of `unauthorized` (401), `forbidden` (403), `invalid-request` (400), `invalid-order-by` (400), `user-not-found` (404), `entity-not-found` (404), `folder-not-found` (404), `file-not-found` (404), `user-exists` (409), `rows-referenced` (409), `config-invalid` (422), `analysis-failed` (422), `internal` (500), `starting` (503) and `stopping` (503).
+  Errors are `{"error":{"code","message","hint"}}` with a 4xx or 5xx status; `code` is stable, and is one of `unauthorized` (401), `forbidden` (403), `invalid-request` (400), `invalid-order-by` (400), `user-not-found` (404), `entity-not-found` (404), `folder-not-found` (404), `file-not-found` (404), `seed-not-found` (404), `user-exists` (409), `rows-referenced` (409), `config-invalid` (422), `analysis-failed` (422), `seed-invalid` (422), `internal` (500), `starting` (503) and `stopping` (503).
 - Without the variable, these routes answer 404.
 - Live reload keeps them: they answer, with the same token, after every change it applies.
 
@@ -288,6 +288,9 @@ With `RAYFIN_LOCAL_CONTROL_TOKEN` set, the backend serves `{apiUrl}/.rayfin-loca
 | `GET /storage/{folder}/files/{path}` | | The file's bytes, with its `Content-Type`. `path` may be sent in segments (`a/b.png`) or as one escaped segment (`a%2Fb.png`). 404 `file-not-found`. |
 | `DELETE /storage/{folder}/files/{path}` | | `{"deleted":1}`. 404 `file-not-found`. |
 | `DELETE /storage/{folder}/files` | | `{"deleted":2}`: deletes every file in the folder. Uploads in progress finish as they would. 404 `folder-not-found`. |
+| `GET /seed` | | The project's [seed data](seed-data.md), checked against the served model without loading it: `{"exists":true,"entities":[{"name":"Todo","file":"rayfin/seed/data/Todo.json","rows":12}],"storage":[{"folder":"todo-attachments","files":2,"bytes":5120}],"users":["$developer","$user:ana@example.com"],"problems":[problem, …]}`. `exists` is `false` when `rayfin/seed` holds no seed data. [`problems`](#seed-problems) are what the files themselves get wrong; the database's checks (unique values, references between rows) run only when the seed data loads. |
+| `POST /seed` | `{"dryRun":false}` | Replaces the local data with the seed data, in one transaction: every entity's rows and every stored file. Users stay, and those the placeholders name are created when missing. Answers `{"dryRun":false,"entities":[{"name":"Todo","rows":12}],"storage":[{"folder":"todo-attachments","files":2}],"users":[{"placeholder":"$developer","user":user}]}`; the app's page shows the new data when it loads again. 404 `seed-not-found` when there is no seed data. 422 `seed-invalid` when the files or the database refuse it, with the error's `problems` (at most 100), and nothing changes. With `"dryRun":true` it changes nothing and creates no user: the rows go in a transaction that rolls back, so it answers what loading would (`users` empty), or the same 422 with the database's problems too. |
+| `GET /seed/export` | | The local data as seed data, for hosts to write to `rayfin/seed` (paths are relative to it): `{"data":[{"entity":"Todo","file":"data/Todo.json","rows":[{…}]}],"storage":[{"folder":"todo-attachments","dir":"storage/todo-attachments","manifestFile":"storage/todo-attachments.json","manifest":{…},"files":[{"path":"a/b.pdf","size":5120}]}],"skipped":[{"folder","path","message"}]}`. Only entities with rows and declared folders with files are listed. Rows leave out the `null` values that leaving a field out gives too; user ids become `$developer` (the developer's accounts) or `$user:<username>`, and text that would read as a placeholder gets one more `$`. Write `rows` to `file`, `manifest` to `manifestFile` unless it is `null`, and each file's bytes (`GET /storage/{folder}/files/{path}`) to `{dir}/{path}`. `skipped` lists the stored files left out, with why: a path that isn't a valid file path on every system (Windows' reserved names and characters), one that differs only in case from another file's (on Windows and macOS they'd be one), or one loading would skip (hidden files). Hosts should still check each path before writing it. |
 | `POST /reload` | `{"forceSchema":false}` | Reads `rayfin.yml`, `rayfin-local.toml`, the entities, the SQL connectors' entities and the secret values again and applies them now, as after an edit, running the data build command (`services.data.buildCommand`) first, as a start does (`forceSchema`: also a schema change that loses data). Answers `{"schema":<schema event>,"config":<config-changed event or null>}`, the events it also emits; a change that would lose data answers 200 with a `refused` `schema` event. A reload in progress finishes first, and one asked for before `ready` waits for the start. A `rayfin.yml` or `rayfin-local.toml` that can't be read answers 422 `config-invalid`, and entities that can't be built or analyzed 422 `analysis-failed`; what could be read is applied all the same. 503 `stopping` once `serve` stops. |
 
 A <a id="users"></a>**user** is `{"id","username","email","createdAt","signIn":["password","entra"],"developer":bool}`:
@@ -296,6 +299,13 @@ A <a id="users"></a>**user** is `{"id","username","email","createdAt","signIn":[
 - `createdAt` is RFC 3339, UTC, with milliseconds.
 - `signIn` lists how the user signs in: `password`, `entra` (Microsoft Entra ID), or neither for users only rayfin-local signs in.
 - `developer` is `true` for your own accounts: `developer@example.com` and Entra users (locally, only you sign in with Entra).
+
+A <a id="seed-problems"></a>**problem** with seed data is `{"file","row","field","message"}`:
+
+- `file` is the file, from the project root (`rayfin/seed/data/Todo.csv`).
+- `row` is a JSON array's item (from 1) or a CSV file's line; `null` for a problem with a whole file.
+- `field` is the field at fault, or `null`.
+- `message` says what is wrong, as a sentence.
 
 ## Calling the app's backend as a user
 

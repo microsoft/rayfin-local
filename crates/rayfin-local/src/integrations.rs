@@ -365,7 +365,7 @@ pub fn graphql_router(ctx: &ServeContext<'_>) -> Option<Router> {
 
 /// `/api/storage/*`, when `services.storage` is on and `rayfin/storage` declares folders.
 pub async fn storage_router(ctx: &ServeContext<'_>) -> anyhow::Result<Option<Router>> {
-    if !ctx.project.config().services.storage.enabled || storage_folders(ctx.model).is_empty() {
+    if !storage_runs(ctx.project, ctx.model) {
         return Ok(None);
     }
     let mut config = StorageConfig::new(ctx.state.storage_dir(), ctx.api_origin);
@@ -374,6 +374,12 @@ pub async fn storage_router(ctx: &ServeContext<'_>) -> anyhow::Result<Option<Rou
         .await
         .context("Could not start the local storage service")?;
     Ok(Some(router))
+}
+
+/// Whether the storage service runs: `services.storage` is on and `rayfin/storage` declares
+/// folders.
+pub fn storage_runs(project: &Project, model: &AppModel) -> bool {
+    project.config().services.storage.enabled && !storage_folders(model).is_empty()
 }
 
 /// The names of the storage folders in `model`.

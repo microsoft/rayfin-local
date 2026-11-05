@@ -89,6 +89,8 @@ async fn harness_with(reload: Arc<dyn ReloadTrigger>) -> Harness {
         model: Arc::clone(&model),
         functions: FunctionsSlot::default(),
         storage_dir: storage_dir.clone(),
+        seed_dir: dir.path().join("seed"),
+        storage_on: true,
         reload,
         live: live.clone(),
     }
@@ -669,6 +671,76 @@ impl ReloadTrigger for FakeReload {
         });
         Box::pin(async move { answer })
     }
+}
+
+#[tokio::test]
+async fn seed_data_is_summarized_loaded_and_exported() {
+    let h = harness().await;
+    let none = h.call(Method::GET, "/seed", None).await;
+    assert_eq!(none.status, StatusCode::OK, "{}", none.body);
+    assert_eq!(none.body["exists"], false);
+    let missing = h.call(Method::POST, "/seed", None).await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing.body["error"]["code"], "seed-not-found");
+
+    let file = h._dir.path().join("seed").join("data").join("Category.csv");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, format!("id,name\n{C1},Home\n")).unwrap();
+    let summary = h.call(Method::GET, "/seed", None).await;
+    assert_eq!(
+        summary.body,
+        json!({
+            "exists": true,
+            "entities": [{"name": "Category", "file": "rayfin/seed/data/Category.csv", "rows": 1}],
+            "storage": [],
+            "users": [],
+            "problems": [],
+        })
+    );
+    let loaded = h.call(Method::POST, "/seed", None).await;
+    assert_eq!(loaded.status, StatusCode::OK, "{}", loaded.body);
+    assert_eq!(
+        loaded.body,
+        json!({
+            "dryRun": false,
+            "entities": [{"name": "Category", "rows": 1}],
+            "storage": [],
+            "users": [],
+        })
+    );
+    let exported = h.call(Method::GET, "/seed/export", None).await;
+    assert_eq!(
+        exported.body["data"],
+        json!([{
+            "entity": "Category",
+            "file": "data/Category.json",
+            "rows": [{"id": C1, "name": "Home", "sortOrder": 0}],
+        }])
+    );
+
+    std::fs::write(&file, format!("id,name\n{C1},H\n")).unwrap();
+    let checked = h
+        .call(Method::POST, "/seed", Some(json!({ "dryRun": true })))
+        .await;
+    assert_eq!(checked.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        checked.body["error"]["message"],
+        "The seed data has 1 problem."
+    );
+    let refused = h.call(Method::POST, "/seed", None).await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.body["error"]["code"], "seed-invalid");
+    assert_eq!(
+        refused.body["error"]["problems"],
+        json!([{
+            "file": "rayfin/seed/data/Category.csv",
+            "row": 2,
+            "field": "name",
+            "message": "`name` must be at least 2 characters long.",
+        }])
+    );
+    let rows = h.call(Method::GET, "/entities/Category/rows", None).await;
+    assert_eq!(rows.body["rows"][0]["name"], "Home", "nothing changed");
 }
 
 #[tokio::test]

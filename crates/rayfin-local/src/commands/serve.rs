@@ -39,6 +39,7 @@ use crate::events::{
 use crate::integrations::{self, FunctionsSlot, SecretValues, ServeContext};
 use crate::ports::{self, DEFAULT_API_PORT, PortRequest};
 use crate::reload;
+use crate::seed;
 use crate::shutdown::{self, StopHooks, StopListener, StopRequest};
 use crate::ui;
 
@@ -74,6 +75,8 @@ pub struct ServeOptions {
     pub tenant: Option<String>,
     pub force_schema: bool,
     pub reset: bool,
+    /// `--seed`: load the seed data once the backend is up.
+    pub seed: bool,
     pub inspect: Option<u16>,
     /// `--sign-in-as`: who apps are signed in as automatically.
     pub sign_in_as: Option<rl_project::SignInAs>,
@@ -633,6 +636,9 @@ async fn serve_until_stopped(
         }
     }
     ui::step(format_args!("Backend listening on {}", ctx.api_origin));
+    if ctx.options.seed {
+        load_seed(ctx).await;
+    }
 
     let frontend_url = integrations::start_frontend(ctx, &mut running.hooks).await?;
     let app_url = if serves_static {
@@ -716,6 +722,51 @@ fn server_stopped(result: Result<io::Result<()>, tokio::task::JoinError>) -> any
     }
 }
 
+/// `--seed`: replaces the local data with the project's seed data, or says why it didn't.
+async fn load_seed(ctx: &ServeContext<'_>) {
+    let dir = ctx.project.seed_dir();
+    let model = Arc::clone(ctx.model);
+    let storage = integrations::storage_runs(ctx.project, ctx.model);
+    let services = seed::Services {
+        data: ctx.data_api.is_some(),
+        storage,
+    };
+    let seed = match tokio::task::spawn_blocking(move || seed::read(&dir, &model, services)).await {
+        Ok(seed) => seed,
+        Err(err) => return ui::warn(format_args!("--seed: could not read the seed data: {err}")),
+    };
+    if !seed.exists {
+        return ui::warn(
+            "--seed: the project has no seed data in rayfin/seed, so none was loaded (see \
+             docs/seed-data.md).",
+        );
+    }
+    let storage_dir = ctx.state.storage_dir();
+    let target = seed::Target {
+        auth: ctx.auth,
+        db: ctx.db,
+        model: ctx.model,
+        data: ctx.data_api.is_some(),
+        storage,
+        storage_dir: &storage_dir,
+        dry_run: false,
+    };
+    match seed::load(seed, target).await {
+        Ok(loaded) => ui::step(format_args!("Loaded the seed data: {}", loaded.describe())),
+        Err(seed::LoadError::Invalid(problems)) => {
+            ui::warn("--seed: the seed data has problems, so none of it was loaded:");
+            for problem in &problems {
+                ui::warn(format_args!("  {problem}"));
+            }
+        }
+        Err(seed::LoadError::Failed(err)) => {
+            ui::warn(format_args!(
+                "--seed: could not load the seed data: {err:#}"
+            ));
+        }
+    }
+}
+
 /// The feature services that run, for the router, the banner and `ready`; live reload replaces
 /// those whose settings change.
 pub(crate) struct Features {
@@ -775,6 +826,8 @@ fn control_router(ctx: &ServeContext<'_>, token: &str, functions: &FunctionsSlot
         model: Arc::clone(ctx.model),
         functions: functions.clone(),
         storage_dir: ctx.state.storage_dir(),
+        seed_dir: ctx.project.seed_dir(),
+        storage_on: integrations::storage_runs(ctx.project, ctx.model),
         reload: Arc::new(ctx.reload.clone()),
         live: events::live(),
     }

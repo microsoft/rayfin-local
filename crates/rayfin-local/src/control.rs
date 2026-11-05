@@ -34,6 +34,7 @@ use crate::errors::HostError;
 use crate::events::{self, ErrorCode, LiveState};
 use crate::integrations::FunctionsSlot;
 use crate::reload::{ReloadHandle, ReloadOutcome, Stopping};
+use crate::seed;
 
 /// The rows `GET /entities/{name}/rows` reads without `limit`.
 const DEFAULT_ROWS: u32 = 50;
@@ -71,6 +72,10 @@ pub struct Control {
     pub functions: FunctionsSlot,
     /// Where the stored files are (`.rayfin-local/storage`).
     pub storage_dir: PathBuf,
+    /// The project's seed data (`rayfin/seed`).
+    pub seed_dir: PathBuf,
+    /// Whether the storage service runs.
+    pub storage_on: bool,
     pub reload: Arc<dyn ReloadTrigger>,
     /// The last events, for `GET /status`.
     pub live: LiveState,
@@ -106,6 +111,11 @@ impl Control {
                 "/.rayfin-local/control/storage/{folder}/files/{*path}",
                 get(file).delete(delete_file),
             )
+            .route(
+                "/.rayfin-local/control/seed",
+                get(seed_summary).post(load_seed),
+            )
+            .route("/.rayfin-local/control/seed/export", get(export_seed))
             .route("/.rayfin-local/control/reload", post(reload))
             .route_layer(middleware::from_fn_with_state(Arc::clone(&control), guard))
             .layer(middleware::map_response(no_store))
@@ -113,13 +123,14 @@ impl Control {
     }
 }
 
-/// An error answer: `{"error": {"code", "message", "hint"}}`.
+/// An error answer: `{"error": {"code", "message", "hint"}}`, and `problems` for `seed-invalid`.
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
     hint: Option<String>,
+    problems: Option<Vec<seed::Problem>>,
 }
 
 impl ApiError {
@@ -129,6 +140,7 @@ impl ApiError {
             code,
             message: message.into(),
             hint: None,
+            problems: None,
         }
     }
 
@@ -232,10 +244,11 @@ impl From<StorageAdminError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = json!({
-            "error": { "code": self.code, "message": self.message, "hint": self.hint },
-        });
-        let mut response = (self.status, Json(body)).into_response();
+        let mut error = json!({ "code": self.code, "message": self.message, "hint": self.hint });
+        if let Some(problems) = self.problems {
+            error["problems"] = json!(problems);
+        }
+        let mut response = (self.status, Json(json!({ "error": error }))).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
             response
                 .headers_mut()
@@ -718,6 +731,121 @@ async fn clear_files(
     let deleted = storage_admin::clear_folder(&control.db, &control.storage_dir, &folder).await?;
     tracing::info!("Deleted the {deleted} stored files of storage folder {folder}");
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+/// The project's seed data, read and checked against the served model.
+async fn read_seed(control: &Control) -> Result<seed::Seed, ApiError> {
+    let dir = control.seed_dir.clone();
+    let model = Arc::clone(&control.model);
+    let services = seed::Services {
+        data: control.data.is_some(),
+        storage: control.storage_on,
+    };
+    tokio::task::spawn_blocking(move || seed::read(&dir, &model, services))
+        .await
+        .map_err(ApiError::internal)
+}
+
+async fn seed_summary(State(control): AppState) -> Result<Json<Value>, ApiError> {
+    Ok(Json(read_seed(&control).await?.summary()))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedRequest {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn load_seed(State(control): AppState, bytes: Bytes) -> Result<Json<Value>, ApiError> {
+    let request: SeedRequest = body(&bytes)?;
+    let seed = read_seed(&control).await?;
+    if !seed.exists {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "seed-not-found",
+            "The project has no seed data in rayfin/seed.",
+        )
+        .hint(
+            "Put rows in rayfin/seed/data/<Entity>.json or .csv, and files in \
+             rayfin/seed/storage/<folder>/.",
+        ));
+    }
+    let target = seed::Target {
+        auth: &control.auth,
+        db: &control.db,
+        model: &control.model,
+        data: control.data.is_some(),
+        storage: control.storage_on,
+        storage_dir: &control.storage_dir,
+        dry_run: request.dry_run,
+    };
+    match seed::load(seed, target).await {
+        Ok(loaded) => {
+            if !request.dry_run {
+                tracing::info!("Loaded the seed data: {}", loaded.describe());
+            }
+            let entities: Vec<Value> = loaded
+                .entities
+                .iter()
+                .map(|(name, rows)| json!({ "name": name, "rows": rows }))
+                .collect();
+            let storage: Vec<Value> = loaded
+                .storage
+                .iter()
+                .map(|(folder, files)| json!({ "folder": folder, "files": files }))
+                .collect();
+            let users: Vec<Value> = loaded
+                .users
+                .iter()
+                .map(|(user, account)| {
+                    json!({ "placeholder": user.placeholder(), "user": user_json(account) })
+                })
+                .collect();
+            Ok(Json(json!({
+                "dryRun": request.dry_run,
+                "entities": entities,
+                "storage": storage,
+                "users": users,
+            })))
+        }
+        Err(seed::LoadError::Invalid(problems)) => {
+            let noun = if problems.len() == 1 {
+                "problem"
+            } else {
+                "problems"
+            };
+            let mut error = ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "seed-invalid",
+                if request.dry_run {
+                    format!("The seed data has {} {noun}.", problems.len())
+                } else {
+                    format!(
+                        "The seed data has {} {noun}; nothing was loaded.",
+                        problems.len()
+                    )
+                },
+            )
+            .hint("Fix the seed files as each problem says, then load them again.");
+            error.problems = Some(problems);
+            Err(error)
+        }
+        Err(seed::LoadError::Failed(error)) => Err(ApiError::internal(format!("{error:#}"))),
+    }
+}
+
+async fn export_seed(State(control): AppState) -> Result<Json<Value>, ApiError> {
+    let source = seed::Source {
+        auth: &control.auth,
+        data: control.data.as_deref(),
+        db: &control.db,
+        model: &control.model,
+    };
+    seed::export(source)
+        .await
+        .map(Json)
+        .map_err(|error| ApiError::internal(format!("{error:#}")))
 }
 
 #[derive(Default, Deserialize)]
