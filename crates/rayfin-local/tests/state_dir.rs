@@ -99,13 +99,12 @@ fn every_command_uses_the_state_dir() {
         .find(|check| check["id"] == "state")
         .unwrap();
     assert_eq!(check["status"], "ok", "{check}");
-    assert!(
-        check["message"]
-            .as_str()
-            .unwrap()
-            .contains(state.to_str().unwrap()),
-        "{check}"
-    );
+    let shown = check["message"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("Local state in ")
+        .unwrap_or_else(|| panic!("{check}"));
+    same_path(&Value::from(shown), &state);
 
     // `schema` reads the state too; it needs Node.js and the SDK, so only check it doesn't
     // touch the default folder.
