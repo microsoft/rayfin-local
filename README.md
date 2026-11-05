@@ -338,6 +338,7 @@ Outside it, rayfin-local writes only build output: what your build commands prod
 
 Each time `serve` starts, and whenever an entity source changes while it runs (the files in `rayfin/data` and `rayfin/storage`, the files they import, and the tsconfig files), rayfin-local analyzes your entities and brings the SQLite tables up to date.
 
+A new app can start with an empty (or missing) `rayfin/data` folder: `serve` warns that there are no entities yet, serves a data API without entities, and applies the first entity as soon as you add it.
 In a workspace layout, where `services.data.path` names a data package whose `package.json` `exports` (or `main`) the entities, the analysis imports the package's build output.
 `serve` runs `services.data.buildCommand` in that package before it analyzes, at every start and whenever the sources of the package (or of the workspace packages its output imports) change, with the output prefixed with `[build]`; a failed build stops `serve`, or keeps the previous schema while it runs.
 Rebuilding the package yourself also counts as a change.

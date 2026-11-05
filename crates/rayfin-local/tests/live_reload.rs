@@ -891,6 +891,149 @@ fn a_reload_on_request_answers_a_refused_schema_change_and_forces_it() {
     assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
 }
 
+/// Empties `rayfin/data` of the fixture copy, as a new app's is: storage stays on.
+fn empty_entity_folder(app: &App) -> PathBuf {
+    let data = app.path().join("rayfin").join("data");
+    for entry in std::fs::read_dir(&data).unwrap() {
+        std::fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    data
+}
+
+/// Starts hosted and checks that no entities are served and `/graphql` still answers.
+fn serve_without_entities(app: &App) -> (Serve, String, String, String) {
+    let mut serve = Serve::start_hosted(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let analyzed = serve.next("analysis");
+    assert_eq!(analyzed["ok"], true, "{analyzed}");
+    assert_eq!(analyzed["entities"], json!([]), "{analyzed}");
+    let ready = serve.next("ready");
+    assert_eq!(ready["features"]["data"]["enabled"], true, "{ready}");
+    assert_eq!(ready["features"]["data"]["entities"], json!([]), "{ready}");
+    assert_eq!(ready["features"]["storage"]["enabled"], true, "{ready}");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let key = publishable_key(&api_url);
+    let (status, token) = control(&api_url, "POST", "/token", None);
+    assert_eq!(status, 200, "{token}");
+    let token = token["accessToken"].as_str().unwrap().to_owned();
+    let (status, answer) = graphql(&api_url, &key, &token, "{ __typename }");
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["data"]["__typename"], "Query", "{answer}");
+    assert!(served_entities(&api_url).is_empty());
+    (serve, api_url, key, token)
+}
+
+fn is_schema(result: &'static str) -> impl Fn(&Value) -> bool {
+    move |event| event["type"] == "schema" && event["result"] == result
+}
+
+fn removed(schema: &Value, entity: &str) -> bool {
+    schema["changes"].as_array().unwrap().iter().any(|change| {
+        let change = change.as_str().unwrap();
+        change.starts_with("removed") && change.contains(entity)
+    })
+}
+
+#[test]
+fn an_empty_entity_folder_serves_no_entities_until_one_is_added() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let data = empty_entity_folder(&app);
+    let (mut serve, api_url, key, token) = serve_without_entities(&app);
+
+    // The first entity is applied live.
+    std::fs::write(data.join("Note.ts"), NOTE).unwrap();
+    let analyzed = serve.until("the analysis of the first entity", STEP, |event| {
+        event["type"] == "analysis" && event["ok"] == true
+    });
+    assert_eq!(analyzed["entities"], json!(["Note"]), "{analyzed}");
+    let applied = serve.until("the first entity's schema", STEP, is_schema("applied"));
+    assert!(
+        applied["changes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("added Note")),
+        "{applied}"
+    );
+    assert_eq!(served_entities(&api_url), vec![json!("Note")]);
+    let create = "mutation { createNote(item: { title: \"First\" }) { title } }";
+    let (status, created) = graphql(&api_url, &key, &token, create);
+    assert_eq!(status, 200, "{created}");
+    assert!(created["errors"].is_null(), "{created}");
+    let (status, notes) = graphql(&api_url, &key, &token, "{ notes { items { title } } }");
+    assert_eq!(status, 200, "{notes}");
+    assert_eq!(
+        notes["data"]["notes"]["items"],
+        json!([{ "title": "First" }]),
+        "{notes}"
+    );
+
+    // Removing the last entity, with a row, loses data: refused until forced.
+    std::fs::remove_file(data.join("Note.ts")).unwrap();
+    let refused = serve.until("the refused removal", STEP, is_schema("refused"));
+    assert_eq!(refused["live"], true, "{refused}");
+    assert!(refused["losses"].to_string().contains("Note"), "{refused}");
+    assert_eq!(served_entities(&api_url), vec![json!("Note")]);
+    let (status, notes) = graphql(&api_url, &key, &token, "{ notes { items { title } } }");
+    assert_eq!(status, 200, "{notes}");
+    assert_eq!(
+        notes["data"]["notes"]["items"],
+        json!([{ "title": "First" }]),
+        "{notes}"
+    );
+
+    let force = json!({ "forceSchema": true });
+    let (status, forced) = control(&api_url, "POST", "/reload", Some(&force));
+    assert_eq!(status, 200, "{forced}");
+    assert_eq!(forced["schema"]["result"], "applied", "{forced}");
+    assert!(removed(&forced["schema"], "Note"), "{forced}");
+    assert!(served_entities(&api_url).is_empty());
+    let (status, answer) = graphql(&api_url, &key, &token, "{ __typename }");
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["data"]["__typename"], "Query", "{answer}");
+    let (_, gone) = graphql(&api_url, &key, &token, "{ notes { items { title } } }");
+    assert!(!gone["errors"].is_null(), "{gone}");
+
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
+
+#[test]
+fn a_missing_entity_folder_is_followed_until_it_holds_an_entity() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let data = empty_entity_folder(&app);
+    std::fs::remove_dir(&data).unwrap();
+    let (mut serve, api_url, key, token) = serve_without_entities(&app);
+
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("Label.ts"), LABEL).unwrap();
+    let applied = serve.until("the first entity's schema", STEP, is_schema("applied"));
+    assert!(
+        applied["changes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("added Label")),
+        "{applied}"
+    );
+    assert_eq!(served_entities(&api_url), vec![json!("Label")]);
+    let (status, labels) = graphql(&api_url, &key, &token, "{ labels { items { name } } }");
+    assert_eq!(status, 200, "{labels}");
+    assert_eq!(labels["data"]["labels"]["items"], json!([]), "{labels}");
+
+    // Removing an entity without rows loses nothing: applied without forcing.
+    std::fs::remove_file(data.join("Label.ts")).unwrap();
+    let applied = serve.until("the removal", STEP, |event| event["type"] == "schema");
+    assert_eq!(applied["result"], "applied", "{applied}");
+    assert!(removed(&applied, "Label"), "{applied}");
+    assert!(served_entities(&api_url).is_empty());
+
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
+
 /// The data service of the fixture, off, with its entities in a data package that `tsc` builds,
 /// as in Rayfin's templates (which turn storage off too: it needs the data service).
 const DATA_PACKAGE_SERVICES: [(&str, &str); 2] = [

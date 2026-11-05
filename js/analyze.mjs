@@ -6,7 +6,8 @@
 //
 // Input:
 //   projectRoot   absolute project directory (also the working directory)
-//   dataDir       the entity sources, normally <projectRoot>/rayfin/data
+//   dataDir       the entity sources, normally <projectRoot>/rayfin/data; missing or without
+//                 @entity() classes, the result has no entities (and a warning diagnostic)
 //   storageDir    optional; the `@blob` sources, default <dataDir>/../storage
 //   tsconfigPath  rayfin/tsconfig.json, or null to compile with built-in defaults
 //   outDir        absolute folder for the compiled JavaScript; the only place this helper writes
@@ -109,10 +110,15 @@ async function analyze(input) {
   // Strategy 1 of the CLI: a data service package with exports/main is imported as built.
   const serviceRoot = path.dirname(path.dirname(dataDir));
   const packageEntries = resolvePackageExports(serviceRoot);
-  if (!packageEntries && !existsSync(dataDir)) {
-    throw new Error(
-      `The entity folder ${rel(projectRoot, dataDir)} does not exist. Create it, or disable ` +
-        `services.data in rayfin/rayfin.yml.`,
+  // A new app may have no entities yet: no folder, or no modules in it, is an empty model that a
+  // later analysis (live reload) fills in.
+  const dataExists = existsSync(dataDir);
+  if (!packageEntries && !dataExists) {
+    diagnostics.push(
+      warning(
+        `The entity folder ${rel(projectRoot, dataDir)} does not exist; serving no entities until ` +
+          `it holds an @entity() module.`,
+      ),
     );
   }
   // Before compiling: storage that imports the data package fails to compile without its build.
@@ -149,8 +155,6 @@ async function analyze(input) {
   if (packageEntries) {
     entries.data = packageEntries.map((entry) => path.resolve(serviceRoot, entry));
     diagnostics.push(warning(`Loaded entities from the data package exports: ${packageEntries.join(', ')}.`));
-  } else if (entries.data.length === 0) {
-    throw new Error(`No entity modules were compiled from ${rel(projectRoot, dataDir)}.`);
   }
 
   const foundEntities = {};
@@ -158,6 +162,14 @@ async function analyze(input) {
     collect(await import(pathToFileURL(file).href), foundEntities, coreSchema.isRayfinEntity);
   }
   const entityClasses = Object.values(foundEntities);
+  if (!packageEntries && dataExists && entityClasses.length === 0) {
+    diagnostics.push(
+      warning(
+        `${rel(projectRoot, dataDir)} has no @entity() classes yet; serving no entities until ` +
+          `one is added.`,
+      ),
+    );
+  }
   const analyzer = new analysis.SchemaAnalyzer(entityClasses, dialect, { log });
   const entities = analyzer.analyzeEntities();
   const config = new analysis.ConfigGenerator(dialect).generateConfig(entities);

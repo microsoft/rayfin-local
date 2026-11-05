@@ -77,6 +77,7 @@ With a data package (`services.data.buildCommand`), its build command runs first
 - `ok: false` with `message` when the analysis failed (a compile error in `rayfin/data`, a failed data build).
   At start this is followed by a fatal `analysis-failed` error; while running, the previous model stays in use.
 - `sdk.version` is `null` when the packages aren't installed.
+- `entities` is `[]` while `rayfin/data` is empty or missing (a new app): `ok` is `true`, the data API serves no entities, and the first entity added is applied live.
 
 ### `schema`
 
