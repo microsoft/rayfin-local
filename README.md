@@ -41,6 +41,7 @@ rayfin-local serve
 - [Identity and Azure tokens](#identity-and-azure-tokens)
 - [Secrets](#secrets)
 - [Local state and reset](#local-state-and-reset)
+- [Backup and restore](#backup-and-restore)
 - [Schema changes](#schema-changes)
 - [Live reload](#live-reload)
 - [Configuration file](#configuration-file)
@@ -329,10 +330,47 @@ Outside it, rayfin-local writes only build output: what your build commands prod
 | `cache/` | Analysis output (the entities' and the SQL connectors'), where SQL connectors' databases are (`cache/connectors/`), and the helper scripts rayfin-local runs with Node.js. |
 | `state.json` | The local app id, publishable key, workspace, item and tenant ids, and the last ports. |
 | `secrets.json` | Local secret values. |
-| `serve.lock`, `serve.json` | Keep a second `serve` (or a `reset`) off the project while one runs. |
+| `serve.lock`, `serve.json` | Keep a second `serve` (or a `reset` or `restore`) off the project while one runs. |
 
 - `rayfin-local serve --reset` starts from an empty database: it deletes `db.sqlite` (data, users and sessions) and `storage/`, and keeps the rest.
 - `rayfin-local reset` deletes the whole folder after asking (`--yes` skips the question).
+  With `--state-dir`, it deletes only rayfin-local's own files in the folder, and the folder when nothing else is left.
+
+### Another state folder
+
+`--state-dir <DIR>` (or `RAYFIN_LOCAL_STATE_DIR`) keeps the state in `DIR` instead, for every command; it is created when missing.
+Use it to keep live data out of a synced or shared project folder.
+A relative path is relative to the project for `--state-dir`, and to the current directory for the environment variable; the flag wins over the variable.
+
+- The folder can't be the project folder, one of its parents, or inside `rayfin/`.
+  It must be empty, missing, or already hold rayfin-local state, so a typo can't mix the state with your files.
+- It gets a `.gitignore` (`*`) only when it is inside the project or a git working tree, where its keys and secrets could otherwise be committed; anywhere else rayfin-local writes nothing but the state.
+- The compiled entities (`cache/`) go there too; they still load the project's packages from its `node_modules`.
+- `serve` takes `serve.lock` before it creates or reads `state.json`, so two first runs agree on one app id and publishable key.
+  On a file system without file locks (some network shares), `serve` still runs but warns (`serve-lock-unavailable`): nothing then stops a second `serve` on the same folder.
+
+## Backup and restore
+
+```sh
+rayfin-local backup <OUT> [--json]               # copy the data into the new folder OUT
+rayfin-local restore <FROM> [--yes] [--json]     # replace the data with a backup's
+```
+
+A backup holds exactly what `serve --reset` deletes: the database (the app's rows, the local users, the schema and the stored files' records) and the stored files, with a `manifest.json` of their sizes and SHA-256 hashes.
+Sessions, refresh tokens and sign-in codes are left out, as are the signing keys, `state.json`, `secrets.json` and `cache/`: a backup holds no secrets beyond the users' password hashes.
+
+- `backup` runs whether or not `serve` does, without stopping or slowing it: it copies a consistent snapshot of the database (SQLite's online backup), then the files the snapshot refers to.
+  `OUT` must be new or empty and outside the state folder; the backup is written next to it and renamed into place, so a failed backup leaves nothing behind.
+  Without a database yet, it writes an empty backup (`"database": false`) and creates none.
+- `restore` refuses while `serve` runs the project, and when the backup's files don't match its manifest or it comes from a newer rayfin-local; your data stays as it was.
+  Otherwise it asks before replacing existing data (`--yes` skips the question), checks the backup's database, and swaps the database and `storage/` in at once.
+  Everyone is signed out: the sessions and access tokens issued before stop working, and pages forget their stored sessions.
+  Keys, `state.json` and secrets stay; into a new state folder, `restore` creates them as `serve` would.
+  Restoring an empty backup is the same as `serve --reset`, which leaves access tokens already issued valid until they expire.
+- A backup from an older app schema is brought up to date by the next `serve`, with the usual [schema change](#schema-changes) rules.
+
+With `--json`, both print one JSON object: `{"ok":true,"command":"backup","stateDir","path","database","files","bytes","createdAt","formatVersion"}` (`restore` adds `"signedOutSessions"`), or `{"ok":false,"error":{"code","message"}}`.
+They exit with 0 when done, 1 when they fail or refuse, and 2 for bad arguments; [docs/embedding.md](docs/embedding.md#backup-and-restore) lists the codes.
 
 ## Schema changes
 
@@ -419,6 +457,8 @@ With `anonymous_data_access = false`, `serve` refuses such entities, as `rayfin 
 | `rayfin-local doctor [--json]` | Check Node.js, installed packages, Azure and Rayfin sign-in, and ports. |
 | `rayfin-local schema` | Print the app model and the SQLite schema derived from `rayfin/data`. |
 | `rayfin-local reset [--yes]` | Delete `.rayfin-local/`: database, users, keys, stored files and secrets. |
+| `rayfin-local backup <OUT> [--json]` | Copy the data (database and stored files, without sessions) into a new folder. See [Backup and restore](#backup-and-restore). |
+| `rayfin-local restore <FROM> [--yes] [--json]` | Replace the data with a backup's, and sign everyone out. |
 | `rayfin-local users list\|add\|delete\|reset-password` | Manage local users. |
 | `rayfin-local secret set\|list\|delete` | Manage local secret values (`.rayfin-local/secrets.json`); `secret list --json` prints them as JSON (never the values). |
 | `rayfin-local version [--json]` | Print the version; with `--json`, also the version of the host contract and the Rayfin SDK versions it supports. |
@@ -429,6 +469,7 @@ Every command takes these options:
 | Option | Meaning |
 | --- | --- |
 | `-C, --project <DIR>` | The project to use. Default: the current directory, or the nearest parent with `rayfin/rayfin.yml`. |
+| `--state-dir <DIR>` | Where to keep the local state. Default: `RAYFIN_LOCAL_STATE_DIR`, else `.rayfin-local/` in the project. See [Another state folder](#another-state-folder). |
 | `-v, --verbose` | Show rayfin-local's debug logs. `RUST_LOG` replaces the default log filters. |
 
 `serve` flags:
@@ -456,6 +497,7 @@ Every command takes these options:
 | Variable | Effect |
 | --- | --- |
 | `RAYFIN_LOCAL_NODE` | The `node` executable to use instead of the one on `PATH`. |
+| `RAYFIN_LOCAL_STATE_DIR` | The state folder, as `--state-dir` (relative to the current directory). |
 | `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` | A fixed token for one audience (see [Identity and Azure tokens](#identity-and-azure-tokens)). |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the control API for programs that run rayfin-local; at least 32 characters (see [docs/embedding.md](docs/embedding.md#control-api)). |
 | `RAYFIN_ENV_FILE` | The env file to read instead of `rayfin/.env`, as for the Rayfin CLI. |

@@ -130,4 +130,4 @@ These exist only in rayfin-local:
 - `serve --inspect[=PORT]`: the Node.js inspector on the function host.
 - `RAYFIN_LOCAL_TOKEN_<AUDIENCE>`: fixed tokens for tests and CI.
 - `[connectors] powerbi_base_url` in `rayfin-local.toml`: a mock or sovereign-cloud Power BI.
-- The `users`, `secret`, `reset`, `doctor` and `schema` commands.
+- The `users`, `secret`, `reset`, `backup`, `restore`, `doctor` and `schema` commands.

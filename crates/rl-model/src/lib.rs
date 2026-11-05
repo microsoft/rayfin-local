@@ -40,8 +40,11 @@ pub struct AnalyzeInput {
     /// `rayfin/tsconfig.json`; `None` compiles with built-in defaults.
     pub tsconfig_path: Option<PathBuf>,
     /// Where the compiled JavaScript goes, emptied first. Inside the project it must be under
-    /// `.rayfin-local/` (the helper refuses anything else).
+    /// `state_dir` (the helper refuses anything else).
     pub out_dir: PathBuf,
+    /// rayfin-local's state folder; the helper defaults to `<project>/.rayfin-local`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_dir: Option<PathBuf>,
     /// `services.data.dialect`.
     pub dialect: Dialect,
     /// Whether to analyze the `@blob` storage folders too (`services.storage.enabled`).
@@ -64,6 +67,7 @@ impl AnalyzeInput {
                 .join(".rayfin-local")
                 .join("cache")
                 .join("compiled"),
+            state_dir: None,
             dialect,
             storage,
             verbose: false,
@@ -86,9 +90,11 @@ pub struct ConnectorsAnalyzeInput {
     pub project_root: PathBuf,
     /// The project's `rayfin/tsconfig.json`; `None` compiles with built-in defaults.
     pub tsconfig_path: Option<PathBuf>,
-    /// Where the compiled JavaScript goes (emptied first; under `.rayfin-local/` inside the
-    /// project).
+    /// Where the compiled JavaScript goes (emptied first; under `state_dir` inside the project).
     pub out_dir: PathBuf,
+    /// rayfin-local's state folder; the helper defaults to `<project>/.rayfin-local`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_dir: Option<PathBuf>,
     pub connectors: Vec<ConnectorSource>,
     /// Echo the analyzer's log to the helper's stderr.
     pub verbose: bool,
@@ -119,6 +125,7 @@ impl ConnectorsAnalyzeInput {
                 .join(".rayfin-local")
                 .join("cache")
                 .join("compiled-connectors"),
+            state_dir: None,
             connectors,
             verbose: false,
         }

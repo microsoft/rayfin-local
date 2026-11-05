@@ -63,6 +63,7 @@ pub async fn analyze(
         .collect();
     let mut input = ConnectorsAnalyzeInput::for_project(project.root(), sources);
     input.out_dir = state.cache_dir().join("compiled-connectors");
+    input.state_dir = Some(state.dir().to_path_buf());
     input.verbose = verbose;
 
     let analysis = match load(project, state, node, &input).await {

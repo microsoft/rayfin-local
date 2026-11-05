@@ -374,6 +374,7 @@ pub fn analyze_input(project: &Project, state: &LocalState, verbose: bool) -> An
     let tsconfig = rayfin_tsconfig(project);
     input.tsconfig_path = tsconfig.is_file().then_some(tsconfig);
     input.out_dir = state.cache_dir().join("compiled");
+    input.state_dir = Some(state.dir().to_path_buf());
     input.verbose = verbose;
     input
 }

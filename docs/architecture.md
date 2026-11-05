@@ -41,7 +41,7 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
    Small JavaScript helpers, embedded in the binary, drive these packages on the developer's Node.js.
    The behavior therefore follows the project's package versions, and decorator and policy semantics match the Rayfin CLI's exactly.
 3. **Leave the project alone.**
-   All state lives in `.rayfin-local/`, which carries its own `.gitignore`.
+   All state lives in `.rayfin-local/` (or the folder given with `--state-dir`), which carries its own `.gitignore` when git could see it.
    Local settings reach Vite through the process environment rather than `.env` files.
    The only files written outside `.rayfin-local/` are build outputs the Rayfin CLI writes too: the app's build folder and the functions' `runtimemetadata.json`.
 4. **Local and safe by default.**

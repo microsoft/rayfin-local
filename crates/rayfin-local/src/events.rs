@@ -296,6 +296,7 @@ pub enum WarningCode {
     ConnectorUnsupported,
     FunctionsBuildFailed,
     AzureSignIn,
+    ServeLockUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

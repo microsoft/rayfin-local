@@ -45,8 +45,8 @@ pub enum SecretCommand {
     },
 }
 
-pub fn run(dir: &Path, command: SecretCommand) -> anyhow::Result<ExitCode> {
-    let project = Project::discover(dir)?;
+pub fn run(at: &super::Location, command: SecretCommand) -> anyhow::Result<ExitCode> {
+    let project = at.discover()?;
     let state = LocalState::load_or_create(&project)?;
     match command {
         SecretCommand::Set { name, value } => {
@@ -467,7 +467,7 @@ mod tests {
         let root = dir.path();
         let set = |name: &str, value: &str| {
             run(
-                root,
+                &crate::commands::Location::at(root),
                 SecretCommand::Set {
                     name: name.to_owned(),
                     value: Some(value.to_owned()),
@@ -478,7 +478,11 @@ mod tests {
         // Saved with a warning.
         set("UNDECLARED_KEY", "other").unwrap();
         assert!(set("API_KEY", "").is_err());
-        run(root, SecretCommand::List { json: false }).unwrap();
+        run(
+            &crate::commands::Location::at(root),
+            SecretCommand::List { json: false },
+        )
+        .unwrap();
 
         let project = Project::discover(root).unwrap();
         let state = LocalState::load_or_create(&project).unwrap();
@@ -526,7 +530,7 @@ mod tests {
 
         let delete = |name: &str| {
             run(
-                root,
+                &crate::commands::Location::at(root),
                 SecretCommand::Delete {
                     name: name.to_owned(),
                 },

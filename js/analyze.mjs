@@ -11,7 +11,9 @@
 //   storageDir    optional; the `@blob` sources, default <dataDir>/../storage
 //   tsconfigPath  rayfin/tsconfig.json, or null to compile with built-in defaults
 //   outDir        absolute folder for the compiled JavaScript; the only place this helper writes
-//                 (besides the --output file). It is emptied first.
+//                 (besides the --output file). It is emptied first. Inside the project it must
+//                 be under stateDir.
+//   stateDir      optional; rayfin-local's state folder (--state-dir), default <projectRoot>/.rayfin-local
 //   dialect       "mssql" | "postgresql"
 //   storage       whether to analyze the storage folders too
 //   verbose       optional; echo the analyzer's log to stderr. Without it console.log/info/debug
@@ -30,7 +32,7 @@
 // Connectors mode (`mode: "connectors"`): the entity classes of Category A connectors
 // (`rayfin/connectors/<name>/*.ts`), analyzed the way `rayfin up connector apply` does (CLI 1.36.2,
 // services/connector-generator.js): ConnectorSchemaAnalyzer, then ConnectorConfigGenerator.
-//   Input: projectRoot, tsconfigPath (the project's rayfin/tsconfig.json, or null), outDir,
+//   Input: projectRoot, tsconfigPath (the project's rayfin/tsconfig.json, or null), outDir, stateDir,
 //   connectors ([{name, dir, dialect}]: dialect is the connector type's analyzer dialect, `mssql`,
 //   `fabric-warehouse` or `fabric-sqlanalytics`), verbose.
 //   Result: coreVersion, typescriptVersion, featureFlags, connectors ([{name, dialect, entities,
@@ -92,6 +94,7 @@ async function analyze(input) {
   const dataDir = path.resolve(projectRoot, required(input, 'dataDir'));
   const storageDir = path.resolve(projectRoot, input.storageDir ?? path.join(dataDir, '..', 'storage'));
   const outDir = path.resolve(required(input, 'outDir'));
+  const stateDir = stateFolder(input, projectRoot);
   const dialect = required(input, 'dialect');
   const tsconfigPath = input.tsconfigPath ? path.resolve(projectRoot, input.tsconfigPath) : null;
   const log = input.verbose ? (message = '') => process.stderr.write(`${message}\n`) : () => {};
@@ -145,6 +148,7 @@ async function analyze(input) {
       projectRoot,
       tsconfigPath,
       outDir,
+      stateDir,
       entryDirs: [...(packageEntries ? [] : [dataDir]), ...(storageExists ? [storageDir] : [])],
       diagnostics,
     });
@@ -228,6 +232,7 @@ async function analyze(input) {
 async function analyzeConnectors(input) {
   const projectRoot = path.resolve(required(input, 'projectRoot'));
   const outDir = path.resolve(required(input, 'outDir'));
+  const stateDir = stateFolder(input, projectRoot);
   const tsconfigPath = input.tsconfigPath ? path.resolve(projectRoot, input.tsconfigPath) : null;
   const log = input.verbose ? (message = '') => process.stderr.write(`${message}\n`) : () => {};
   const diagnostics = [];
@@ -255,6 +260,7 @@ async function analyzeConnectors(input) {
     projectRoot,
     tsconfigPath,
     outDir,
+    stateDir,
     entryDirs: existing.map((connector) => connector.dir),
     diagnostics,
   });
@@ -333,6 +339,11 @@ function rel(root, file) {
 function isInside(dir, file) {
   const relative = path.relative(dir, file);
   return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/** rayfin-local's state folder: `stateDir`, or `<projectRoot>/.rayfin-local`. */
+function stateFolder(input, projectRoot) {
+  return path.resolve(projectRoot, input.stateDir ?? '.rayfin-local');
 }
 
 /** Whether `a` and `b` are the same folder (on Windows, `path.relative` ignores letter case). */
@@ -511,7 +522,7 @@ function sourceOf(file) {
  * folder, the compiled `.js` of the folder's top-level modules (the CLI imports
  * `.temp/compiled/data/*.js`), sorted.
  */
-function compile(ts, { projectRoot, tsconfigPath, outDir, entryDirs, diagnostics }) {
+function compile(ts, { projectRoot, tsconfigPath, outDir, stateDir, entryDirs, diagnostics }) {
   // Without a tsconfig, the rayfin folder of the first folder compiled.
   const configDir = tsconfigPath
     ? path.dirname(tsconfigPath)
@@ -580,11 +591,11 @@ function compile(ts, { projectRoot, tsconfigPath, outDir, entryDirs, diagnostics
     samePath(outDir, path.parse(outDir).root) ||
     samePath(outDir, projectRoot) ||
     isInside(outDir, projectRoot) ||
-    (isInside(projectRoot, outDir) && !isInside(path.join(projectRoot, '.rayfin-local'), outDir))
+    (isInside(projectRoot, outDir) && !isInside(stateDir, outDir))
   ) {
     throw new Error(
       `analyze.mjs: refusing to use ${outDir} as the output folder; inside the project it must be ` +
-        `under .rayfin-local/.`,
+        `under the state folder ${stateDir}.`,
     );
   }
   for (const file of included) {

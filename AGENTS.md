@@ -76,7 +76,7 @@ Never modify files in it, except generated artifacts that `rayfin dev` would als
 - **Errors are actionable:** say what failed and what to do (for example, "run `az login`").
 - **Privacy:** never log access tokens, refresh tokens, passwords, secrets or Entra tokens.
   Keep identity claims (email, oid) out of info-level logs.
-- **Local state:** everything rayfin-local writes goes under `<project>/.rayfin-local/`.
+- **Local state:** everything rayfin-local writes goes under the state folder: `<project>/.rayfin-local/`, or `--state-dir`.
   That folder has its own `.gitignore` containing `*`.
 - **Tests:** focused tests for the behavior you add.
   Unit tests sit next to the code (`#[cfg(test)]`); integration tests go in `crates/<crate>/tests/`.

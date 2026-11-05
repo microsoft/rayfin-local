@@ -3,7 +3,6 @@
 
 use std::fmt::Display;
 use std::io::Write as _;
-use std::path::Path;
 use std::process::ExitCode;
 
 use rl_node::NodeRuntime;
@@ -12,13 +11,14 @@ use rl_tokens::{TokenBroker, TokenBrokerConfig};
 use serde::Serialize;
 use serde_json::json;
 
+use super::Location;
 use crate::integrations;
 use crate::ports::DEFAULT_API_PORT;
 use crate::ui::{Color, Painter};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 
-pub async fn run(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
+pub async fn run(at: &Location, json: bool) -> anyhow::Result<ExitCode> {
     let mut report = Report::new(json);
     let node = match NodeRuntime::discover().await {
         Ok(node) => {
@@ -36,7 +36,7 @@ pub async fn run(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
         }
     };
 
-    let project = match Project::discover(dir) {
+    let project = match at.discover() {
         Ok(project) => {
             report.check(
                 "project",
@@ -107,7 +107,7 @@ fn check_packages_and_state(report: &mut Report, project: &Project) -> Option<Lo
     match LocalState::load_or_create(project) {
         Ok(state) => {
             let message = format!("Local state in {}", state.dir().display());
-            report.record("state", Status::Ok, message, None);
+            report.check("state", Status::Ok, message, None);
             Some(state)
         }
         Err(err) => {

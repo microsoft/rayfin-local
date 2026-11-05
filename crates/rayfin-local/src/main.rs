@@ -1,6 +1,7 @@
 //! `rayfin-local`: run a Rayfin app and its whole backend on this machine.
 
 mod analysis;
+mod backup;
 mod commands;
 mod connectors;
 mod control;
@@ -46,6 +47,16 @@ struct Cli {
     #[arg(short = 'C', long = "project", global = true, value_name = "DIR")]
     project: Option<PathBuf>,
 
+    /// Where the project's local state lives: the database, stored files, signing keys,
+    /// state.json and local secrets (default: .rayfin-local in the project). Created when missing.
+    #[arg(
+        long = "state-dir",
+        global = true,
+        value_name = "DIR",
+        env = "RAYFIN_LOCAL_STATE_DIR"
+    )]
+    state_dir: Option<PathBuf>,
+
     /// Show detailed logs.
     #[arg(short, long, global = true)]
     verbose: bool,
@@ -58,7 +69,8 @@ struct Cli {
 enum Command {
     /// Start the app with a local backend.
     Serve(ServeArgs),
-    /// Delete the local state (.rayfin-local): database, users, keys and stored files.
+    /// Delete the local state (.rayfin-local, or --state-dir): database, users, keys, stored files
+    /// and local secrets.
     Reset {
         /// Do not ask for confirmation.
         #[arg(short, long)]
@@ -72,6 +84,29 @@ enum Command {
     },
     /// Print the app model and the SQLite schema derived from rayfin/data.
     Schema,
+    /// Copy the app's data (database with its users, and stored files) into a new folder, also
+    /// while serve runs. Sessions, signing keys, state.json and secrets are left out.
+    Backup {
+        /// The folder to create (must be new or empty, outside the state folder).
+        #[arg(value_name = "OUT")]
+        out: PathBuf,
+        /// Print the result as one JSON object.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace the app's data with a backup (not while serve runs); signs everyone out. Keeps the
+    /// signing keys, state.json and secrets.
+    Restore {
+        /// The backup folder.
+        #[arg(value_name = "FROM")]
+        from: PathBuf,
+        /// Do not ask for confirmation.
+        #[arg(short, long)]
+        yes: bool,
+        /// Print the result as one JSON object (needs --yes).
+        #[arg(long, requires = "yes")]
+        json: bool,
+    },
     /// List, add and delete the app's local users, and reset their passwords.
     #[command(subcommand)]
     Users(commands::users::UsersCommand),
@@ -236,20 +271,25 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     rl_node::init_process_supervision()?;
-    let dir = project_dir(cli.project.as_deref())?;
+    let at = commands::Location {
+        dir: project_dir(cli.project.as_deref())?,
+        state_dir: cli.state_dir.as_deref().map(absolute).transpose()?,
+    };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let result = runtime.block_on(async move {
         match cli.command {
-            Command::Serve(args) => {
-                commands::serve::run(&dir, args.into_options(cli.verbose)).await
+            Command::Serve(args) => commands::serve::run(&at, args.into_options(cli.verbose)).await,
+            Command::Reset { yes } => commands::reset::run(&at, yes),
+            Command::Doctor { json } => commands::doctor::run(&at, json).await,
+            Command::Schema => commands::schema::run(&at, cli.verbose).await,
+            Command::Backup { out, json } => commands::backup::run_backup(&at, &out, json),
+            Command::Restore { from, yes, json } => {
+                commands::backup::run_restore(&at, &from, yes, json)
             }
-            Command::Reset { yes } => commands::reset::run(&dir, yes),
-            Command::Doctor { json } => commands::doctor::run(&dir, json).await,
-            Command::Schema => commands::schema::run(&dir, cli.verbose).await,
-            Command::Users(command) => commands::users::run(&dir, command).await,
-            Command::Secret(command) => commands::secret::run(&dir, command),
+            Command::Users(command) => commands::users::run(&at, command).await,
+            Command::Secret(command) => commands::secret::run(&at, command),
             Command::Version { json } => Ok(commands::version::run(json)),
         }
     });
@@ -267,6 +307,12 @@ fn project_dir(project: Option<&Path>) -> anyhow::Result<PathBuf> {
         Some(dir) => cwd.join(dir),
         None => cwd,
     })
+}
+
+/// `path` relative to the current directory.
+fn absolute(path: &Path) -> anyhow::Result<PathBuf> {
+    std::path::absolute(path)
+        .map_err(|err| anyhow::anyhow!("Could not resolve {}: {err}", path.display()))
 }
 
 /// Logs go to stderr in the style of the status lines (see [`LogFormat`]): `info` for
