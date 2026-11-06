@@ -103,8 +103,8 @@ async function analyze(input) {
   installProjectResolution(projectRoot);
   const ts = (await import('typescript')).default;
   const core = await import('@microsoft/rayfin-core');
-  const coreSchema = await import('@microsoft/rayfin-core/schema');
-  const analysis = await import('@microsoft/rayfin-core/analysis');
+  const coreSchema = await coreModule('schema');
+  const analysis = await coreModule('analysis');
 
   if (!analysis.isDialectSupported(dialect)) {
     throw new Error(`Dialect '${dialect}' is not supported (use mssql or postgresql in rayfin.yml).`);
@@ -245,8 +245,8 @@ async function analyzeConnectors(input) {
   installProjectResolution(projectRoot);
   const ts = (await import('typescript')).default;
   const core = await import('@microsoft/rayfin-core');
-  const coreSchema = await import('@microsoft/rayfin-core/schema');
-  const analysis = await import('@microsoft/rayfin-core/analysis');
+  const coreSchema = await coreModule('schema');
+  const analysis = await coreModule('analysis');
   const coreVersion = packageVersion('@microsoft/rayfin-core', projectRoot);
   if (typeof analysis.ConnectorSchemaAnalyzer !== 'function' || typeof analysis.ConnectorConfigGenerator !== 'function') {
     throw new Error(
@@ -446,6 +446,23 @@ async function importedModules() {
     flushed = undefined;
   }
   return [...importedFiles];
+}
+
+/**
+ * `@microsoft/rayfin-core`'s `schema` or `analysis` module, which SDK 1.37 moved under
+ * `_internal/` (`@microsoft/rayfin-core/_internal/schema`) with the same exports. When neither
+ * loads, the error is the one for the 1.36 path.
+ */
+async function coreModule(name) {
+  try {
+    return await import(`@microsoft/rayfin-core/${name}`);
+  } catch (error) {
+    try {
+      return await import(`@microsoft/rayfin-core/_internal/${name}`);
+    } catch {
+      throw error;
+    }
+  }
 }
 
 /** The version of the installed package `name`, as the project resolves it. */

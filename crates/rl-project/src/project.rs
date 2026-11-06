@@ -156,6 +156,12 @@ impl Project {
         self.rayfin_dir().join("rayfin.yml")
     }
 
+    /// `<root>/rayfin/seed`: the rows and files the project declares for local development
+    /// (docs/seed-data.md).
+    pub fn seed_dir(&self) -> PathBuf {
+        self.rayfin_dir().join("seed")
+    }
+
     /// The parsed `rayfin.yml`.
     pub fn config(&self) -> &RayfinConfig {
         &self.config

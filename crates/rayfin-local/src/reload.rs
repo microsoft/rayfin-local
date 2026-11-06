@@ -2,10 +2,11 @@
 //!
 //! - **Entities and storage folders.** When the entity or storage sources change (or other files
 //!   they import, or their tsconfig), the app is analyzed again, the database brought up to date
-//!   and the data API switched to the new model; the storage service is rebuilt when its folders
-//!   change. The data build command (`services.data.buildCommand`) runs first, as when `serve`
-//!   starts, after changes to the sources of the data package (or of the workspace packages whose
-//!   build output it imports), to the data settings in `rayfin.yml`, and for a reload on request.
+//!   and the data API and the host's control API switched to the new model; the storage service
+//!   is rebuilt when its folders change. The data build command (`services.data.buildCommand`)
+//!   runs first, as when `serve` starts, after changes to the sources of the data package (or of
+//!   the workspace packages whose build output it imports), to the data settings in `rayfin.yml`,
+//!   and for a reload on request.
 //!   The data package's sources are followed from the moment `rayfin.yml` turns the data service
 //!   on, so that a failed build or analysis is tried again on the next save. A failed build or
 //!   analysis, or a change that would lose data (without `--force-schema`), leaves the previous
@@ -779,6 +780,8 @@ struct ModelReload {
     data_api: bool,
     /// The storage service was rebuilt: its folders changed.
     storage: bool,
+    /// The served model changed.
+    model: bool,
 }
 
 impl Reloader {
@@ -898,10 +901,12 @@ impl Reloader {
         // package built before it is analyzed, and so does a reload on request.
         let build = batch.build || everything || update.renew_data_api;
         let mut schema = None;
+        let mut new_model = false;
         if batch.model || build || batch.folder || everything || update.analyze {
             match self.reload_model(build, force, update.renew_data_api).await {
                 Ok(reloaded) => {
                     schema = reloaded.schema;
+                    new_model = reloaded.model;
                     if reloaded.data_api {
                         update.apply("data");
                     }
@@ -930,7 +935,9 @@ impl Reloader {
         {
             ui::error_event(&coded(ErrorCode::AnalysisFailed, events::no_details(), err));
         }
-        if !update.applied.is_empty() {
+        // New entities need no `ready` (the data API takes them in place), but the routes built
+        // with the previous model, such as the control API's seed data, must not keep it.
+        if !update.applied.is_empty() || new_model {
             self.rebuild_router();
         }
         let config = self.report(&update);
@@ -1113,6 +1120,7 @@ impl Reloader {
         };
         reloaded.schema = Some(events::emit_line(Event::Schema(schema)));
         let storage_changed = model.storage != self.live.model.storage;
+        reloaded.model = *model != *self.live.model;
         self.live.model = model;
         if storage_changed {
             match integrations::storage_router(&self.ctx()).await {

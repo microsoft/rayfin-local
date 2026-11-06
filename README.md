@@ -42,6 +42,7 @@ rayfin-local serve
 - [Secrets](#secrets)
 - [Local state and reset](#local-state-and-reset)
 - [Backup and restore](#backup-and-restore)
+- [Seed data](#seed-data)
 - [Schema changes](#schema-changes)
 - [Live reload](#live-reload)
 - [Configuration file](#configuration-file)
@@ -57,7 +58,7 @@ rayfin-local serve
 ## Why use it
 
 - **Start without Fabric.** Run a Rayfin app before you have a workspace, a capacity or a deployment.
-- **Disposable data.** Each project gets its own SQLite database; start over with `--reset`.
+- **Disposable data.** Each project gets its own SQLite database; start over with `--reset`, or from the project's [seed data](#seed-data) with `--reset --seed`.
 - **A fast loop.** Entity changes migrate the database while the app runs, `rayfin.yml` changes apply without a restart, functions rebuild and reload, and Vite hot-reloads the UI.
 - **Production code, unmodified.** Your app, the Rayfin SDK, your entity decorators and your functions run as they are; rayfin-local implements the backend side of the SDK's contract.
 - **Real cloud data where you want it.** Functions and connectors call real Azure DevOps, Azure AI, Fabric and Power BI APIs and query real Fabric SQL databases, warehouses and Lakehouse SQL endpoints with your own Azure sign-in.
@@ -215,6 +216,7 @@ rayfin-local serve --no-frontend           # only the backend, for your own dev 
 rayfin-local serve --no-frontend --open-sign-in  # ...and let your dev server's pages sign in automatically
 rayfin-local serve -C path/to/app          # a project other than the current directory
 rayfin-local serve --reset                 # start from an empty database
+rayfin-local serve --reset --seed          # start from the project's seed data (rayfin/seed)
 rayfin-local serve --json                  # for programs: JSON events on stdout, stops when stdin closes
 ```
 
@@ -392,6 +394,22 @@ Sessions, refresh tokens and sign-in codes are left out, as are the signing keys
 With `--json`, both print one JSON object: `{"ok":true,"command":"backup","stateDir","path","database","files","bytes","createdAt","formatVersion"}` (`restore` adds `"signedOutSessions"`), or `{"ok":false,"error":{"code","message"}}`.
 They exit with 0 when done, 1 when they fail or refuse, and 2 for bad arguments; [docs/embedding.md](docs/embedding.md#backup-and-restore) lists the codes.
 
+## Seed data
+
+A project can declare rows and files for local development in `rayfin/seed`, so that everyone who opens it starts from the same data:
+
+```text
+rayfin/seed/data/Todo.json                   [{"title": "Buy milk", "user_id": "$developer"}]
+rayfin/seed/data/Category.csv                a header row of field names, then a row per line
+rayfin/seed/storage/todo-attachments/a.pdf   a storage folder's files
+```
+
+- `$developer` and `$user:<username>` stand for a user's id, so rows can belong to whoever previews the app, or to test users, which are created as needed.
+- `rayfin-local serve --seed` replaces the local data with the seed data once the backend is up: every entity's rows and every stored file, in one go, and only when all of it is valid.
+- Programs that run rayfin-local load it, check it and export the local data as seed data through the control API.
+
+[docs/seed-data.md](docs/seed-data.md) describes the format.
+
 ## Schema changes
 
 Each time `serve` starts, and whenever an entity source changes while it runs (the files in `rayfin/data` and `rayfin/storage`, the files they import, and the tsconfig files), rayfin-local analyzes your entities and brings the SQLite tables up to date.
@@ -509,6 +527,7 @@ Every command takes these options:
 | `--open-sign-in` | Let pages another dev server or proxy serves sign in automatically: the backend's automatic sign-in answers any request from this machine on its own origin, and `developer` signs in as `developer@example.com`. Needs a loopback `--host`. Also `RAYFIN_LOCAL_OPEN_SIGN_IN=1`. See [Pages your own dev server serves](#pages-your-own-dev-server-serves). |
 | `--force-schema` | Apply schema changes that lose data. |
 | `--reset` | Start from an empty database: delete the database and stored files (keeps ports, keys and secrets). |
+| `--seed` | Replace the local data with the project's [seed data](#seed-data) once the backend is up. Users stay; with `--reset`, only the seed's are there. |
 | `--inspect[=PORT]` | Start the function host with the Node.js inspector, on port 9229 by default. |
 | `--open` | Open the app in the browser once it is ready. |
 | `--json` | For programs that run rayfin-local: events as JSON lines on stdout instead of the human output, and a graceful stop when stdin closes. [docs/embedding.md](docs/embedding.md) is the contract. |
@@ -575,6 +594,7 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
 
 - [Architecture](docs/architecture.md): how rayfin-local works, its design principles, crates and request flows.
 - [SQL connectors](docs/sql-connectors.md): Category A connectors locally, their contract, schema, database and identity.
+- [Seed data](docs/seed-data.md): the rows and files a project declares in `rayfin/seed` for local development.
 - [Differences from Fabric](docs/differences.md): what is supported, what differs and what is missing, per SDK surface.
 - [Embedding](docs/embedding.md): the contract for programs that run rayfin-local, such as Fabricator: `serve --json` events, error codes, exit codes and the control API.
 - [Development](docs/development.md): building, testing and releasing rayfin-local.

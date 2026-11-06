@@ -998,7 +998,7 @@ impl Limits {
 }
 
 /// Checks `fields` against the folder's declared fields.
-fn check_fields(
+pub(crate) fn check_fields(
     folder: &StorageFolder,
     fields: Option<Value>,
 ) -> Result<Map<String, Value>, ApiError> {

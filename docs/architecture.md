@@ -163,6 +163,7 @@ Two rules keep the feature crates independent of each other:
 It waits for edits to settle (500 ms), and handles one change at a time.
 
 - **Entity changes.** A watcher on `rayfin/data`, `rayfin/storage` and the files they import analyzes them again, migrates the database, and switches the data API to the new model without a restart.
+  A new model also swaps in a new backend router (`rl_server::RouterHandle`), without a new `ready`, so that the control API checks and loads seed data against it.
   When the storage folders change, the storage service is rebuilt.
   A data package's build command (`services.data.buildCommand`) runs first, as at start, when the package's sources or the data settings in `rayfin.yml` change, and on request; its sources are followed from the moment `rayfin.yml` turns the data service on, so a save after a failed build or analysis tries again.
   A failed analysis, or a change that would lose data, keeps the previous model and says why.
@@ -204,6 +205,7 @@ Programs such as Fabricator run `serve --json` as a child process; [embedding.md
   Its router is one of `commands::serve::Features::routers`, so it is built again, over the services that run then, each time live reload swaps in a new router.
   A guard layer answers only loopback peers that send no `Origin` and the token as a bearer token (compared as SHA-256 digests in constant time).
   The handlers use the services' own APIs: `rl-auth` for users, sessions and the sign-in identity, `rl-graphql`'s `admin` module for rows (formatted by the data API's SQL), and `rl-storage`'s `admin` module and `rl_storage::clear` for stored files.
+  The seed routes go through `seed.rs`, which reads and checks `rayfin/seed`, then writes every row (`rl_graphql::admin::replace_rows`) and stored file record (`rl_storage::admin::Replacement`) in one transaction, with the files' bytes copied before it and the replaced bytes deleted after it commits.
   `POST /reload` goes through `control::ReloadTrigger`, which `reload::ReloadHandle` implements; its failures answer with the code `errors::HostError::classify` gives them (`config-invalid`, `analysis-failed`), or `stopping` (`reload::Stopping`).
 
 ## Requests
@@ -464,7 +466,7 @@ rayfin-local is a development tool for one person, but it holds the keys to that
 - **SDK conformance**: the `sdk.rs` tests of `rl-auth`, `rl-graphql` and `rl-storage`, `rl-connectors`' `sdk_decode.rs` and `rl-functions`' `host.rs` drive rayfin-local with the real `@microsoft/rayfin-*` 1.36.2 packages from the fixture app, and skip when Node.js or the packages are missing.
 - **The host contract**: `crates/rayfin-local/tests/host_contract.rs` runs the built binary: `version --json`, fatal errors of `serve --json`, and a `serve --json` of the fixture app from its events to the end of stdin (it skips without the fixture's packages).
   `control_api.rs` drives the control API and automatic sign-in of the fixture app the same way.
-- **Live reload**: `crates/rayfin-local/tests/live_reload.rs` runs `serve --json` on a copy of the fixture app: `rayfin.yml` edits applied on the same ports, a data package built before its entities are analyzed again, `secret set` restarting the function host, Vite started again after it is killed, and the control API, its `POST /reload` and automatic sign-in across changes.
+- **Live reload**: `crates/rayfin-local/tests/live_reload.rs` runs `serve --json` on a copy of the fixture app: `rayfin.yml` edits applied on the same ports, a data package built before its entities are analyzed again, `secret set` restarting the function host, Vite started again after it is killed, and the control API, its `POST /reload` and automatic sign-in across changes, with seed data checked against the entities served now.
 - **End to end**: Playwright drives the fixture app in `tests/e2e` (sign-in popup, data, functions, storage, stale sessions) and, optionally, the explorer app.
 
 [development.md](development.md) has the commands.

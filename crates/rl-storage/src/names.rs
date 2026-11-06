@@ -51,6 +51,23 @@ pub(crate) fn check_prefix(prefix: &str) -> Result<(), ApiError> {
     }
 }
 
+/// Checks a whole object path, as [`logical_path`] would build it: `/`-separated segments under
+/// the file name rules, at most [`MAX_PATH_CHARS`] characters.
+pub(crate) fn check_path(path: &str) -> Result<(), String> {
+    if !path.split('/').all(segment_ok) {
+        return Err(format!(
+            "{path:?} isn't a valid file path: each name in it must be 1-{MAX_SEGMENT_CHARS} \
+             characters, not `.` or `..`, without `\\` or control characters."
+        ));
+    }
+    if path.chars().count() > MAX_PATH_CHARS {
+        return Err(format!(
+            "The file path is longer than {MAX_PATH_CHARS} characters."
+        ));
+    }
+    Ok(())
+}
+
 fn segment_ok(segment: &str) -> bool {
     let chars = segment.chars().count();
     (1..=MAX_SEGMENT_CHARS).contains(&chars)

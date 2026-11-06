@@ -10,6 +10,7 @@ mod events;
 mod integrations;
 mod ports;
 mod reload;
+mod seed;
 mod shutdown;
 mod tokens;
 mod ui;
@@ -164,6 +165,10 @@ struct ServeArgs {
     /// ports, publishable key, keys, secrets and caches in .rayfin-local).
     #[arg(long)]
     reset: bool,
+    /// Replace the local data with the project's seed data (rayfin/seed) once the backend is up:
+    /// every entity's rows and every stored file. Users stay; with --reset, only the seed's.
+    #[arg(long)]
+    seed: bool,
     /// Start the function host with the Node inspector (default port 9229).
     #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9229")]
     inspect: Option<u16>,
@@ -222,6 +227,7 @@ impl ServeArgs {
             tenant: self.tenant,
             force_schema: self.force_schema,
             reset: self.reset,
+            seed: self.seed,
             inspect: self.inspect,
             sign_in_as: self.sign_in_as,
             open_sign_in: self.open_sign_in,
