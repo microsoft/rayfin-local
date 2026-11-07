@@ -53,6 +53,15 @@ impl TokenSource for ReportingTokens {
             result
         })
     }
+
+    /// Not reported: the caller has a token, which a service turned down, and says what to do.
+    fn another_token<'a>(
+        &'a self,
+        scope: &'a str,
+        refused: &'a str,
+    ) -> BoxFuture<'a, Option<Result<AccessToken, TokenError>>> {
+        self.broker.another_token(scope, refused)
+    }
 }
 
 /// An `azure-sign-in` warning, the first time an audience (or another scope) fails in this run.

@@ -58,6 +58,17 @@ pub trait TokenSource: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<AccessToken, TokenError>> {
         self.token(scope)
     }
+
+    /// After a service turned `refused` down (HTTP 401), a token for `scope` from another
+    /// sign-in, to retry with once; `None` when there is no other sign-in to try. It may ask the
+    /// developer to sign in or consent. Sources with a single sign-in keep this default.
+    fn another_token<'a>(
+        &'a self,
+        _scope: &'a str,
+        _refused: &'a str,
+    ) -> BoxFuture<'a, Option<Result<AccessToken, TokenError>>> {
+        Box::pin(async { None })
+    }
 }
 
 /// The resources rayfin-local mints tokens for: the `AudienceType` members functions declare on

@@ -38,7 +38,8 @@ pub(crate) enum Prompt {
 /// Where tokens come from (`--token-source`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TokenMode {
-    /// The Azure CLI, then the Rayfin CLI's login.
+    /// The Azure CLI, then the Rayfin CLI's login; also the Rayfin CLI's login for a scope whose
+    /// Azure CLI token a service turned down.
     #[default]
     Auto,
     /// Only `az account get-access-token`.
@@ -124,6 +125,10 @@ pub struct DeveloperIdentity {
 /// are cached per scope and reused while they have more than 5 minutes left; concurrent requests
 /// for a scope share one fetch, and different scopes are fetched in parallel. A request for an
 /// audience's default scope gets its override's scope when one is configured.
+///
+/// In auto mode, when a service turns down a scope's token from the Azure CLI
+/// ([`TokenSource::another_token`]), the Rayfin CLI's sign-in gets one instead, and the scope's
+/// later tokens come from the Rayfin CLI first.
 #[derive(Clone)]
 pub struct TokenBroker {
     inner: Arc<Inner>,
@@ -143,11 +148,51 @@ struct Inner {
 /// The outcome of a fetch, once it is done.
 type Fetch = watch::Receiver<Option<Result<AccessToken, TokenError>>>;
 
+/// Where a token came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Provider {
+    AzureCli,
+    RayfinCli,
+}
+
+impl Provider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Provider::AzureCli => "az",
+            Provider::RayfinCli => "rayfin",
+        }
+    }
+}
+
+/// A fetched token and its provider.
+struct Fetched {
+    token: AccessToken,
+    provider: Provider,
+}
+
 #[derive(Default)]
 struct Slot {
     token: Option<AccessToken>,
+    /// Whether `token` came from the Rayfin CLI.
+    from_rayfin: bool,
     /// The fetch in progress, which concurrent requests for the scope wait for.
     inflight: Option<Fetch>,
+    /// The Rayfin CLI's sign-in in progress in place of a refused token, which the requests
+    /// whose token was refused too wait for.
+    replacing: Option<Fetch>,
+    /// A service turned down the Azure CLI's token and the Rayfin CLI's sign-in got one instead:
+    /// fetches ask the Rayfin CLI first.
+    rayfin_first: bool,
+    /// A replacement already had its chance to prompt; later ones only use the Rayfin CLI's
+    /// cached sign-in, so a developer who didn't finish signing in isn't asked on every request.
+    prompted: bool,
+}
+
+impl Slot {
+    fn store(&mut self, fetched: &Fetched) {
+        self.token = Some(fetched.token.clone());
+        self.from_rayfin = fetched.provider == Provider::RayfinCli;
+    }
 }
 
 impl TokenBroker {
@@ -259,13 +304,14 @@ impl TokenBroker {
             let inflight = Inflight {
                 inner: Arc::clone(&self.inner),
                 scope: scope.clone(),
+                replacement: false,
             };
             // A task of its own, so a fetch that is under way (maybe an interactive sign-in)
             // completes and is cached even when the request that started it is cancelled.
             tokio::spawn(async move {
                 let result = inflight.inner.fetch(&inflight.scope, Prompt::Allowed).await;
                 inflight.complete(result.as_ref().ok());
-                done.send_replace(Some(result));
+                done.send_replace(Some(result.map(|fetched| fetched.token)));
             });
         }
         wait(fetch, &scope).await
@@ -285,10 +331,73 @@ impl TokenBroker {
             return Ok(token);
         }
         let result = self.inner.fetch(&scope, Prompt::Never).await;
-        if let Ok(token) = &result {
-            lock(&self.inner.cache).entry(scope).or_default().token = Some(token.clone());
+        if let Ok(fetched) = &result {
+            lock(&self.inner.cache)
+                .entry(scope)
+                .or_default()
+                .store(fetched);
         }
-        result
+        result.map(|fetched| fetched.token)
+    }
+
+    /// [`TokenSource::another_token`]: in auto mode, the Rayfin CLI's sign-in in place of a
+    /// token a service turned down. The first time, it may open a browser window to sign in or
+    /// consent; after that it only uses the CLI's cached sign-in. Concurrent requests share one
+    /// sign-in, which completes and is cached even when they are cancelled.
+    async fn another(
+        &self,
+        requested: &str,
+        refused: &str,
+    ) -> Option<Result<AccessToken, TokenError>> {
+        let (scope, audience) = self.inner.resolve(requested_scope(requested).ok()?);
+        if self.inner.mode != TokenMode::Auto
+            || self.inner.rayfin.is_none()
+            || audience.is_some_and(|audience| self.inner.env_tokens.contains_key(&audience))
+        {
+            return None;
+        }
+        let (fetch, start) = {
+            let mut cache = lock(&self.inner.cache);
+            let slot = cache.entry(scope.clone()).or_default();
+            if let Some(token) = &slot.token {
+                if token.token != refused && is_fresh(token) {
+                    // Another request already replaced it.
+                    return Some(Ok(token.clone()));
+                }
+                if token.token == refused && slot.from_rayfin {
+                    return None;
+                }
+            }
+            match &slot.replacing {
+                Some(fetch) => (fetch.clone(), None),
+                None => {
+                    let (done, fetch) = watch::channel(None);
+                    slot.replacing = Some(fetch.clone());
+                    let prompt = if std::mem::replace(&mut slot.prompted, true) {
+                        Prompt::Never
+                    } else {
+                        Prompt::Allowed
+                    };
+                    (fetch, Some((done, prompt)))
+                }
+            }
+        };
+        if let Some((done, prompt)) = start {
+            let replacement = Inflight {
+                inner: Arc::clone(&self.inner),
+                scope: scope.clone(),
+                replacement: true,
+            };
+            tokio::spawn(async move {
+                let result = replacement.inner.replace(&replacement.scope, prompt).await;
+                replacement.complete(result.as_ref().ok());
+                done.send_replace(Some(result.map(|fetched| fetched.token)));
+            });
+        }
+        match wait(fetch, &scope).await {
+            Ok(token) if token.token == refused => None,
+            result => Some(result),
+        }
     }
 }
 
@@ -302,6 +411,14 @@ impl TokenSource for TokenBroker {
         scope: &'a str,
     ) -> BoxFuture<'a, Result<AccessToken, TokenError>> {
         Box::pin(self.get_silently(scope))
+    }
+
+    fn another_token<'a>(
+        &'a self,
+        scope: &'a str,
+        refused: &'a str,
+    ) -> BoxFuture<'a, Option<Result<AccessToken, TokenError>>> {
+        Box::pin(self.another(scope, refused))
     }
 }
 
@@ -364,16 +481,39 @@ impl Inner {
             .filter(is_fresh)
     }
 
-    async fn fetch(&self, scope: &str, prompt: Prompt) -> Result<AccessToken, TokenError> {
+    fn rayfin_first(&self, scope: &str) -> bool {
+        lock(&self.cache)
+            .get(scope)
+            .is_some_and(|slot| slot.rayfin_first)
+    }
+
+    async fn fetch(&self, scope: &str, prompt: Prompt) -> Result<Fetched, TokenError> {
         let tenant = self.tenant.as_deref();
         tracing::debug!(scope, mode = %self.mode, tenant, ?prompt, "fetching a token");
         let (provider, result) = match self.mode {
-            TokenMode::Az => ("az", self.az.token(scope, tenant).await),
-            TokenMode::Rayfin => ("rayfin", self.rayfin_token(scope, prompt).await),
+            TokenMode::Az => (Provider::AzureCli, self.az.token(scope, tenant).await),
+            TokenMode::Rayfin => (Provider::RayfinCli, self.rayfin_token(scope, prompt).await),
+            TokenMode::Auto if self.rayfin_first(scope) => {
+                match self.rayfin_token(scope, prompt).await {
+                    Ok(token) => (Provider::RayfinCli, Ok(token)),
+                    Err(rayfin_error) => {
+                        tracing::info!(
+                            "the Rayfin CLI's login could not get a token for {scope} ({}); \
+                             trying the Azure CLI",
+                            rayfin_error.message
+                        );
+                        let result = self.az.token(scope, tenant).await;
+                        (
+                            Provider::AzureCli,
+                            result.map_err(|error| combine(scope, error, rayfin_error)),
+                        )
+                    }
+                }
+            }
             TokenMode::Auto => match self.az.token(scope, tenant).await {
-                Ok(token) => ("az", Ok(token)),
+                Ok(token) => (Provider::AzureCli, Ok(token)),
                 Err(az_error) => match &self.rayfin {
-                    None => ("az", Err(az_error)),
+                    None => (Provider::AzureCli, Err(az_error)),
                     Some(rayfin) => {
                         tracing::info!(
                             "the Azure CLI could not get a token for {scope} ({}); trying the \
@@ -382,26 +522,50 @@ impl Inner {
                         );
                         let result = rayfin.token(scope, tenant, prompt).await;
                         (
-                            "rayfin",
+                            Provider::RayfinCli,
                             result.map_err(|error| combine(scope, az_error, error)),
                         )
                     }
                 },
             },
         };
+        let provider_name = provider.as_str();
         match &result {
             Ok(token) => tracing::debug!(
                 scope,
-                provider,
+                provider = provider_name,
                 expires_in_s = token
                     .expires_at
                     .duration_since(SystemTime::now())
                     .map_or(0, |left| left.as_secs()),
                 "got a token"
             ),
-            Err(error) => tracing::debug!(scope, provider, error = %error.message, "no token"),
+            Err(error) => {
+                tracing::debug!(scope, provider = provider_name, error = %error.message, "no token")
+            }
         }
-        result
+        result.map(|token| Fetched { token, provider })
+    }
+
+    /// The Rayfin CLI's token for `scope`, in place of one a service turned down (auto mode).
+    async fn replace(&self, scope: &str, prompt: Prompt) -> Result<Fetched, TokenError> {
+        let how = match prompt {
+            Prompt::Allowed => {
+                "sign-in instead, which may open a browser window to sign in or consent"
+            }
+            Prompt::Never => "cached sign-in instead",
+        };
+        tracing::info!(
+            "the developer's token for {scope} was turned down; trying the Rayfin CLI's {how}"
+        );
+        let result = self.rayfin_token(scope, prompt).await;
+        if let Err(error) = &result {
+            tracing::debug!(scope, error = %error.message, "the Rayfin CLI's sign-in got no token");
+        }
+        result.map(|token| Fetched {
+            token,
+            provider: Provider::RayfinCli,
+        })
     }
 
     async fn rayfin_token(&self, scope: &str, prompt: Prompt) -> Result<AccessToken, TokenError> {
@@ -421,19 +585,22 @@ impl Inner {
     }
 }
 
-/// Ends a fetch: caches its token and clears the slot's in-flight marker, also when the fetch
-/// panics (otherwise the scope would wait on a fetch that never finishes).
+/// Ends a fetch or a replacement: caches its token and clears the slot's in-flight marker, also
+/// when it panics (otherwise the scope would wait on one that never finishes).
 struct Inflight {
     inner: Arc<Inner>,
     scope: String,
+    /// A replacement for a refused token ([`Slot::replacing`]), rather than a fetch.
+    replacement: bool,
 }
 
 impl Inflight {
-    fn complete(self, token: Option<&AccessToken>) {
-        if let Some(token) = token
+    fn complete(self, fetched: Option<&Fetched>) {
+        if let Some(fetched) = fetched
             && let Some(slot) = lock(&self.inner.cache).get_mut(&self.scope)
         {
-            slot.token = Some(token.clone());
+            slot.store(fetched);
+            slot.rayfin_first |= self.replacement;
         }
     }
 }
@@ -441,7 +608,11 @@ impl Inflight {
 impl Drop for Inflight {
     fn drop(&mut self) {
         if let Some(slot) = lock(&self.inner.cache).get_mut(&self.scope) {
-            slot.inflight = None;
+            if self.replacement {
+                slot.replacing = None;
+            } else {
+                slot.inflight = None;
+            }
         }
     }
 }

@@ -206,12 +206,25 @@ pub struct MockPowerBi {
 
 impl MockPowerBi {
     pub async fn start() -> Self {
+        Self::refusing(&[]).await
+    }
+
+    /// Like [`MockPowerBi::start`], but it turns `tokens` down (401) on every endpoint, as Power
+    /// BI does a token from another tenant, or from an app the user hasn't consented to.
+    pub async fn refusing(tokens: &[&str]) -> Self {
+        let refused: Arc<Vec<String>> = Arc::new(
+            tokens
+                .iter()
+                .map(|token| format!("Bearer {token}"))
+                .collect(),
+        );
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
         let az_authorization = format!("Bearer {}", az_token());
         let app = Router::new().fallback(move |request: Request| {
             let recorded = recorded.clone();
             let az_authorization = az_authorization.clone();
+            let refused = refused.clone();
             async move {
                 let (parts, body) = request.into_parts();
                 let body = body.collect().await.unwrap().to_bytes();
@@ -222,17 +235,27 @@ impl MockPowerBi {
                     .unwrap_or_default()
                     .to_owned();
                 let path = parts.uri.path().to_owned();
-                let from_az = parts
+                let authorization = parts
                     .headers
                     .get("authorization")
-                    .is_some_and(|v| v == &az_authorization);
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned();
+                let from_az = authorization == az_authorization;
                 recorded.lock().unwrap().push(Recorded {
                     method: parts.method.to_string(),
                     path: path.clone(),
                     headers: parts.headers,
                     body,
                 });
-                if path.ends_with("/executeQueries") {
+                if refused.contains(&authorization) {
+                    let request_id = if path.ends_with("/executeQueries") {
+                        "pbi-json-401"
+                    } else {
+                        "pbi-401"
+                    };
+                    json_error(StatusCode::UNAUTHORIZED, UNAUTHORIZED_BODY, request_id)
+                } else if path.ends_with("/executeQueries") {
                     canned_json_answer(&query)
                 } else if from_az {
                     json_error(StatusCode::UNAUTHORIZED, UNAUTHORIZED_BODY, "pbi-401")
@@ -287,38 +310,70 @@ impl CallerResolver for FakeCallers {
 }
 
 /// Answers every scope with the same token, or the same error; records the scopes asked for.
+/// Asked for another token, it records the refused one and answers `another`.
 pub struct FakeTokens {
     answer: Result<String, TokenError>,
+    another: Option<Result<String, TokenError>>,
     pub scopes: Mutex<Vec<String>>,
+    pub refused: Mutex<Vec<String>>,
 }
 
 impl FakeTokens {
     pub fn with_token(token: &str) -> Arc<Self> {
-        Arc::new(Self {
-            answer: Ok(token.to_owned()),
-            scopes: Mutex::new(Vec::new()),
-        })
+        Self::new(Ok(token.to_owned()), None)
     }
 
     pub fn failing(message: &str, hint: &str) -> Arc<Self> {
+        Self::new(Err(token_error(message, hint)), None)
+    }
+
+    /// `token`, and `another` once a token is refused.
+    pub fn with_another(token: &str, another: Result<&str, TokenError>) -> Arc<Self> {
+        Self::new(Ok(token.to_owned()), Some(another.map(str::to_owned)))
+    }
+
+    fn new(
+        answer: Result<String, TokenError>,
+        another: Option<Result<String, TokenError>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            answer: Err(TokenError {
-                scope: String::new(),
-                message: message.to_owned(),
-                hint: Some(hint.to_owned()),
-            }),
+            answer,
+            another,
             scopes: Mutex::new(Vec::new()),
+            refused: Mutex::new(Vec::new()),
         })
+    }
+}
+
+pub fn token_error(message: &str, hint: &str) -> TokenError {
+    TokenError {
+        scope: String::new(),
+        message: message.to_owned(),
+        hint: Some(hint.to_owned()),
+    }
+}
+
+fn access_token(token: String) -> AccessToken {
+    AccessToken {
+        token,
+        expires_at: SystemTime::now() + Duration::from_secs(3600),
     }
 }
 
 impl TokenSource for FakeTokens {
     fn token<'a>(&'a self, scope: &'a str) -> BoxFuture<'a, Result<AccessToken, TokenError>> {
         self.scopes.lock().unwrap().push(scope.to_owned());
-        let answer = self.answer.clone().map(|token| AccessToken {
-            token,
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        });
+        let answer = self.answer.clone().map(access_token);
+        Box::pin(async move { answer })
+    }
+
+    fn another_token<'a>(
+        &'a self,
+        _scope: &'a str,
+        refused: &'a str,
+    ) -> BoxFuture<'a, Option<Result<AccessToken, TokenError>>> {
+        self.refused.lock().unwrap().push(refused.to_owned());
+        let answer = self.another.clone().map(|answer| answer.map(access_token));
         Box::pin(async move { answer })
     }
 }

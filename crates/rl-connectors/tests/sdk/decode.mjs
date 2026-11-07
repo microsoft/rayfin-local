@@ -142,12 +142,7 @@ for (const [query, expected] of arrowCases) {
 }
 
 // Power BI failures: identical, Power BI's request id included.
-for (const query of [
-  'EVALUATE BadRequest',
-  'EVALUATE Unauthorized',
-  'EVALUATE Forbidden',
-  'EVALUATE Missing',
-]) {
+for (const query of ['EVALUATE BadRequest', 'EVALUATE Forbidden', 'EVALUATE Missing']) {
   await check(`${query} (api)`, async () => {
     const [ours, theirs] = await both(query);
     assert.equal(ours.status, 'error');
@@ -156,6 +151,17 @@ for (const query of [
     assert.deepEqual(ours, theirs);
   });
 }
+
+// A 401: identical but for the hint, which says how to consent to the Rayfin CLI querying
+// Power BI rather than to check access.
+await check('EVALUATE Unauthorized (api)', async () => {
+  const [ours, theirs] = await both('EVALUATE Unauthorized');
+  assert.equal(ours.status, 'error');
+  assert.match(ours.error.recoveryHint, /^Power BI turned down your sign-in\./);
+  assert.match(ours.error.recoveryHint, /`npx rayfin connector invoke sales executeQuery /);
+  const withoutHint = ({ error: { recoveryHint, ...error }, ...result }) => ({ ...result, error });
+  assert.deepEqual(withoutHint(ours), withoutHint(theirs));
+});
 
 // No request id from Power BI: each path reports the id it sent.
 await check('EVALUATE Throttled (api, 429)', async () => {

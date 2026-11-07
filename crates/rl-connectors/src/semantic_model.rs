@@ -4,7 +4,10 @@
 //! `@microsoft/rayfin-connector-fabric-semanticmodel` 1.36.2) moved behind the route: the same
 //! request to Power BI, and its failures reported in the same `FabricSemanticModelTabularResponse`
 //! envelope, so `toQueryResult` turns them into the same `QueryError`s. Tokens `executeDaxQueries`
-//! refuses for want of a dataset scope (the Azure CLI's) are served by [`json_fallback`].
+//! refuses for want of a dataset scope (the Azure CLI's) are served by [`json_fallback`]. When
+//! Power BI turns the developer's token down (401), the query is retried once with another
+//! sign-in's ([`TokenSource::another_token`]): the Rayfin CLI's, which may ask the developer to
+//! consent to it querying Power BI.
 
 mod json_fallback;
 
@@ -23,7 +26,7 @@ use axum::{
 use base64::Engine as _;
 use futures_util::TryStreamExt as _;
 use reqwest::Url;
-use rl_tokens::TokenSource;
+use rl_tokens::{TokenError, TokenSource};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -49,6 +52,10 @@ const EMPTY_ACCESS_HINT: &str = "The request was rejected before Power BI evalua
      model permissions.";
 /// The delegated scopes `executeDaxQueries` requires.
 const DATASET_SCOPES: [&str; 2] = ["Dataset.Read.All", "Dataset.ReadWrite.All"];
+/// The Rayfin CLI's Entra app (`DEFAULT_RAYFIN_CLIENT_ID` in `@microsoft/rayfin-cli/auth`).
+const RAYFIN_CLI_APP_ID: &str = "2f844663-8e82-4a34-8b65-09d9d14b0fb6";
+/// The input file for a `rayfin connector invoke` that only needs to sign in.
+const PROBE_INPUT: &str = r#"{"query": "EVALUATE {1}"}"#;
 
 /// Power BI's REST API, called with the developer's token.
 pub(crate) struct PowerBi {
@@ -189,8 +196,24 @@ impl QueryFailure {
     }
 }
 
+/// What came of sending a query with one token.
+enum Attempt {
+    /// The answer for the app: Power BI's Arrow stream, the JSON fallback's envelope, or a failed
+    /// envelope.
+    Answered(Response),
+    /// Power BI turned the token down (401).
+    Refused(Refusal),
+}
+
+/// Power BI's 401: its request id and body.
+struct Refusal {
+    request_id: String,
+    body: String,
+}
+
 /// Runs `query` and answers with Power BI's Arrow body, the JSON fallback's envelope, or a failed
-/// envelope.
+/// envelope. When Power BI turns the developer's token down, it tries once more with another
+/// sign-in's.
 pub(crate) async fn execute(
     power_bi: &PowerBi,
     tokens: &dyn TokenSource,
@@ -199,9 +222,6 @@ pub(crate) async fn execute(
     query: &str,
     input: &Map<String, Value>,
 ) -> Response {
-    // Sent to Power BI, and the answer's id whenever Power BI never assigns one.
-    let client_request_id = Uuid::new_v4().to_string();
-
     let token = match tokens.token(&power_bi.scope).await {
         Ok(token) => token.token,
         Err(error) => {
@@ -214,14 +234,59 @@ pub(crate) async fn execute(
                 ),
             );
             failure.recovery_hint = error.hint;
-            return failed(&client_request_id, failure);
+            return failed(&Uuid::new_v4().to_string(), failure);
         }
     };
-    let without_dataset_scope = lacks_dataset_scope(&token);
+    let refusal = match attempt(power_bi, connector, target, query, input, &token).await {
+        Attempt::Answered(response) => return response,
+        Attempt::Refused(refusal) => refusal,
+    };
+    tracing::info!(
+        connector,
+        request_id = %refusal.request_id,
+        "Power BI turned down the developer's token"
+    );
+    let (refusal, other_sign_in) = match tokens.another_token(&power_bi.scope, &token).await {
+        None => (refusal, None),
+        Some(Err(error)) => (refusal, Some(error)),
+        Some(Ok(other)) => {
+            match attempt(power_bi, connector, target, query, input, &other.token).await {
+                Attempt::Answered(response) => return response,
+                Attempt::Refused(again) => (again, None),
+            }
+        }
+    };
+    tracing::warn!(
+        connector,
+        status = 401,
+        request_id = %refusal.request_id,
+        "Power BI refused the query: it turned down the developer's sign-in. If the account can \
+         query the model, consent once to the Rayfin CLI querying Power BI: run `npx rayfin \
+         connector invoke {connector} executeQuery --file <query>.json` in a terminal in the \
+         project folder and finish signing in"
+    );
+    let mut failure = QueryFailure::api(refusal.body, StatusCode::UNAUTHORIZED);
+    failure.recovery_hint = Some(refused_hint(connector, other_sign_in.as_ref()));
+    failed(&refusal.request_id, failure)
+}
+
+/// Sends the query with `token`: to `executeDaxQueries`, or to the JSON fallback for a token
+/// without a dataset scope.
+async fn attempt(
+    power_bi: &PowerBi,
+    connector: &str,
+    target: &Target<'_>,
+    query: &str,
+    input: &Map<String, Value>,
+    token: &str,
+) -> Attempt {
+    let without_dataset_scope = lacks_dataset_scope(token);
     if without_dataset_scope && power_bi.arrow_needs_dataset_scope.load(Ordering::Relaxed) {
-        return json_fallback::execute(power_bi, connector, target, query, input, &token).await;
+        return json_fallback::execute(power_bi, connector, target, query, input, token).await;
     }
 
+    // Sent to Power BI, and the answer's id whenever Power BI never assigns one.
+    let client_request_id = Uuid::new_v4().to_string();
     let url = power_bi.dataset_url(target, "executeDaxQueries");
     let timeout = total_timeout(input);
     let body = dax_request_body(query, input);
@@ -229,7 +294,7 @@ pub(crate) async fn execute(
     let sent = power_bi
         .post(
             &url,
-            &token,
+            token,
             ACCEPT_ARROW_OR_JSON,
             &client_request_id,
             timeout,
@@ -240,7 +305,7 @@ pub(crate) async fn execute(
         Ok(response) => response,
         Err(failure) => {
             tracing::warn!(connector, request_id = %client_request_id, "{}", failure.message);
-            return failed(&client_request_id, failure);
+            return Attempt::Answered(failed(&client_request_id, failure));
         }
     };
     let status = response.status();
@@ -254,7 +319,7 @@ pub(crate) async fn execute(
     );
 
     if status.is_success() {
-        return stream_arrow(response, status, connector, &request_id);
+        return Attempt::Answered(stream_arrow(response, status, connector, &request_id));
     }
     if status == StatusCode::UNAUTHORIZED && without_dataset_scope {
         if !power_bi
@@ -262,21 +327,48 @@ pub(crate) async fn execute(
             .swap(true, Ordering::Relaxed)
         {
             tracing::info!(
-                "Power BI refuses executeDaxQueries (Arrow) to developer tokens without the \
-                 Dataset.Read.All scope, such as the Azure CLI's; semantic-model queries use \
-                 executeQueries (JSON) instead"
+                "Power BI's executeDaxQueries (Arrow) needs a token with a dataset scope \
+                 (Dataset.Read.All), which the Azure CLI's tokens can't have; semantic-model \
+                 queries use executeQueries (JSON) instead. This is expected with the Azure CLI."
             );
         }
-        return json_fallback::execute(power_bi, connector, target, query, input, &token).await;
+        return json_fallback::execute(power_bi, connector, target, query, input, token).await;
     }
     let body = read_error_body(response).await;
+    if status == StatusCode::UNAUTHORIZED {
+        return Attempt::Refused(Refusal { request_id, body });
+    }
     tracing::warn!(
         connector,
         status = status.as_u16(),
         request_id = %request_id,
         "Power BI refused the query"
     );
-    failed(&request_id, QueryFailure::api(body, status))
+    Attempt::Answered(failed(&request_id, QueryFailure::api(body, status)))
+}
+
+/// The hint for a sign-in Power BI turned down (401). The Rayfin CLI can query Power BI for the
+/// developer only once they (or a tenant administrator) consent to it, which `rayfin login`
+/// doesn't ask for; `rayfin connector invoke` does, run in a terminal. `other_sign_in` says why
+/// the other sign-in got no token.
+fn refused_hint(connector: &str, other_sign_in: Option<&TokenError>) -> String {
+    let tried = other_sign_in
+        .map(|error| {
+            format!(
+                "rayfin-local tried your Rayfin CLI sign-in instead, which failed: {}. ",
+                error.message.trim_end_matches('.')
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{tried}Power BI turned down your sign-in. If you haven't yet, consent to the Rayfin CLI \
+         querying Power BI for you: in a terminal in the project folder, run `npx rayfin \
+         connector invoke {connector} executeQuery --file query.json` with {PROBE_INPUT} in \
+         query.json, and finish signing in in the browser it opens; then retry. A tenant \
+         administrator can consent for everyone instead (the Rayfin CLI app, {RAYFIN_CLI_APP_ID}, \
+         for Power BI Service). If that doesn't help, check that your account can query the \
+         model (Build permission) in the model's tenant."
+    )
 }
 
 /// Power BI's Arrow body, streamed back unchanged with its content type and request id.
