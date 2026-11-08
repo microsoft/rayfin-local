@@ -29,7 +29,7 @@ pub(super) async fn execute(
     query: &str,
     input: &Map<String, Value>,
     token: &str,
-) -> Response {
+) -> Attempt {
     let client_request_id = Uuid::new_v4().to_string();
     let url = power_bi.dataset_url(target, "executeQueries");
     let timeout = total_timeout(input);
@@ -52,7 +52,7 @@ pub(super) async fn execute(
         Ok(response) => response,
         Err(failure) => {
             tracing::warn!(connector, request_id = %client_request_id, "{}", failure.message);
-            return failed(&client_request_id, failure);
+            return Attempt::Answered(failed(&client_request_id, failure));
         }
     };
     let status = response.status();
@@ -68,7 +68,10 @@ pub(super) async fn execute(
     if !status.is_success() {
         let body = read_error_body(response).await;
         if let Some(query_error) = compile_error(&body) {
-            return succeeded(&request_id, Vec::new(), Some(query_error));
+            return Attempt::Answered(succeeded(&request_id, Vec::new(), Some(query_error)));
+        }
+        if status == StatusCode::UNAUTHORIZED {
+            return Attempt::Refused(Refusal { request_id, body });
         }
         tracing::warn!(
             connector,
@@ -76,13 +79,13 @@ pub(super) async fn execute(
             request_id = %request_id,
             "Power BI refused the query"
         );
-        return failed(&request_id, QueryFailure::api(body, status));
+        return Attempt::Answered(failed(&request_id, QueryFailure::api(body, status)));
     }
     let answer = match response.bytes().await {
         Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string()),
         Err(error) => Err(error.to_string()),
     };
-    match answer {
+    Attempt::Answered(match answer {
         Ok(answer) => {
             let (tables, query_error) = tables_of(answer, row_limit(input));
             succeeded(&request_id, tables, query_error)
@@ -91,7 +94,7 @@ pub(super) async fn execute(
             let message = format!("Failed to read Power BI's executeQueries answer: {problem}");
             failed(&request_id, QueryFailure::new("unknown", message))
         }
-    }
+    })
 }
 
 /// `results[0]` of an `executeQueries` answer as the envelope's `tables` and `queryError`.

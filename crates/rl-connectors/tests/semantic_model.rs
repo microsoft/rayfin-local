@@ -154,7 +154,8 @@ fn failed_envelope(
 async fn power_bi_failures_answer_the_direct_paths_envelope() {
     let power_bi = MockPowerBi::start().await;
     let app = app(&power_bi.base_url);
-    let access_hint = "Sign in again, and confirm you have at least Viewer access";
+    let refused_hint = "Power BI turned down your sign-in. If you haven't yet, consent to the \
+                        Rayfin CLI querying Power BI for you";
     let empty_body_hint = "The request was rejected before Power BI evaluated model access";
 
     let cases = [
@@ -173,7 +174,7 @@ async fn power_bi_failures_answer_the_direct_paths_envelope() {
                 "message": UNAUTHORIZED_BODY, "category": "api", "code": "401",
                 "details": UNAUTHORIZED_BODY,
             }),
-            Some(access_hint),
+            Some(refused_hint),
             "pbi-401",
         ),
         (
@@ -308,6 +309,107 @@ async fn tokens_without_a_dataset_scope_fall_back_to_execute_queries() {
         format!("Bearer {az_token}")
     );
     assert_eq!(requests[1].header("accept"), "application/json");
+}
+
+#[tokio::test]
+async fn a_token_power_bi_turns_down_is_retried_with_another_sign_ins() {
+    let az_token = az_token();
+    let power_bi = MockPowerBi::refusing(&[&az_token]).await;
+    let tokens = FakeTokens::with_another(&az_token, Ok(DEV_TOKEN));
+    let app = router(
+        config(&power_bi.base_url),
+        Arc::new(FakeCallers),
+        tokens.clone(),
+    );
+
+    let input = json!({ "query": ROW_QUERY });
+    let (status, headers, body) = post(
+        &app,
+        "/connector-invoke/sales",
+        Some(SESSION),
+        execute_query(input),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], ROW);
+    assert_eq!(headers["requestid"], "pbi-row");
+
+    assert_eq!(
+        *tokens.refused.lock().unwrap(),
+        std::slice::from_ref(&az_token)
+    );
+    let requests = power_bi.requests();
+    let sent: Vec<(&str, &str)> = requests
+        .iter()
+        .map(|r| {
+            (
+                r.path.rsplit('/').next().unwrap(),
+                r.header("authorization"),
+            )
+        })
+        .collect();
+    let (az, dev) = (format!("Bearer {az_token}"), format!("Bearer {DEV_TOKEN}"));
+    assert_eq!(
+        sent,
+        [
+            ("executeDaxQueries", az.as_str()),
+            ("executeQueries", az.as_str()),
+            ("executeDaxQueries", dev.as_str()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_sign_in_power_bi_turns_down_says_how_to_consent() {
+    let az_token = az_token();
+    let power_bi = MockPowerBi::refusing(&[&az_token, "other-token"]).await;
+    let consent =
+        "AADSTS65001: The user or administrator has not consented to use the application.";
+    let cases = [
+        (FakeTokens::with_token(&az_token), "", "pbi-json-401"),
+        (
+            FakeTokens::with_another(&az_token, Err(token_error(consent, "Consent."))),
+            "rayfin-local tried your Rayfin CLI sign-in instead, which failed: AADSTS65001: The \
+             user or administrator has not consented to use the application. ",
+            "pbi-json-401",
+        ),
+        // Both sign-ins turned down: the answer is the last refusal.
+        (
+            FakeTokens::with_another(&az_token, Ok("other-token")),
+            "",
+            "pbi-401",
+        ),
+    ];
+    for (tokens, tried, expected_request_id) in cases {
+        let app = router(config(&power_bi.base_url), Arc::new(FakeCallers), tokens);
+        let input = json!({ "query": ROW_QUERY });
+        let (status, headers, body) = post(
+            &app,
+            "/connector-invoke/sales",
+            Some(SESSION),
+            execute_query(input),
+        )
+        .await;
+
+        let (error, request_id) = failed_envelope(status, &headers, &body);
+        assert_eq!(request_id, expected_request_id);
+        assert_eq!(error["code"], "401");
+        let hint = error["recoveryHint"].as_str().unwrap();
+        assert!(
+            hint.starts_with(&format!("{tried}Power BI turned down your sign-in.")),
+            "{hint}"
+        );
+        assert!(
+            hint.contains(
+                r#"run `npx rayfin connector invoke sales executeQuery --file query.json` with {"query": "EVALUATE {1}"} in query.json"#
+            ),
+            "{hint}"
+        );
+        assert!(
+            hint.contains("2f844663-8e82-4a34-8b65-09d9d14b0fb6"),
+            "{hint}"
+        );
+    }
 }
 
 #[tokio::test]

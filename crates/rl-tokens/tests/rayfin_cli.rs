@@ -85,6 +85,25 @@ impl Project {
         })
     }
 
+    /// A broker whose Azure CLI is signed in.
+    async fn broker_with_az(&self, mode: TokenMode, az: &FakeAz) -> TokenBroker {
+        TokenBroker::new(TokenBrokerConfig {
+            mode,
+            tenant: Some("contoso.onmicrosoft.com".into()),
+            rayfin: Some(self.rayfin().await),
+            az_program: Some(az.program("ok")),
+            ..TokenBrokerConfig::default()
+        })
+    }
+
+    /// The fake package's functions called, in order.
+    fn called(&self) -> Vec<String> {
+        self.calls()
+            .iter()
+            .map(|call| call["fn"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
     /// The fake package's calls, in order.
     fn calls(&self) -> Vec<Value> {
         std::fs::read_to_string(self.dir.path().join("rayfin-calls.jsonl"))
@@ -227,4 +246,113 @@ async fn auto_mode_reports_both_failures() {
         "{hint}"
     );
     assert!(hint.contains("npm i -D @microsoft/rayfin-cli"), "{hint}");
+}
+
+#[tokio::test]
+async fn a_refused_azure_cli_token_is_replaced_by_the_rayfin_clis() {
+    let az = FakeAz::new();
+    let project = Project::new(Some(AUTH_MODULE));
+    let broker = project.broker_with_az(TokenMode::Auto, &az).await;
+    let scope = Audience::PowerBi.default_scope();
+    let refused = broker.token(scope).await.unwrap();
+
+    // Requests whose token was refused share one sign-in, which may prompt.
+    let (first, second) = tokio::join!(
+        broker.another_token(scope, &refused.token),
+        broker.another_token(scope, &refused.token)
+    );
+    let other = first.unwrap().unwrap();
+    assert_eq!(other.token, format!("rayfin-token-for-{scope}"));
+    assert_eq!(second, Some(Ok(other.clone())));
+    assert_eq!(
+        project.called(),
+        ["ensureAuthenticated", "getAuthenticatedToken"]
+    );
+
+    assert_eq!(broker.token(scope).await.unwrap(), other);
+    assert_eq!(
+        broker.another_token(scope, &refused.token).await,
+        Some(Ok(other.clone()))
+    );
+    // The Rayfin CLI's own token has no other sign-in to try.
+    assert_eq!(broker.another_token(scope, &other.token).await, None);
+    assert_eq!(project.calls().len(), 2);
+    assert_eq!(az.calls().len(), 1);
+
+    let az_only = project.broker_with_az(TokenMode::Az, &az).await;
+    let token = az_only.token(scope).await.unwrap();
+    assert_eq!(az_only.another_token(scope, &token.token).await, None);
+}
+
+#[tokio::test]
+async fn a_scope_whose_azure_cli_token_was_refused_asks_the_rayfin_cli_first() {
+    let az = FakeAz::new();
+    // Tokens about to expire, so every request fetches one.
+    let project = Project::new(Some(&AUTH_MODULE.replace(
+        "expiresOnTimestamp: 1900000000000",
+        "expiresOnTimestamp: Date.now() + 60_000",
+    )));
+    let broker = project.broker_with_az(TokenMode::Auto, &az).await;
+    let scope = Audience::PowerBi.default_scope();
+    let refused = broker.token(scope).await.unwrap();
+    broker
+        .another_token(scope, &refused.token)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let token = broker.token(scope).await.unwrap();
+    assert_eq!(token.token, format!("rayfin-token-for-{scope}"));
+    assert_eq!(az.calls().len(), 1);
+    broker
+        .token(Audience::Fabric.default_scope())
+        .await
+        .unwrap();
+    assert_eq!(az.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn only_the_first_replacement_may_prompt() {
+    let az = FakeAz::new();
+    let project = Project::new(Some(&AUTH_MODULE.replace(
+        "record({ fn: 'getAuthenticatedToken', scopes, options });",
+        "record({ fn: 'getAuthenticatedToken', scopes, options });\n  \
+         throw new Error('the developer closed the sign-in window');",
+    )));
+    let broker = project.broker_with_az(TokenMode::Auto, &az).await;
+    let scope = Audience::PowerBi.default_scope();
+    let refused = broker.token(scope).await.unwrap();
+
+    let error = broker
+        .another_token(scope, &refused.token)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("the developer closed the sign-in window"),
+        "{}",
+        error.message
+    );
+    assert_eq!(broker.token(scope).await.unwrap(), refused);
+
+    let error = broker
+        .another_token(scope, &refused.token)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        error.message.contains("without a prompt"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        project.called(),
+        [
+            "ensureAuthenticated",
+            "getAuthenticatedToken",
+            "ensureAuthenticated"
+        ]
+    );
 }

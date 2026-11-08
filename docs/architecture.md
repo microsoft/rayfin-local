@@ -388,6 +388,7 @@ A missing token doesn't fail the invocation: reading that audience's token throw
 `rl-connectors` looks up the connector in `rayfin.yml` and checks the operation is declared, in the deployed route's order.
 For `fabric-semanticmodel`, it requires a signed-in caller, gets a Power BI token from the `TokenSource`, and sends the query to Power BI's `executeDaxQueries` the way the SDK's direct path does, streaming the Arrow answer back unchanged.
 Power BI refuses `executeDaxQueries` to tokens without a dataset scope (Azure CLI tokens), so those queries go to `executeQueries` and come back in the JSON envelope the SDK also accepts.
+When Power BI turns the token down altogether (401), the query is retried once with another sign-in's token (`TokenSource::another_token`, below); a 401 that remains has a hint that says how to consent to the Rayfin CLI querying Power BI.
 Failures come back in the envelope the SDK's normalizer reads, so the app sees the same `QueryError`s as on Fabric.
 
 SQL connectors (`fabric-sqldatabase`, `fabric-warehouse`, `fabric-sqlanalytics`) answer `/connectors/<name>/graphql` with the GraphQL API `rayfin up` would deploy for their entity classes:
@@ -419,6 +420,7 @@ Uploads and downloads go through signed URLs under `/.rayfin-local/storage/`, wh
 Tokens are cached per scope in memory and reused while they have more than 5 minutes left.
 Concurrent requests for a scope share one fetch, and different scopes are fetched in parallel.
 A request for an audience's default scope gets the audience's `[tokens.scopes]` override when there is one.
+In `auto` mode, `another_token` replaces a token a service turned down with the Rayfin CLI's: requests whose token was refused share one sign-in, the scope's later tokens come from the Rayfin CLI first, and only the first replacement may prompt (later ones use the CLI's cached sign-in), so a developer who doesn't finish signing in isn't asked again on every request.
 Failures carry a hint, such as running `az login` or switching the token source for a consent error.
 The broker also reports whose tokens these are, from a Power BI token, for `rayfin-local doctor` and the sign-in page.
 

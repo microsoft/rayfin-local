@@ -310,7 +310,7 @@ A function or query can therefore reach exactly what your account can reach.
 
 | Source | Tokens from |
 | --- | --- |
-| `auto` (default) | The Azure CLI, then the Rayfin CLI's login. |
+| `auto` (default) | The Azure CLI, then the Rayfin CLI's login. When Power BI turns down the Azure CLI's token for a semantic-model query, the Rayfin CLI's sign-in gets one instead (the first time, it may open a browser window to sign in or consent), and Power BI tokens come from it from then on. |
 | `az` | `az account get-access-token --scope <scope>`: run `az login` first. |
 | `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
 
@@ -571,6 +571,11 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
 - **Consent errors (`AADSTS65001`).**
   The Azure CLI's app is not consented for that resource in your tenant.
   Use the Rayfin CLI's login (`--token-source rayfin`, or `source = "rayfin"` under `[tokens]`), or override the audience's scope under `[tokens.scopes]`.
+- **A semantic-model query fails with 401: "Power BI turned down your sign-in".**
+  Power BI refused the token, often because the Rayfin CLI can't query Power BI for you until you consent once; `npx rayfin login` doesn't ask for that.
+  With the `auto` token source, rayfin-local asks the Rayfin CLI for a token itself, and the first time it may open a browser window to sign in or consent: finish it there.
+  Otherwise, run `npx rayfin connector invoke <connector> executeQuery --file query.json` once in a terminal in the project folder, with `{"query": "EVALUATE {1}"}` in `query.json`, and finish signing in in the browser it opens; or ask a tenant administrator to consent to the Rayfin CLI app (`2f844663-8e82-4a34-8b65-09d9d14b0fb6`) for Power BI Service.
+  If it still fails, check that your account can query the model (Build permission) in the model's tenant.
 - **"… is not the 1.36 SDK rayfin-local implements".**
   rayfin-local implements the wire contract of `@microsoft/rayfin-*` 1.36.x; with another version, behavior may differ from Fabric.
   Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 1.36.

@@ -1,5 +1,6 @@
 // Mints an access token with the developer's Rayfin CLI login, for rl-tokens' Rayfin CLI provider
-// (`--token-source rayfin`, and the fallback when the Azure CLI can't get a token).
+// (`--token-source rayfin`, and in auto mode when the Azure CLI can't get a token or a service
+// turns its token down).
 //
 // It uses the project's own `@microsoft/rayfin-cli` (a devDependency of Rayfin projects):
 // `getAuthenticatedToken(scopes, { tenantId })` from `@microsoft/rayfin-cli/auth` serves the token
