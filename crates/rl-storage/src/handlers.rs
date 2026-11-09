@@ -905,7 +905,7 @@ fn new_version(
 }
 
 /// A new object needs `create`; replacing one needs `onConflict: 'overwrite'` and `update` on
-/// both the stored and the new version.
+/// the stored version, never a second check on replacement metadata.
 fn authorize_write(
     folder: &StorageFolder,
     caller: &Caller,
@@ -919,23 +919,17 @@ fn authorize_write(
             Err(denied(folder, caller, Action::Create))
         };
     };
+    if !rules::allows(folder, caller, Action::Update, &existing.item()) {
+        return Err(denied(folder, caller, Action::Update));
+    }
     if folder.on_conflict == OnConflict::Error {
-        if !rules::allows(folder, caller, Action::Create, &new.item()) {
-            return Err(denied(folder, caller, Action::Create));
-        }
         return Err(ApiError::Conflict(format!(
             "'{}' already exists in storage folder '{}', whose onConflict is 'error'; delete it \
              first or upload under another name.",
             existing.path, folder.name
         )));
     }
-    if rules::allows(folder, caller, Action::Update, &existing.item())
-        && rules::allows(folder, caller, Action::Update, &new.item())
-    {
-        Ok(())
-    } else {
-        Err(denied(folder, caller, Action::Update))
-    }
+    Ok(())
 }
 
 /// Object size limits: the folder's `maxSize` lowers the per-object cap.

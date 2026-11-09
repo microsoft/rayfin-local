@@ -407,6 +407,12 @@ Other connector types answer 501.
 `rl-storage` serves the routes of the 1.36.2 `StorageFolderClient` on files under `.rayfin-local/storage`, with the app's `@blob` folder rules.
 Files are stored under random ids; their paths and metadata live in SQLite tables.
 Uploads and downloads go through signed URLs under `/.rayfin-local/storage/`, whose HMAC token is the credential.
+`rl-model` validates every storage check before the model can be served or reloaded, using BaaS's storage-specific whitelist and operand types rather than data-policy semantics.
+Invalid checks and anonymous grants are `config-invalid`; a rejected reload keeps the previous model.
+Rules form a permissive union; create checks prospective metadata and overwrite checks the stored object only.
+Missing allowed claims and metadata bind null: equality never matches null, while inequality matches exactly one null.
+Policy denial is HTTP 403 `PERMISSION_DENIED`; lists filter denied objects.
+String comparisons are exact locally, not lowercased (BaaS delegates text comparison to its database/collation).
 
 ## Token broker
 

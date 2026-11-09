@@ -2084,7 +2084,7 @@
             {
               "action": "delete",
               "policy": {
-                "storage": "(@claims.sub eq @item.owner_id) and (@item.team_id ne null)",
+                "storage": "(@claims.sub eq @item.owner_id) and (@item.team_id eq 't1')",
                 "check": {
                   "op": "and",
                   "args": [
@@ -2098,11 +2098,11 @@
                       }
                     },
                     {
-                      "op": "neq",
+                      "op": "eq",
                       "lhs": {
                         "field": "team_id"
                       },
-                      "rhs": null
+                      "rhs": "t1"
                     }
                   ]
                 }
@@ -2243,11 +2243,11 @@
                     }
                   },
                   {
-                    "op": "neq",
+                    "op": "eq",
                     "lhs": {
                       "field": "team_id"
                     },
-                    "rhs": null
+                    "rhs": "t1"
                   }
                 ]
               }
