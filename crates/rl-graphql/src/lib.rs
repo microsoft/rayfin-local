@@ -106,22 +106,33 @@ impl Default for DataApiSettings {
 
 /// A model and the schema built from it.
 pub(crate) struct Snapshot {
+    /// The app's model as given, without system entities.
+    pub app: Arc<AppModel>,
+    /// The model requests run against: the app's entities plus system entities.
     pub model: Arc<AppModel>,
     pub schema: schema::Schema,
 }
 
 impl Snapshot {
-    fn new(model: Arc<AppModel>) -> Self {
-        let mut model = (*model).clone();
+    fn new(app: Arc<AppModel>) -> Self {
+        let mut model = (*app).clone();
         model.entities.retain(|entity| entity.name != "User");
         model.entities.push(rl_model::system_user(model.dialect));
-        let model = Arc::new(model);
-        Self::with_options(model, schema::SchemaOptions::default())
+        let schema = schema::Schema::build_with(&model, schema::SchemaOptions::default());
+        Self {
+            app,
+            model: Arc::new(model),
+            schema,
+        }
     }
 
     pub(crate) fn with_options(model: Arc<AppModel>, options: schema::SchemaOptions) -> Self {
         let schema = schema::Schema::build_with(&model, options);
-        Self { model, schema }
+        Self {
+            app: Arc::clone(&model),
+            model,
+            schema,
+        }
     }
 }
 
@@ -155,9 +166,9 @@ impl DataApi {
         *self.snapshot.write() = snapshot;
     }
 
-    /// The model being served.
+    /// The app model being served, without the system entities the API adds to it.
     pub fn model(&self) -> Arc<AppModel> {
-        Arc::clone(&self.snapshot.read().model)
+        Arc::clone(&self.snapshot.read().app)
     }
 
     /// Runs a GraphQL request for `caller` (the routes, and in-process callers such as tests).

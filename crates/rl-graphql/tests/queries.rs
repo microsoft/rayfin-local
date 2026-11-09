@@ -732,10 +732,7 @@ async fn set_model_swaps_the_schema_for_new_requests() {
         Vec::<Value>::new()
     );
     app.api.set_model(std::sync::Arc::new(basic_model()));
-    assert_eq!(
-        app.api.model().entities.len(),
-        basic_model().entities.len() + 1
-    );
+    assert_eq!(app.api.model().entities, basic_model().entities);
     assert_eq!(
         app.run(&alice, query).await.messages(),
         ["The field `askThreads` does not exist on the type `Query`."]
