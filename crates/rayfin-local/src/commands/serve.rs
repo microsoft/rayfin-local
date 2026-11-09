@@ -427,6 +427,9 @@ async fn open_database(
             )
         })
         .inspect_err(|err| events::emit(Event::Schema(Schema::failed(err, false))))?;
+    rl_auth::prepare_database(&db)
+        .await
+        .context("Could not migrate local users before applying the app schema")?;
     // With the data service off, the existing tables are left alone rather than dropped.
     if project.config().services.data.enabled {
         integrations::apply_schema(&db, model, force).await?;

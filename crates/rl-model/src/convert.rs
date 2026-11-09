@@ -194,7 +194,7 @@ struct RuleJson {
     check: Option<Value>,
 }
 
-/// The system entity every app may reference but no app database contains.
+/// The built-in entity every app may reference but may not redefine.
 const SYSTEM_USER: &str = "User";
 
 /// What the entity conversion reads: the analyzer's entities, the DAB config and the policy
@@ -228,6 +228,17 @@ impl AppModel {
         let dialect = Dialect::parse(&output.dialect).ok_or_else(|| {
             ModelError::Malformed(format!("unknown dialect `{}`", output.dialect))
         })?;
+        for (name, entity) in &output.config.entities {
+            if name.eq_ignore_ascii_case(SYSTEM_USER) || entity.source.eq_ignore_ascii_case("Users")
+            {
+                return Err(ModelError::Entity {
+                    entity: name.clone(),
+                    message:
+                        "User and its Users table are reserved system names; rename the app entity"
+                            .into(),
+                });
+            }
+        }
         let view = Analysis {
             entities: &output.entities,
             config: &output.config,

@@ -266,6 +266,7 @@ pub(crate) fn shape_query(
         let rows = rows.unwrap_or_else(|| Ok(Vec::new()));
         let value = match (root.kind, rows) {
             (RootKind::Typename, _) => Some(json!("Query")),
+            (RootKind::Introspection(value), _) => Some(value),
             (RootKind::Failed(error), _) => {
                 shaper.errors.push(error.at(root.pos).with_path(vec![path]));
                 None
@@ -430,6 +431,7 @@ impl QueryRoot {
 
 pub(crate) enum RootKind {
     Typename,
+    Introspection(Json),
     List(ConnectionPlan),
     /// The object and its `WHERE`: the key, and the read policy.
     ByPk(ObjectPlan, Pred),
@@ -446,13 +448,20 @@ fn plan_root(ctx: &Ctx<'_>, field: &Collected<'_>) -> QueryRoot {
     if field.name() == "__typename" {
         return root;
     }
+    if matches!(field.name(), "__schema" | "__type") {
+        root.nullable = field.name() != "__schema";
+        root.kind = crate::introspection::execute(ctx, field)
+            .map(RootKind::Introspection)
+            .unwrap_or_else(RootKind::Failed);
+        return root;
+    }
     let def = ctx
         .schema
         .object(&ctx.schema.query_type)
         .and_then(|q| q.fields.get(field.name()));
     let Some(def) = def else {
         root.kind = RootKind::Failed(GraphQlError::new(
-            "Introspection is not supported by rayfin-local; set allowIntrospection to false.",
+            "The selected query field does not exist.",
         ));
         return root;
     };
@@ -526,7 +535,7 @@ fn sqlite_statement(model: &AppModel, root: &QueryRoot) -> Option<Sql> {
                 .push(" WHERE ");
             filter.render(&mut sql);
         }
-        RootKind::Typename | RootKind::Failed(_) => return None,
+        RootKind::Typename | RootKind::Introspection(_) | RootKind::Failed(_) => return None,
     }
     Some(sql)
 }

@@ -53,6 +53,8 @@ It generates the schema DAB generates for your entities and answers with DAB's d
 | --- | --- | --- |
 | Queries: lists, by key, filters, `orderBy`, cursor pagination | Supported | |
 | Relationships (`@one`, `@many`) | Supported | Nested selections and relationship filters. |
+| System `User` entity | Supported | `Users(Id, Email)`, exposed as `User` through `users` and `user_by_pk(Id:)`. Authenticated users can read all rows, with no anonymous or write grant. App relationships enforce real foreign keys. |
+| System `User` population | Differs | Local auth account inserts and email updates atomically upsert the mirror, and startup backfills existing accounts before app migrations. `Id` is the UUID `sub`; username-only accounts use their username for `Email` (bounded to 255 characters). Deleted accounts leave their mirrored row to preserve references. Fabric sign-in-driven mirror population is not established by the BaaS implementation. |
 | Mutations: create, update, delete | Supported | |
 | Aggregations (`groupBy`, `aggregate`) | Supported | |
 | `@role` policies and field permissions | Supported | The `anonymous` and `authenticated` roles, with DAB's per-action inheritance. A policy that reads a claim the caller doesn't have fails the request, as on Fabric. |
@@ -62,7 +64,7 @@ It generates the schema DAB generates for your entities and answers with DAB's d
 | Decimals | Differs | Stored as doubles (`REAL`), with output rounded to the column's scale. About 15 significant digits are exact, so a `DECIMAL(18,2)` above about 10^13 loses cents; Fabric is exact to the declared precision. |
 | Dates | Differs | Stored as UTC ISO-8601 text with 100 ns precision. Responses use Fabric's format (`YYYY-MM-DDTHH:MM:SS.fffZ`), so the difference shows only in the SQLite file. |
 | Schema changes | Differs | `serve` applies them from `rayfin/data` when it starts and as you edit the entities, not on a deployment. Changes that would lose data are refused until you pass `--force-schema`. A data package (`services.data.path`) is built with `services.data.buildCommand` first, as `rayfin up` and `rayfin dev` do, at every start and when its sources change. |
-| Introspection (`__schema`, `__type`) | Not supported | Refused unless `services.data.allowIntrospection` is true, as on Fabric; when allowed, rayfin-local still answers an error (no introspection resolver yet). `__typename` always works. |
+| Introspection (`__schema`, `__type`) | Supported | Refused with `HC0046` unless `services.data.allowIntrospection` is true, as on Fabric. When allowed, standard introspection is reflected from the same schema used for validation and execution, including the system `User`, descriptions, inputs, enums, directives and type wrappers. `__typename` always works. |
 | Data from a deployed app | Not supported | The local database starts empty; nothing is copied from Fabric. |
 
 ## Functions (`/functions/<name>/invoke`)
