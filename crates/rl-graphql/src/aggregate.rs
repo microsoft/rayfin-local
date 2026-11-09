@@ -328,7 +328,7 @@ pub fn plan(
         if !readable(name) {
             return Err(GraphQlError::dab(
                 format!("Access forbidden to field '{name}' referenced in the groupBy argument."),
-                codes::AUTHORIZATION_CHECK_FAILED,
+                codes::FORBIDDEN,
             ));
         }
         if !group.contains(&column) {
@@ -400,7 +400,7 @@ pub fn plan(
                                  aggregation function '{}'.",
                                 operation.name()
                             ),
-                            codes::AUTHORIZATION_CHECK_FAILED,
+                            codes::FORBIDDEN,
                         ));
                     }
                     let aggregate = Aggregate {
@@ -515,7 +515,7 @@ pub fn order(
             if !grant.is_some_and(|g| access::allows_field(g, name)) {
                 return Err(GraphQlError::dab(
                     messages::ORDER_BY_FIELD_FORBIDDEN,
-                    codes::AUTHORIZATION_CHECK_FAILED,
+                    codes::FORBIDDEN,
                 ));
             }
             if !plan.group.contains(&column) {

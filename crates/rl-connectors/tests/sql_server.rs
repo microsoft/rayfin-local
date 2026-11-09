@@ -239,7 +239,7 @@ async fn mutations_on_a_sql_database_return_the_row() {
     let body = graphql(&app, Some("alice"), &update(HAMMER)).await;
     assert_eq!(body, json!({"data": {"updateProduct": {"price": 13.0}}}));
     let body = graphql(&app, Some("bob"), &update(HAMMER)).await;
-    assert_eq!(body["errors"][0]["extensions"]["code"], "ItemNotFound");
+    assert_eq!(body["errors"][0]["extensions"]["code"], "BadRequest");
     assert_eq!(
         body["errors"][0]["message"],
         format!("Could not find item with <productId: {HAMMER}>")
