@@ -189,13 +189,23 @@ async function analyze(input) {
       collect(await import(pathToFileURL(file).href), foundFolders, coreSchema.isRayfinStorageFolder);
     }
     // The CLI analyzes storage folders with the mssql dialect, whatever services.data says.
-    const folders = new analysis.SchemaAnalyzer(Object.values(foundFolders), 'mssql', { log })
-      .analyzeStorageFolders();
-    const storageConfig =
-      folders.length > 0
-        ? new analysis.StorageConfigGenerator().generateConfig(folders)
-        : { schemaVersion: analysis.STORAGE_CONFIG_SCHEMA_VERSION, folders: [] };
-    storage = { folders: toJson(folders), config: JSON.parse(JSON.stringify(storageConfig)) };
+    // The analyzer's rejections (anonymous grants, overwrite without update, bad limits) are
+    // storage configuration errors, reported as such rather than as a failed analysis.
+    try {
+      const folders = new analysis.SchemaAnalyzer(Object.values(foundFolders), 'mssql', { log })
+        .analyzeStorageFolders();
+      const storageConfig =
+        folders.length > 0
+          ? new analysis.StorageConfigGenerator().generateConfig(folders)
+          : { schemaVersion: analysis.STORAGE_CONFIG_SCHEMA_VERSION, folders: [] };
+      storage = { folders: toJson(folders), config: JSON.parse(JSON.stringify(storageConfig)) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const blob = /^@blob\('([^']*)'\):\s*/.exec(message);
+      storage = {
+        error: { folder: blob ? blob[1] : null, message: blob ? message.slice(blob[0].length) : message },
+      };
+    }
   }
 
   // Every module was imported above; the files outside packages and the output are inputs too.

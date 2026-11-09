@@ -552,6 +552,22 @@ fn unknown_decorators_and_shapes_fail_loudly() {
     let error = AppModel::from_analysis(&analysis).unwrap_err();
     assert!(matches!(error, ModelError::Storage { .. }), "{error}");
 
+    // The SDK analyzer's own storage rejections are storage configuration errors too.
+    let mut analysis = basic_json();
+    analysis["storage"] = json!({"error": {
+        "folder": "attachments",
+        "message": "anonymous permissions are not supported for storage folders.",
+    }});
+    let error = AppModel::from_analysis(&analysis).unwrap_err();
+    assert!(
+        matches!(&error, ModelError::Storage { folder, .. } if folder == "attachments"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("anonymous permissions"),
+        "{error}"
+    );
+
     let error = AppModel::from_analysis(&json!({"dialect": "mssql"})).unwrap_err();
     assert!(matches!(error, ModelError::Malformed(_)), "{error}");
 }

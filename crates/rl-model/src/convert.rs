@@ -153,7 +153,15 @@ struct PolicyRecord {
 
 #[derive(Deserialize)]
 struct StorageOutput {
-    config: StorageConfig,
+    config: Option<StorageConfig>,
+    /// The SDK analyzer rejected the storage folders.
+    error: Option<StorageErrorJson>,
+}
+
+#[derive(Deserialize)]
+struct StorageErrorJson {
+    folder: Option<String>,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -701,14 +709,28 @@ fn entity_policy(
 }
 
 fn storage(output: &StorageOutput) -> Result<Storage, ModelError> {
-    let folders = output
-        .config
+    let config = match (&output.config, &output.error) {
+        (_, Some(error)) => {
+            return Err(ModelError::Storage {
+                folder: error.folder.clone().unwrap_or_else(|| "(unknown)".into()),
+                message: error.message.clone(),
+            });
+        }
+        (Some(config), None) => config,
+        (None, None) => {
+            return Err(ModelError::Storage {
+                folder: "(unknown)".into(),
+                message: "the analysis has no storage configuration".into(),
+            });
+        }
+    };
+    let folders = config
         .folders
         .iter()
         .map(folder)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Storage {
-        schema_version: output.config.schema_version,
+        schema_version: config.schema_version,
         folders,
     })
 }
