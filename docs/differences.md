@@ -100,7 +100,9 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Upload, download, list and delete (`StorageFolderClient`) | Supported | The 1.36.2 routes and answers, on files under `.rayfin-local/storage`. |
-| `@blob` folder rules and checks | Supported | `anonymous` and `authenticated` rules; checks compare strings case-insensitively, as Fabric's collation does. |
+| `@blob` folder rules and checks | Supported | BaaS storage profile: `eq`, `neq`, `and`, `or`; claims `sub`, `email`, `role`; `owner_id` and declared metadata only, with matching operand types and no null literals. Anonymous grants and invalid checks fail admission (`config-invalid`), including reloads (the previous model stays active). |
+| Storage rule evaluation | Supported | Matching rules are OR-ed; a checkless rule allows. `eq` requires two non-null values; `neq` allows exactly one null, not two. Missing allowed claims bind null. Create checks prospective caller-owned metadata; overwrite checks only stored metadata, before conflict handling. Policy denials use HTTP 403 `PERMISSION_DENIED`; lists omit hidden objects. |
+| Storage string comparison | Differs | Local checks compare strings exactly, without coercion or lowercasing. BaaS emits SQL `=`/`<>`, so actual case, accent and trailing-space behavior follows its backing database/collation; no universal Fabric case-insensitive or ordinal contract is implied. |
 | Signed URLs | Differs | They point at the backend (`/.rayfin-local/storage/…`), not Azure Blob Storage; the HMAC token in the URL is the credential. The default lifetime is 15 minutes. |
 | Long-running operations | Differs | Every step completes at once, so the first status poll already sees the result. |
 | Size limits | Differs | 25 MiB per file, the service's limit (a folder's `maxSize` can lower it), and 1 GiB for all files together. |

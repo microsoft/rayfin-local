@@ -553,8 +553,8 @@ pub struct StorageRule {
     pub path_pattern: String,
     pub role: String,
     pub actions: Vec<Action>,
-    /// Over `claims.*` and `item.<field>` (intrinsic object fields such as `owner_id`, or the
-    /// folder's app fields).
+    /// BaaS storage checks: `sub`/`email`/`role` claims, `owner_id` and declared metadata;
+    /// matching primitive types and no null literals. Admitted by `validate_rules`.
     pub check: Option<PolicyExpr>,
 }
 

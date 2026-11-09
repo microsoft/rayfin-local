@@ -21,6 +21,10 @@
 //! client sends none): their HMAC token is the capability. Files are named by random ids under
 //! `objects/` (uploads are staged under `staging/` and moved in on commit); paths and metadata live
 //! in the `_rl_storage_*` tables. [`admin`] reads and deletes them for the host's control API.
+//!
+//! Rules use BaaS's storage profile, not data policies: typed `eq`/`neq`/`and`/`or`, claims
+//! `sub`/`email`/`role`, and `owner_id` or declared metadata. Null literals and anonymous grants
+//! are rejected before serving. Create checks new metadata; overwrite checks stored metadata.
 
 pub mod admin;
 mod error;
@@ -125,6 +129,7 @@ pub async fn router(
     model: Arc<AppModel>,
     callers: Arc<dyn CallerResolver>,
 ) -> Result<Router, StorageError> {
+    model.validate_storage_rules()?;
     db.migrate_component(store::COMPONENT, store::MIGRATIONS)
         .await?;
     let objects = config.root.join("objects");

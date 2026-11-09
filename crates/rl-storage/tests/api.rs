@@ -1,5 +1,5 @@
 //! The storage routes driven as the 1.36.2 client drives them (`StorageFolderClient.js`), on the
-//! `basic` fixture's folders plus a public one.
+//! `basic` fixture's folders plus a folder readable by every signed-in caller.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -12,8 +12,8 @@ use futures_util::StreamExt;
 use http_body_util::BodyExt;
 use rl_db::Db;
 use rl_model::{
-    Action, AppModel, Caller, CallerError, CallerResolver, OnConflict, Session, StorageFolder,
-    StorageRule,
+    Action, AppModel, Caller, CallerError, CallerResolver, CompareOp, Literal, OnConflict, Operand,
+    PolicyExpr, Session, StorageFolder, StorageRule,
 };
 use rl_storage::StorageConfig;
 use serde_json::{Map, Value, json};
@@ -61,7 +61,7 @@ fn model() -> AppModel {
         allowed_content_types: vec!["text/*".into()],
         fields: vec![],
         rules: vec![
-            rule("anonymous", vec![Action::Read]),
+            rule("authenticated", vec![Action::Read]),
             rule(
                 "authenticated",
                 vec![Action::Create, Action::Update, Action::Delete],
@@ -274,12 +274,12 @@ async fn clearing_deletes_every_object_and_upload_while_serving() {
     assert_eq!((h.files("objects").len(), h.files("staging").len()), (1, 1));
 
     assert_eq!(rl_storage::clear(&h.db, &h.root).await.unwrap(), 1);
-    assert!(h.paths(None, "folder=public-notes").await.is_empty());
+    assert!(h.paths(alice, "folder=public-notes").await.is_empty());
     assert!(h.files("objects").is_empty() && h.files("staging").is_empty());
     h.upload(alice, note("again.txt", None), b"again")
         .await
         .unwrap();
-    assert_eq!(h.paths(None, "folder=public-notes").await, ["again.txt"]);
+    assert_eq!(h.paths(alice, "folder=public-notes").await, ["again.txt"]);
 
     let nothing = tempfile::tempdir().unwrap();
     let cleared = rl_storage::clear(&Db::open_in_memory().unwrap(), nothing.path()).await;
@@ -351,11 +351,11 @@ async fn the_host_lists_reads_and_deletes_files_whatever_the_rules() {
     assert!(!file.bytes.exists());
     let again = admin::delete_file(&h.db, &h.root, "public-notes", "b.txt").await;
     assert!(!again.unwrap());
-    assert_eq!(h.paths(None, "folder=public-notes").await, ["a/one.txt"]);
+    assert_eq!(h.paths(alice, "folder=public-notes").await, ["a/one.txt"]);
 
     let cleared = admin::clear_folder(&h.db, &h.root, "public-notes").await;
     assert_eq!(cleared.unwrap(), 1);
-    assert!(h.paths(None, "folder=public-notes").await.is_empty());
+    assert!(h.paths(alice, "folder=public-notes").await.is_empty());
     assert!(h.files("objects").is_empty());
 
     // Before the storage service first starts, there are no tables and no files.
@@ -459,7 +459,7 @@ async fn upload_list_download_and_delete_like_the_client() {
         .await;
     assert_eq!(
         (bob.status, bob.code()),
-        (StatusCode::FORBIDDEN, "PermissionDenied".into())
+        (StatusCode::FORBIDDEN, "PERMISSION_DENIED".into())
     );
     let download = h
         .api("POST", "/api/storage/download", alice, Some(file.clone()))
@@ -742,7 +742,7 @@ async fn signed_downloads_serve_a_single_byte_range() {
         .api(
             "POST",
             "/api/storage/download",
-            None,
+            Some("alice"),
             Some(note("r.txt", None)),
         )
         .await;
@@ -797,8 +797,11 @@ async fn rules_follow_roles_owners_and_checks() {
     h.upload(alice, note("hello.txt", None), b"hi")
         .await
         .unwrap();
-    // Anonymous rules let anyone read; writing needs a session.
-    assert_eq!(h.paths(None, "folder=public-notes").await, ["hello.txt"]);
+    assert_eq!(h.paths(bob, "folder=public-notes").await, ["hello.txt"]);
+    assert_eq!(
+        h.list(None, "folder=public-notes").await.status,
+        StatusCode::UNAUTHORIZED
+    );
     let anonymous = h
         .api(
             "POST",
@@ -825,33 +828,129 @@ async fn rules_follow_roles_owners_and_checks() {
     assert_eq!(h.paths(bob, "folder=user-avatars").await, ["alice.png"]);
     assert_eq!(
         h.delete(bob, "user-avatars", "alice.png").await.code(),
-        "PermissionDenied"
+        "PERMISSION_DENIED"
     );
     let again = h.upload(alice, avatar, b"png2").await.unwrap_err();
     assert_eq!(
         (again.status, again.code()),
-        (StatusCode::CONFLICT, "Conflict".into())
+        (StatusCode::FORBIDDEN, "PERMISSION_DENIED".into())
     );
 
     // Attachments overwrite, but only for the owner (`update` checks `owner_id`), who stays the
-    // owner; deleting also needs a `team_id`.
+    // owner; deleting also needs `team_id == 't1'`.
     let attachment =
         json!({ "folder": "todo-attachments", "fileName": "a.png", "contentType": "image/png" });
     h.upload(alice, attachment.clone(), b"v1").await.unwrap();
     let denied = h.upload(bob, attachment.clone(), b"v2").await.unwrap_err();
-    assert_eq!(denied.code(), "PermissionDenied");
+    assert_eq!(denied.code(), "PERMISSION_DENIED");
     h.upload(alice, attachment, b"v3").await.unwrap();
     let list = h.list(alice, "folder=todo-attachments").await.json();
     assert_eq!(list["items"][0]["size"], 2);
     assert_eq!(
         h.delete(alice, "todo-attachments", "a.png").await.code(),
-        "PermissionDenied"
+        "PERMISSION_DENIED"
     );
     assert_eq!(
         h.files("objects").len(),
         3,
         "the overwritten version's file is gone"
     );
+}
+
+#[tokio::test]
+async fn create_checks_new_metadata_but_overwrite_checks_stored_metadata_only() {
+    let mut model = model();
+    let folder = &mut model.storage.as_mut().unwrap().folders[0];
+    folder.rules = vec![
+        StorageRule {
+            path_pattern: "**".into(),
+            role: "authenticated".into(),
+            actions: vec![Action::Create, Action::Update],
+            check: Some(PolicyExpr::Compare {
+                op: CompareOp::Eq,
+                left: Operand::Field("team_id".into()),
+                right: Operand::Literal(Literal::String("t1".into())),
+            }),
+        },
+        StorageRule {
+            path_pattern: "**".into(),
+            role: "authenticated".into(),
+            actions: vec![Action::Read],
+            check: None,
+        },
+    ];
+    let h = harness_with(model, |_| {}).await;
+    for (team, expected) in [
+        ("t2", StatusCode::FORBIDDEN),
+        ("t1", StatusCode::ACCEPTED),
+        ("t2", StatusCode::ACCEPTED),
+        ("t1", StatusCode::FORBIDDEN),
+    ] {
+        let request = json!({"folder": "todo-attachments", "fileName": "handoff.png",
+            "contentType": "image/png", "fields": {"team_id": team}});
+        let result = h.upload(Some("alice"), request, b"new").await;
+        if expected == StatusCode::ACCEPTED {
+            result.unwrap();
+        } else {
+            let reply = result.unwrap_err();
+            assert_eq!(reply.status, expected);
+            assert_eq!(reply.code(), "PERMISSION_DENIED");
+        }
+    }
+    let list = h
+        .list(Some("alice"), "folder=todo-attachments")
+        .await
+        .json();
+    assert_eq!(list["items"][0]["fields"]["team_id"], "t2");
+}
+
+#[tokio::test]
+async fn existing_object_needs_update_before_conflict_is_reported() {
+    for (update, expected, code) in [
+        (false, StatusCode::FORBIDDEN, "PERMISSION_DENIED"),
+        (true, StatusCode::CONFLICT, "Conflict"),
+    ] {
+        let mut model = model();
+        let folder = &mut model.storage.as_mut().unwrap().folders[0];
+        folder.on_conflict = OnConflict::Error;
+        for rule in &mut folder.rules {
+            rule.actions.retain(|action| *action != Action::Update);
+            if update && rule.actions.contains(&Action::Create) {
+                rule.actions.push(Action::Update);
+            }
+        }
+        let h = harness_with(model, |_| {}).await;
+        let request = json!({"folder": "todo-attachments", "fileName": "exists.png",
+            "contentType": "image/png"});
+        h.upload(Some("alice"), request.clone(), b"old")
+            .await
+            .unwrap();
+        let reply = h.upload(Some("alice"), request, b"new").await.unwrap_err();
+        assert_eq!((reply.status, reply.code()), (expected, code.into()));
+        assert_eq!(h.files("objects").len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn router_refuses_invalid_rules_before_creating_storage_state() {
+    let mut model = model();
+    model.storage.as_mut().unwrap().folders[0].rules[0].role = "anonymous".into();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("not-created");
+    let error = rl_storage::router(
+        StorageConfig::new(&root, ORIGIN),
+        Db::open_in_memory().unwrap(),
+        Arc::new(model),
+        Arc::new(Tokens),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("todo-attachments") && error.contains("rule[0]"),
+        "{error}"
+    );
+    assert!(!root.exists());
 }
 
 #[tokio::test]
@@ -914,7 +1013,7 @@ async fn lists_page_through_prefixes_with_continuations() {
         h.upload(alice, note(name, prefix), b"x").await.unwrap();
     }
     let first = h
-        .list(None, "folder=public-notes&prefix=p&limit=2")
+        .list(alice, "folder=public-notes&prefix=p&limit=2")
         .await
         .json();
     let paths: Vec<_> = first["items"]
@@ -926,7 +1025,7 @@ async fn lists_page_through_prefixes_with_continuations() {
     assert_eq!(paths, ["p/1.txt", "p/2.txt"]);
     let token = first["continuation"].as_str().unwrap();
     let query = format!("folder=public-notes&prefix=p&limit=2&continuation={token}");
-    let second = h.list(None, &query).await.json();
+    let second = h.list(alice, &query).await.json();
     let paths: Vec<_> = second["items"]
         .as_array()
         .unwrap()
@@ -935,10 +1034,10 @@ async fn lists_page_through_prefixes_with_continuations() {
         .collect();
     assert_eq!(paths, ["p/3.txt", "p/sub/4.txt"]);
     assert!(second.get("continuation").is_none());
-    assert_eq!(h.paths(None, "folder=public-notes&limit=0").await.len(), 6);
+    assert_eq!(h.paths(alice, "folder=public-notes&limit=0").await.len(), 6);
 
     let forged = format!("folder=public-notes&continuation={}", tamper(token));
-    let reply = h.list(None, &forged).await;
+    let reply = h.list(alice, &forged).await;
     assert_eq!(
         (reply.status, reply.code()),
         (StatusCode::BAD_REQUEST, "InvalidContinuation".into())
