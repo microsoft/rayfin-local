@@ -47,7 +47,7 @@ Keep the backend on loopback (the default `--host 127.0.0.1`): any other address
 ## Data (`client.data`, `/graphql`)
 
 The data API is a DAB-compatible GraphQL API compiled to SQL over SQLite.
-It generates the schema DAB generates for your entities and answers with DAB's data, errors and HTTP statuses.
+It generates the schema DAB generates for your entities and follows Fabric BaaS's embedded DAB 2.0.10 policy behavior and sanitized authorization codes.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -55,15 +55,36 @@ It generates the schema DAB generates for your entities and answers with DAB's d
 | Relationships (`@one`, `@many`) | Supported | Nested selections and relationship filters. |
 | Mutations: create, update, delete | Supported | |
 | Aggregations (`groupBy`, `aggregate`) | Supported | |
-| `@role` policies and field permissions | Supported | The `anonymous` and `authenticated` roles, with DAB's per-action inheritance. A policy that reads a claim the caller doesn't have fails the request, as on Fabric. |
+| `@role` policies and field permissions | Supported | Last matching action wins, including `*`; fields are include minus exclude. `authenticated` inherits `anonymous` only when the entity has no authenticated permission entry. A missing referenced claim rejects the whole operation, even within an otherwise-true OR. |
 | The `anonymous` role | Differs | Allowed, as on a tenant where an administrator turned on "Enable anonymous data access for Fabric Apps (Preview)"; that setting is off by default, and without it `rayfin up` refuses the schema and requests without a token get a 401. `serve` warns when entities grant `anonymous`; `[fabric] anonymous_data_access = false` in `rayfin-local.toml` acts like a tenant without the setting. |
 | Constraints | Supported | The database enforces required fields, lengths, `@set` values, the email shape, minimum lengths, uniqueness and foreign keys, as on Fabric. Patterns and other `min`/`max` options are checked only by the SDK's form validation, on both. |
-| Text comparisons | Differs | Case-insensitive like Fabric SQL's default collation, but SQLite's `NOCASE` folds ASCII letters only: `'É' = 'é'` is false locally and true on Fabric. On the `postgresql` dialect, text compares case-sensitively. |
+| Text comparisons | Differs | Comparisons use the column's collation, without universal lowercasing. The local MSSQL profile uses SQLite's ASCII-only `NOCASE`; PostgreSQL uses case-sensitive text. An actual deployment's database/column collation may differ. |
 | Decimals | Differs | Stored as doubles (`REAL`), with output rounded to the column's scale. About 15 significant digits are exact, so a `DECIMAL(18,2)` above about 10^13 loses cents; Fabric is exact to the declared precision. |
 | Dates | Differs | Stored as UTC ISO-8601 text with 100 ns precision. Responses use Fabric's format (`YYYY-MM-DDTHH:MM:SS.fffZ`), so the difference shows only in the SQLite file. |
 | Schema changes | Differs | `serve` applies them from `rayfin/data` when it starts and as you edit the entities, not on a deployment. Changes that would lose data are refused until you pass `--force-schema`. A data package (`services.data.path`) is built with `services.data.buildCommand` first, as `rayfin up` and `rayfin dev` do, at every start and when its sources change. |
 | Introspection (`__schema`, `__type`) | Not supported | Refused unless `services.data.allowIntrospection` is true, as on Fabric; when allowed, rayfin-local still answers an error (no introspection resolver yet). `__typename` always works. |
 | Data from a deployed app | Not supported | The local database starts empty; nothing is copied from Fabric. |
+
+### Data policy decisions
+
+- Create policies check supplied values.
+  A referenced field must be present in the request, even if it is nullable, defaulted or generated.
+  Update and delete policies check the existing row, not replacement values.
+- `eq null` and `neq null` mean `IS NULL` and `IS NOT NULL`.
+  A null column does not satisfy ordinary inequality to a non-null value.
+- String operands can promote to UUID, Int32 and Boolean fields (`true`/`false`, not numeric truthiness).
+  Invalid conversions return `BadRequest`, rather than silently matching no rows.
+  Quoted date/decimal strings do not receive unsupported promotion; SDK Date literals retain their unquoted date type.
+  These failure choices follow the pinned DAB resolver/parser; exact provider-specific date/decimal failures still need a BaaS probe.
+- A read-policy-hidden row returns null.
+  A successful write whose read-back is hidden commits and returns null; no read grant instead gives a post-commit `Forbidden` error.
+  Read-back policy errors such as a missing claim roll back the write.
+  DAB's mutation read detector also checks explicit anonymous read grants; the authenticated-write-only plus anonymous-read combination still needs a reference probe for its read-back/transaction timing.
+- Authorization denials use HTTP 200: native schema/directive denials use `AUTH_NOT_AUTHORIZED`, field/claim denials use `Forbidden`, and create-policy rejection or a filtered update uses `BadRequest`.
+  A filtered by-key read or delete returns null without an error.
+  Invalid bearer tokens remain transport-authentication failures.
+- `X-MS-API-ROLE` does not select a role.
+  Empty/default-only creates still evaluate claim-only policies locally; DAB's empty-insert bypass branch needs a reference probe.
 
 ## Functions (`/functions/<name>/invoke`)
 

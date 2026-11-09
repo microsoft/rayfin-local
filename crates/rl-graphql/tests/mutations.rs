@@ -124,7 +124,7 @@ async fn creates_fill_defaults_and_check_the_create_policy() {
             "message": "Could not insert row with given values.",
             "locations": [{"line": 1, "column": 12}],
             "path": ["createTodo"],
-            "extensions": {"code": "DatabasePolicyFailure"}
+            "extensions": {"code": "BadRequest"}
         })]
     );
     assert_eq!(
@@ -246,7 +246,7 @@ async fn updates_are_partial_and_limited_to_the_policy_rows() {
         response.messages(),
         ["Unauthorized due to one or more fields in this mutation."]
     );
-    assert_eq!(response.codes(), ["AuthorizationCheckFailed"]);
+    assert_eq!(response.codes(), ["Forbidden"]);
     assert_eq!(response.body["data"], json!({"updateTodo": null}));
 
     // Bob's todo is outside the update policy, like a missing one.
@@ -257,7 +257,7 @@ async fn updates_are_partial_and_limited_to_the_policy_rows() {
             "message": format!("Could not find item with <id: {T3}>"),
             "locations": [{"line": 1, "column": 12}],
             "path": ["updateTodo"],
-            "extensions": {"code": "ItemNotFound"}
+            "extensions": {"code": "BadRequest"}
         })]
     );
     let response = app
@@ -393,7 +393,7 @@ async fn reading_back_follows_the_read_permission() {
           unauthorized to view the response due to lack of read permissions"
         ]
     );
-    assert_eq!(response.codes(), ["AuthorizationCheckFailed"]);
+    assert_eq!(response.codes(), ["Forbidden"]);
     assert_eq!(
         count(
             &app,
@@ -474,7 +474,7 @@ async fn a_read_back_that_needs_a_missing_claim_undoes_the_write() {
         response.messages(),
         ["User does not possess all the claims required to perform this operation."]
     );
-    assert_eq!(response.codes(), ["AuthorizationCheckFailed"]);
+    assert_eq!(response.codes(), ["Forbidden"]);
     assert_eq!(count(&app, &format!("SELECT count(*) FROM \"{table}\"")), 0);
 }
 
@@ -511,16 +511,17 @@ async fn get_requests_do_not_run_mutations() {
 }
 
 #[tokio::test]
-async fn anonymous_writes_need_a_grant_or_sign_in() {
+async fn anonymous_writes_without_a_grant_are_graphql_authorization_errors() {
     let (app, _, _) = basic().await;
     let anonymous = Caller::anonymous();
-    // Signed-in users may: 401, so a restored session refreshes and replays.
+    // Missing permission is distinct from an invalid bearer token.
     for mutation in [
         "mutation { createCategory(item: { name: \"x\" }) { id } }".to_owned(),
         format!("mutation {{ deleteTodo(id: \"{T1}\") {{ id }} }}"),
     ] {
         let response = app.run(&anonymous, &mutation).await;
-        assert_eq!(response.status, 401, "{mutation}");
+        assert_eq!(response.status, 200, "{mutation}");
+        assert_eq!(response.codes(), ["AUTH_NOT_AUTHORIZED"], "{mutation}");
     }
     assert_eq!(count(&app, "SELECT count(*) FROM Todos"), 3);
 }
@@ -591,7 +592,7 @@ async fn explorer_threads_and_messages_belong_to_their_owner() {
             ),
         )
         .await;
-    assert_eq!(response.codes(), ["ItemNotFound"]);
+    assert_eq!(response.codes(), ["BadRequest"]);
     let delete_thread = format!("mutation {{ deleteAskThread(id: \"{thread_id}\") {{ id }} }}");
     let response = app.run(&bob, &delete_thread).await;
     assert_eq!(response.data(), &json!({"deleteAskThread": null}));
@@ -630,12 +631,13 @@ async fn explorer_threads_and_messages_belong_to_their_owner() {
         &json!({"deleteAskThread": {"id": thread_id}})
     );
 
-    // Without a token: 401.
+    // Without a token: anonymous role authorization denial.
     let response = app
         .run(
             &Caller::anonymous(),
             &format!("mutation {{ {} }}", thread(&alice_id, "x")),
         )
         .await;
-    assert_eq!(response.status, 401);
+    assert_eq!(response.status, 200);
+    assert_eq!(response.codes(), ["AUTH_NOT_AUTHORIZED"]);
 }

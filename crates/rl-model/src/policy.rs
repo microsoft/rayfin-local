@@ -20,8 +20,8 @@ pub enum PolicyExpr {
     And(Vec<PolicyExpr>),
     /// True when any operand is (at least two operands).
     Or(Vec<PolicyExpr>),
-    /// `left op right`. DAB compares with SQL semantics: a `null` operand never matches, so
-    /// `@item.x eq null` is never true (use the result as a SQL predicate as-is).
+    /// `left op right`. DAB renders `eq null` / `neq null` as SQL null tests; other
+    /// comparisons with a null column retain SQL's three-valued logic.
     Compare {
         op: CompareOp,
         left: Operand,

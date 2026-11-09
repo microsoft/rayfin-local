@@ -16,11 +16,11 @@
 //!    in this mutation.`; deletes have no field check).
 //! 2. The write, with the action's policy:
 //!    - create: `INSERT … SELECT … FROM (<candidate row>) WHERE <policy>`. The candidate row is
-//!      the item plus the defaults the database would fill in (a fresh uuid `id`), with the
-//!      columns' collations, so the policy sees the values inserted. No row: `Could not insert row
-//!      with given values.` (`DatabasePolicyFailure`).
+//!      supplied item with the columns' collations. Omitted policy fields are rejected before
+//!      defaults (including generated ids) are filled. No row: `Could not insert row with given
+//!      values.` (`BadRequest`).
 //!    - update: `UPDATE … WHERE id = ? AND <policy>`, on the row before the update. No row:
-//!      `Could not find item with <id: …>` (`ItemNotFound`).
+//!      `Could not find item with <id: …>` (`BadRequest`).
 //!    - delete: the row is read first (it is the answer), then `DELETE … WHERE id = ? AND
 //!      <policy>`. No row: `null` without an error.
 //! 3. The row read back by its key with the read grant, policy and field permissions and the
@@ -291,8 +291,6 @@ fn input_object(
 
 /// A mutation operation, planned: what the database thread runs and how to answer.
 pub(crate) struct Planned {
-    /// No token, and a field `anonymous` may not run but `authenticated` may (HTTP 401).
-    authentication_required: bool,
     roots: Vec<Root>,
 }
 
@@ -355,17 +353,8 @@ enum Done {
 /// Plans the root fields of a mutation (the `Mutation` type exists: validation checked it).
 pub(crate) fn plan<'d>(ctx: &Ctx<'d>, selection: &'d SelectionSet) -> Planned {
     let fields = plan::collect_fields(ctx, MUTATION, &[selection]);
-    let authentication_required = !ctx.caller.is_authenticated()
-        && exec::requires_authentication(ctx.model, ctx.schema, MUTATION, &fields);
-    let roots = if authentication_required {
-        Vec::new()
-    } else {
-        fields.iter().map(|field| plan_root(ctx, field)).collect()
-    };
-    Planned {
-        authentication_required,
-        roots,
-    }
+    let roots = fields.iter().map(|field| plan_root(ctx, field)).collect();
+    Planned { roots }
 }
 
 fn plan_root(ctx: &Ctx<'_>, field: &Collected<'_>) -> Root {
@@ -407,7 +396,15 @@ fn plan_create(
     let node = &field.fields[0].node;
     let args = ctx.arguments(def, node)?;
     let mut row: Vec<Option<SqlValue>> = vec![None; entity.columns.len()];
-    for (column, value) in item_values(ctx, entity, grant, node, &args)? {
+    let item = item_values(ctx, entity, grant, node, &args)?;
+    let alias = ctx.alias();
+    let policy = policy::create_filter(
+        entity,
+        ctx.caller,
+        &alias,
+        &item.iter().map(|(column, _)| *column).collect::<Vec<_>>(),
+    )?;
+    for (column, value) in item {
         row[column] = Some(value);
     }
     for (value, column) in row.iter_mut().zip(&entity.columns) {
@@ -415,8 +412,6 @@ fn plan_create(
             *value = codec::generated_default(column);
         }
     }
-    let alias = ctx.alias();
-    let policy = policy::action_filter(entity, ctx.caller, Action::Create, &alias)?;
     let inserted = entity
         .columns
         .iter()
@@ -425,6 +420,8 @@ fn plan_create(
         .map(|(column, _)| quote_ident(&column.name))
         .collect::<Vec<_>>()
         .join(", ");
+    let table_schema = rl_db::schema::table_schema(entity)
+        .map_err(|_| GraphQlError::dab(messages::DATABASE_ERROR, codes::UNEXPECTED_ERROR))?;
     let mut sql = Sql::default();
     sql.push("INSERT INTO ")
         .push(&quote_ident(&entity.table))
@@ -439,8 +436,8 @@ fn plan_create(
         }
         sql.param(value.clone().unwrap_or(SqlValue::Null));
         // The policy compares the candidate values as it compares the stored columns.
-        if codec::is_textual(&column.kind) {
-            sql.push(" COLLATE NOCASE");
+        if let Some(collation) = &table_schema.columns[i].collation {
+            sql.push(" COLLATE ").push(&quote_ident(collation));
         }
         sql.push(" AS ").push(&quote_ident(&column.name));
     }
@@ -661,10 +658,7 @@ pub(crate) fn item_values(
         .iter()
         .all(|(name, ..)| access::allows_field(grant, name))
     {
-        return Err(GraphQlError::dab(
-            FIELDS_NOT_ALLOWED,
-            codes::AUTHORIZATION_CHECK_FAILED,
-        ));
+        return Err(GraphQlError::dab(FIELDS_NOT_ALLOWED, codes::FORBIDDEN));
     }
     item.into_iter()
         .filter_map(|(name, input, pos)| {
@@ -724,9 +718,6 @@ pub(crate) fn selects_mutation(request: &Request) -> bool {
 
 /// Runs a planned mutation: the writes in order, each in its own transaction, then the answer.
 pub(crate) async fn execute(model: &AppModel, db: &Db, mut planned: Planned) -> Outcome {
-    if planned.authentication_required {
-        return Outcome::AuthenticationRequired;
-    }
     let jobs: Vec<Job> = planned
         .roots
         .iter_mut()
@@ -832,14 +823,14 @@ impl Write {
                 GraphQlError::dab(messages::DATABASE_ERROR, codes::UNEXPECTED_ERROR)
             }),
             Done::NoRow if self.action == Action::Create => {
-                GraphQlError::dab(INSERT_REFUSED, codes::DATABASE_POLICY_FAILURE)
+                GraphQlError::dab(INSERT_REFUSED, codes::BAD_REQUEST)
             }
             Done::NoRow if self.action == Action::Update => {
-                GraphQlError::dab(self.not_found, codes::ITEM_NOT_FOUND)
+                GraphQlError::dab(self.not_found, codes::BAD_REQUEST)
             }
             // DAB reports a role that may not read once the transaction is over, rows or not.
             Done::NoRow | Done::Applied(_) if self.read.is_none() => {
-                GraphQlError::dab(read_denied(&self.field), codes::AUTHORIZATION_CHECK_FAILED)
+                GraphQlError::dab(read_denied(&self.field), codes::FORBIDDEN)
             }
             Done::NoRow | Done::Applied(None) => return Json::Null,
             Done::Applied(Some(row)) => {
