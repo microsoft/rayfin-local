@@ -85,6 +85,29 @@ pub struct Pool {
 }
 
 impl Pool {
+    fn safe_error(&self, error: SqlError) -> SqlError {
+        let password = match &self.endpoint.auth {
+            Auth::Password { password, .. } => Some(password.as_str()),
+            Auth::Entra { .. } => None,
+        };
+        tracing::warn!(
+            connector = %self.context.connector,
+            detail = %rl_tokens::redact_diagnostic(&error.to_string(), password),
+            "SQL connector database request failed"
+        );
+        match error {
+            SqlError::Database { number, .. } => SqlError::Database {
+                number,
+                message: crate::errors::sql_client_message(number)
+                    .unwrap_or(crate::errors::INTERNAL_MESSAGE)
+                    .to_owned(),
+            },
+            SqlError::Unavailable(_) => {
+                SqlError::Unavailable(crate::errors::INTERNAL_MESSAGE.to_owned())
+            }
+        }
+    }
+
     pub fn new(endpoint: Endpoint, context: Context, tokens: Arc<dyn TokenSource>) -> Arc<Self> {
         Arc::new(Self {
             endpoint,
@@ -376,15 +399,16 @@ impl SqlBackend for TdsBackend {
     fn query<'a>(&'a self, statement: &'a Statement) -> BoxFuture<'a, Result<Vec<Row>, SqlError>> {
         let pool = &self.0;
         Box::pin(async move {
-            let mut pooled = pool.get().await?;
-            match run_pooled(&mut pooled, statement, true).await {
-                Ok((rows, _)) => Ok(rows),
-                Err(Some(error)) => Err(error),
-                // A pooled connection the server closed: once more on a new one.
-                Err(None) => {
-                    drop(pooled);
-                    let mut fresh = pool.get().await?;
-                    match run_pooled(&mut fresh, statement, true).await {
+            let result = async {
+                let mut pooled = pool.get().await?;
+                match run_pooled(&mut pooled, statement, true).await {
+                    Ok((rows, _)) => Ok(rows),
+                    Err(Some(error)) => Err(error),
+                    // A pooled connection the server closed: once more on a new one.
+                    Err(None) => {
+                        drop(pooled);
+                        let mut fresh = pool.get().await?;
+                        match run_pooled(&mut fresh, statement, true).await {
                         Ok((rows, _)) => Ok(rows),
                         Err(error) => Err(error.unwrap_or_else(|| {
                             SqlError::Unavailable(format!(
@@ -394,43 +418,50 @@ impl SqlBackend for TdsBackend {
                             ))
                         })),
                     }
+                    }
                 }
             }
+            .await;
+            result.map_err(|error| pool.safe_error(error))
         })
     }
 
     fn begin(&self) -> BoxFuture<'_, Result<Box<dyn SqlTransaction>, SqlError>> {
         let pool = &self.0;
         Box::pin(async move {
-            let mut attempts = 0;
-            loop {
-                attempts += 1;
-                let mut pooled = pool.get().await?;
-                let reused = pooled.reused;
-                let begun = tokio::time::timeout(
-                    STATEMENT_TIMEOUT,
-                    simple(pooled.client(), "SET XACT_ABORT ON; BEGIN TRANSACTION"),
-                )
-                .await;
-                match begun {
-                    Ok(Ok(())) => {
-                        return Ok(Box::new(Transaction {
-                            pooled: Some(pooled),
-                        }) as Box<dyn SqlTransaction>);
-                    }
-                    Ok(Err(error)) => {
-                        pooled.discard();
-                        if reused && attempts == 1 && connection_lost(&error) {
-                            continue;
+            let result = async {
+                let mut attempts = 0;
+                loop {
+                    attempts += 1;
+                    let mut pooled = pool.get().await?;
+                    let reused = pooled.reused;
+                    let begun = tokio::time::timeout(
+                        STATEMENT_TIMEOUT,
+                        simple(pooled.client(), "SET XACT_ABORT ON; BEGIN TRANSACTION"),
+                    )
+                    .await;
+                    match begun {
+                        Ok(Ok(())) => {
+                            return Ok(Box::new(Transaction {
+                                pooled: Some(pooled),
+                            }) as Box<dyn SqlTransaction>);
                         }
-                        return Err(statement_error(&pool.context.connector, error));
-                    }
-                    Err(_) => {
-                        pooled.discard();
-                        return Err(timed_out(&pool.context.connector));
+                        Ok(Err(error)) => {
+                            pooled.discard();
+                            if reused && attempts == 1 && connection_lost(&error) {
+                                continue;
+                            }
+                            return Err(statement_error(&pool.context.connector, error));
+                        }
+                        Err(_) => {
+                            pooled.discard();
+                            return Err(timed_out(&pool.context.connector));
+                        }
                     }
                 }
             }
+            .await;
+            result.map_err(|error| pool.safe_error(error))
         })
     }
 }
@@ -458,11 +489,15 @@ impl Transaction {
             .as_mut()
             .expect("a transaction runs until committed");
         let connector = pooled.pool.context.connector.clone();
-        match tokio::time::timeout(STATEMENT_TIMEOUT, run(pooled.client(), statement, rows)).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(error)) => Err(statement_error(&connector, error)),
-            Err(_) => Err(timed_out(&connector)),
-        }
+        let result =
+            match tokio::time::timeout(STATEMENT_TIMEOUT, run(pooled.client(), statement, rows))
+                .await
+            {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(error)) => Err(statement_error(&connector, error)),
+                Err(_) => Err(timed_out(&connector)),
+            };
+        result.map_err(|error| pooled.pool.safe_error(error))
     }
 }
 
@@ -482,7 +517,7 @@ impl SqlTransaction for Transaction {
         Box::pin(async move {
             let mut pooled = self.pooled.take().expect("committed once");
             let connector = pooled.pool.context.connector.clone();
-            match tokio::time::timeout(
+            let result = match tokio::time::timeout(
                 STATEMENT_TIMEOUT,
                 simple(pooled.client(), "COMMIT TRANSACTION"),
             )
@@ -497,7 +532,8 @@ impl SqlTransaction for Transaction {
                     pooled.discard();
                     Err(timed_out(&connector))
                 }
-            }
+            };
+            result.map_err(|error| pooled.pool.safe_error(error))
         })
     }
 }

@@ -222,6 +222,12 @@ rayfin-local serve --json                  # for programs: JSON events on stdout
 
 Programs that run rayfin-local for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator), use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
 
+`--static` enforces `services.staticHosting.assetAccess: protected` on all app assets and
+runtime config. Vite remains an unprotected development surface and warns when protection is
+requested. Telemetry uses `[telemetry] application_insights_connection_string` in
+`rayfin-local.toml`, delivered only when `services.telemetry.enabled` is true.
+[Hosting and runtime config](docs/hosting.md) describes sign-in, defaults, and local differences.
+
 ### The backend's routes
 
 The backend has one origin, `http://localhost:7171` by default.
@@ -229,7 +235,7 @@ Its port is remembered per project; when it is busy, rayfin-local takes the next
 
 | Path | What it serves |
 | --- | --- |
-| `/rayfin.config.json` | The app's config: `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`. |
+| `/rayfin.config.json` | The app's config: `serviceMode: "fabric"`, `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`, and optional `applicationInsightsConnectionString`. |
 | `/api/auth/v1/*` | Auth: sign-up, sign-in, refresh tokens, sign-out. |
 | `/.well-known/jwks.json` | The public keys that verify access tokens. |
 | `/api/projectRuntimeSettings` | The auth settings from `rayfin.yml`. |

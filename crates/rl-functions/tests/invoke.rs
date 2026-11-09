@@ -186,6 +186,12 @@ impl Reply {
     /// `(error, message)` of an error answer.
     fn error(&self) -> (String, String) {
         let body = self.json();
+        if body["error"].is_object() {
+            return (
+                body["error"]["code"].as_str().unwrap().into(),
+                body["error"]["message"].as_str().unwrap().into(),
+            );
+        }
         let text = |key: &str| body[key].as_str().unwrap_or_default().to_owned();
         (text("error"), text("message"))
     }
@@ -295,8 +301,8 @@ async fn functions_answer_with_the_deployed_envelope() {
     let bigint = invoke(&router, "bigint", json!({})).await;
     assert_eq!(bigint.status, StatusCode::INTERNAL_SERVER_ERROR);
     let (code, message) = bigint.error();
-    assert_eq!(code, "FUNCTION_INVOKE_FAILED");
-    assert!(message.contains("BigInt"), "{message}");
+    assert_eq!(code, "InternalServerError");
+    assert_eq!(message, "An internal execution error occured");
 
     service.stop().await;
     let stopped = invoke(&router, "hello", json!({})).await;
@@ -640,8 +646,8 @@ async fn a_broken_build_answers_503_until_it_is_fixed() {
     let unavailable = invoke(&router, "hello", json!({})).await;
     assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
     let (code, message) = unavailable.error();
-    assert_eq!(code, "FUNCTIONS_UNAVAILABLE");
-    assert!(message.contains("functions build failed"), "{message}");
+    assert_eq!(code, "InternalServerError");
+    assert_eq!(message, "An internal execution error occured");
 
     std::fs::write(package.path.join("src/function_app.ts"), original).unwrap();
     let hello = eventually(

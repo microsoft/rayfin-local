@@ -63,6 +63,16 @@ impl ConfigChange {
         );
         change.add("secrets", before.secrets != after.secrets);
         change.add("fabric", local_before.fabric != local_after.fabric);
+        change.add(
+            "telemetry",
+            before.services.telemetry != after.services.telemetry
+                || local_before.telemetry != local_after.telemetry,
+        );
+        change.add(
+            "staticHosting",
+            before.services.static_hosting.asset_access
+                != after.services.static_hosting.asset_access,
+        );
 
         let (hosting, next_hosting) = (
             &before.services.static_hosting,
@@ -237,6 +247,25 @@ mod tests {
             ..ServeOptions::default()
         };
         assert_eq!(between(as_ana, &flagged), ConfigChange::default());
+    }
+
+    #[test]
+    fn telemetry_and_asset_access_apply_without_rebuilding_the_frontend() {
+        let dir = tempfile::tempdir().unwrap();
+        let served = project(dir.path(), SERVED, None);
+        let yaml = format!(
+            "{SERVED}  telemetry:\n    enabled: true\n  staticHosting:\n    assetAccess: protected\n"
+        );
+        let new = project(
+            dir.path(),
+            &yaml,
+            Some(
+                "[telemetry]\napplication_insights_connection_string = \"InstrumentationKey=local\"\n",
+            ),
+        );
+        let change = ConfigChange::between(&served, &new, &ServeOptions::default(), true);
+        assert_eq!(change.what, ["telemetry", "staticHosting"]);
+        assert!(change.restart.is_empty());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 // rayfin-local's Vite runner: starts the app's own Vite dev server (the project's `vite` package,
-// its vite.config and plugins) with extra plugins: `rayfin-local:shim` and, with a sign-in secret,
+// its vite.config and plugins) with extra plugins: `rayfin-local:shim`,
+// `rayfin-local:runtime-config` and, with a sign-in secret,
 // `rayfin-local:sign-in` and `rayfin-local:session-stamp`.
 //
 // Protocol (owner: crates/rl-frontend/src/dev.rs):
@@ -18,8 +19,9 @@
 // The shim plugin always proxies /.well-known/* (the SDK validates shared sessions with
 // <apiUrl>/.well-known/jwks.json) and /.rayfin-local/* to the backend. When the app doesn't use
 // `rayfinLocalDev()` from @microsoft/rayfin-local-dev, the shim also does what that plugin does for
-// a local backend: it serves /rayfin.config.json (apiUrl = this dev server's origin) and proxies
-// /api, /graphql, /connector-invoke, /connectors and /functions to the backend.
+// a local backend: it proxies /api, /graphql, /connector-invoke, /connectors and /functions.
+// The runtime-config plugin always forwards the backend's /rayfin.config.json, changing only
+// apiUrl to this dev server's origin, before the app's own plugins run.
 //
 // The sign-in plugin answers GET /.rayfin/dev/session-token, which pages of apps with
 // `rayfinLocalDev({ autoLogin: true })` ask for a session (`fetchRayfinLocalSessionToken()`), before
@@ -44,13 +46,6 @@ const RAYFIN_PLUGIN = 'rayfin-local-dev';
 const ALWAYS_PROXIED = '^/(?:\\.well-known|\\.rayfin-local)(?:/|$)';
 const BACKEND_PROXIED = '^/(?:api|graphql|connector-invoke|connectors|functions)(?:/|$)';
 const CONFIG_PATH = '/rayfin.config.json';
-const CONFIG_FIELDS = [
-  ['publishableKey', 'VITE_RAYFIN_PUBLISHABLE_KEY'],
-  ['workspaceId', 'VITE_FABRIC_WORKSPACE_ID'],
-  ['itemId', 'VITE_FABRIC_ITEM_ID'],
-  ['portalUrl', 'VITE_FABRIC_PORTAL_URL'],
-  ['tenantId', 'VITE_FABRIC_TENANT_ID'],
-];
 const BACKEND_UNAVAILABLE = JSON.stringify({ error: 'The local Rayfin backend is unavailable.' });
 const SESSION_TOKEN_PATH = '/.rayfin/dev/session-token';
 const BACKEND_SESSION_TOKEN_PATH = '/.rayfin-local/dev/session-token';
@@ -169,16 +164,6 @@ async function flattenPlugins(plugins) {
   return flat;
 }
 
-/** What `rayfinLocalDev()` serves as /rayfin.config.json, from the injected env. */
-function runtimeConfig(origin) {
-  const config = { apiUrl: origin };
-  for (const [field, name] of CONFIG_FIELDS) {
-    const value = process.env[name]?.trim();
-    if (value) config[field] = value;
-  }
-  return config;
-}
-
 function rayfinLocalShim({ backend }, state) {
   const proxyToBackend = {
     target: backend,
@@ -215,19 +200,41 @@ function rayfinLocalShim({ backend }, state) {
         );
       }
     },
-    configureServer(devServer) {
-      if (state.rayfinPlugin) return;
-      devServer.middlewares.use(CONFIG_PATH, (request, response, next) => {
-        const host = request.headers.host;
-        if (request.method !== 'GET' || !host) {
-          next();
-          return;
-        }
-        const protocol = request.socket.encrypted ? 'https:' : 'http:';
-        response.setHeader('content-type', 'application/json');
-        response.setHeader('cache-control', 'no-store');
-        response.end(JSON.stringify(runtimeConfig(`${protocol}//${host}`)));
-      });
+  };
+}
+
+function rayfinLocalRuntimeConfig({ backend }) {
+  return {
+    name: 'rayfin-local:runtime-config',
+    apply: 'serve',
+    enforce: 'pre',
+    configureServer: {
+      order: 'pre',
+      handler(devServer) {
+        devServer.middlewares.use((request, response, next) => {
+          if (request.url?.split('?')[0] !== CONFIG_PATH
+              || !['GET', 'HEAD'].includes(request.method)) return next();
+          // Run before rayfinLocalDev() too: deployment telemetry is owned by the backend,
+          // while API requests still go through this Vite origin's proxy.
+          (async () => {
+            const answer = await fetch(`${backend}${CONFIG_PATH}`, {
+              redirect: 'error', signal: AbortSignal.timeout(10_000),
+            });
+            if (!answer.ok) throw new Error('runtime config unavailable');
+            const config = await answer.json();
+            const protocol = request.socket.encrypted ? 'https:' : 'http:';
+            config.apiUrl = `${protocol}//${request.headers.host}`;
+            response.setHeader('content-type', 'application/json');
+            response.setHeader('cache-control', 'no-store');
+            response.end(request.method === 'HEAD' ? undefined : JSON.stringify(config));
+          })().catch(() => {
+            if (!response.headersSent) response.writeHead(502, {
+              'content-type': 'application/json', 'cache-control': 'no-store',
+            });
+            if (!response.writableEnded) response.end(BACKEND_UNAVAILABLE);
+          });
+        });
+      },
     },
   };
 }
@@ -387,6 +394,7 @@ async function main() {
       // stopped together with Vite's process tree.
       server: { host: options.host, port: options.port, strictPort: true, open: false },
       plugins: [
+        rayfinLocalRuntimeConfig(options),
         rayfinLocalShim(options, state),
         ...(signInSecret
           ? [rayfinLocalSignIn(options, signInSecret), rayfinLocalSessionStamp(options, signInSecret)]

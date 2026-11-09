@@ -18,6 +18,33 @@ fn app(power_bi: &str) -> axum::Router {
 }
 
 #[tokio::test]
+async fn connector_invoke_masks_internal_configuration_details() {
+    let power_bi = MockPowerBi::start().await;
+    let mut config = config(&power_bi.base_url);
+    config.connectors[0].config.remove("itemId");
+    let app = router(
+        config,
+        Arc::new(FakeCallers),
+        FakeTokens::with_token(DEV_TOKEN),
+    );
+    let (status, _, body) = post(
+        &app,
+        "/connector-invoke/sales",
+        Some(SESSION),
+        execute_query(json!({"query": ROW_QUERY})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        json_body(&body),
+        json!({"error": {
+            "code": "InternalServerError", "message": "An internal execution error occured",
+        }})
+    );
+    assert!(power_bi.requests().is_empty());
+}
+
+#[tokio::test]
 async fn streams_power_bis_arrow_answer_unchanged() {
     let power_bi = MockPowerBi::start().await;
     let tokens = FakeTokens::with_token(DEV_TOKEN);
@@ -599,11 +626,11 @@ async fn other_connector_types_answer_501() {
     .await;
     // A Category A connector runs locally once its entities are analyzed (`rl_connectors::sql`).
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(json_body(&body)["code"], "CONNECTOR_MISCONFIGURED");
     assert_eq!(
-        json_body(&body)["message"],
-        "Connector 'warehouse' can't run locally: The entities of connector 'warehouse' weren't \
-         analyzed; restart rayfin-local."
+        json_body(&body),
+        json!({"error": {
+            "code": "InternalServerError", "message": "An internal execution error occured",
+        }})
     );
 
     let (status, ..) = post(&app, "/connectors/nope/graphql", Some(SESSION), graphql).await;
