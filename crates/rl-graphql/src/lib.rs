@@ -33,8 +33,8 @@
 //!   [`plan::ConnectionField::GroupBy`] reuses the connection's `predicate` (filter and read
 //!   policy).
 //! - **Introspection**: `__schema`/`__type` are refused with Hot Chocolate's `HC0046` error
-//!   unless [`DataApiSettings::allow_introspection`]; when allowed they answer an error until a
-//!   resolver over [`schema::Schema`] is added (`exec::plan_root`). `__typename` always works.
+//!   unless [`DataApiSettings::allow_introspection`]; when allowed, standard introspection is
+//!   reflected from [`schema::Schema`]. `__typename` always works.
 
 pub mod access;
 pub mod admin;
@@ -44,6 +44,7 @@ mod cursor;
 pub mod error;
 mod exec;
 mod http;
+mod introspection;
 mod mutation;
 pub mod plan;
 pub mod policy;
@@ -110,6 +111,10 @@ pub(crate) struct Snapshot {
 
 impl Snapshot {
     fn new(model: Arc<AppModel>) -> Self {
+        let mut model = (*model).clone();
+        model.entities.retain(|entity| entity.name != "User");
+        model.entities.push(rl_model::system_user(model.dialect));
+        let model = Arc::new(model);
         Self::with_options(model, schema::SchemaOptions::default())
     }
 
