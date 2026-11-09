@@ -1,36 +1,31 @@
 //! Folder rules: a rule grants its `actions` to its `role` on objects matching its
 //! `pathPattern` when its `check` (if any) holds for the caller and the object.
 //!
-//! `anonymous` rules apply to every caller, `authenticated` rules to signed-in callers; other
-//! roles never apply (1.36.2 folders only have `authenticated` rules). A `check` is evaluated like
-//! the data path's policies: `eq null` / `ne null` test for a missing or null value, any other
-//! comparison with a missing or null value is false, and strings compare case-insensitively
-//! (Fabric's collation).
+//! Only authenticated grants with `pathPattern: "**"` apply. Checks are admitted against
+//! BaaS's storage whitelist before serving. Equality requires two non-null values; inequality
+//! also matches exactly one null. Missing allowed claims bind null, not an authorization error.
+//! Strings compare exactly: BaaS emits SQL comparisons, never blanket lowercasing.
 
 use rl_model::{
     Action, Caller, CompareOp, Literal, Operand, PolicyExpr, StorageFolder, StorageRule,
 };
 use serde_json::{Map, Value};
 
-use crate::names::glob_match;
-
-/// Whether some rule could grant `action` to `caller` (checks and paths not considered).
+/// Whether some rule could grant `action` to `caller` (object checks not considered).
 pub(crate) fn may(folder: &StorageFolder, caller: &Caller, action: Action) -> bool {
     folder.rules.iter().any(|rule| grants(rule, caller, action))
 }
 
 /// Whether a rule grants `action` on `item` (the object's fields, as [`crate::store`] builds
-/// them; `path` is the logical path).
+/// them).
 pub(crate) fn allows(
     folder: &StorageFolder,
     caller: &Caller,
     action: Action,
     item: &Map<String, Value>,
 ) -> bool {
-    let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
     folder.rules.iter().any(|rule| {
         grants(rule, caller, action)
-            && path_matches(&rule.path_pattern, path)
             && rule
                 .check
                 .as_ref()
@@ -39,38 +34,41 @@ pub(crate) fn allows(
 }
 
 fn grants(rule: &StorageRule, caller: &Caller, action: Action) -> bool {
-    let role_applies = rule.role.eq_ignore_ascii_case("anonymous")
-        || rule.role.eq_ignore_ascii_case(caller.role());
+    let role_applies = rule.role.eq_ignore_ascii_case("authenticated")
+        && caller
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.user_id.trim().is_empty())
+        && !claim(caller, "role")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .is_some_and(|role| role.eq_ignore_ascii_case("anonymous"));
     role_applies
+        && rule.path_pattern == "**"
         && rule
             .actions
             .iter()
             .any(|granted| *granted == action || *granted == Action::All)
 }
 
-fn path_matches(pattern: &str, path: &str) -> bool {
-    pattern.is_empty() || glob_match(pattern, path)
-}
-
 fn eval(expr: &PolicyExpr, caller: &Caller, item: &Map<String, Value>) -> bool {
     match expr {
-        PolicyExpr::And(operands) => operands.iter().all(|e| eval(e, caller, item)),
-        PolicyExpr::Or(operands) => operands.iter().any(|e| eval(e, caller, item)),
+        PolicyExpr::And(operands) => operands
+            .iter()
+            .fold(true, |allowed, e| eval(e, caller, item) & allowed),
+        PolicyExpr::Or(operands) => operands
+            .iter()
+            .fold(false, |allowed, e| eval(e, caller, item) | allowed),
         PolicyExpr::Compare { op, left, right } => {
-            let is_null_literal =
-                |operand: &Operand| matches!(operand, Operand::Literal(Literal::Null));
-            let equal = if is_null_literal(left) || is_null_literal(right) {
-                let other = if is_null_literal(right) { left } else { right };
-                resolve(other, caller, item).is_none()
-            } else {
-                match (resolve(left, caller, item), resolve(right, caller, item)) {
-                    (Some(left), Some(right)) => values_equal(&left, &right),
-                    _ => return false,
+            match (resolve(left, caller, item), resolve(right, caller, item)) {
+                (Some(left), Some(right)) => {
+                    let equal = values_equal(&left, &right);
+                    match op {
+                        CompareOp::Eq => equal,
+                        CompareOp::Ne => !equal,
+                    }
                 }
-            };
-            match op {
-                CompareOp::Eq => equal,
-                CompareOp::Ne => !equal,
+                (None, None) => false,
+                _ => *op == CompareOp::Ne,
             }
         }
     }
@@ -97,8 +95,9 @@ fn claim(caller: &Caller, name: &str) -> Option<Value> {
             .email
             .clone()
             .map(Value::String)
-            .or_else(|| caller.claim(name).cloned()),
-        _ => caller.claim(name).cloned(),
+            .or_else(|| caller.claim(name).and_then(Value::as_str).map(|s| s.into())),
+        "role" => caller.claim(name).and_then(Value::as_str).map(|s| s.into()),
+        _ => None,
     }
 }
 
@@ -106,18 +105,8 @@ fn values_equal(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        // A multi-valued claim (`roles`) matches when one of its values does.
-        (Value::Array(values), other) | (other, Value::Array(values)) => {
-            values.iter().any(|value| values_equal(value, other))
-        }
-        _ => text(left).to_lowercase() == text(right).to_lowercase(),
-    }
-}
-
-fn text(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        (Value::String(a), Value::String(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -171,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_checks_compare_the_sub_claim_case_insensitively() {
+    fn owner_checks_compare_the_sub_claim_exactly() {
         let owner_only = compare(
             CompareOp::Eq,
             Operand::Claim("sub".into()),
@@ -182,8 +171,9 @@ mod tests {
             &[Action::Read],
             Some(owner_only),
         )]);
-        let mine = item(json!({ "owner_id": "User-1" }));
+        let mine = item(json!({ "owner_id": "user-1" }));
         assert!(allows(&folder, &user("user-1"), Action::Read, &mine));
+        assert!(!allows(&folder, &user("User-1"), Action::Read, &mine));
         assert!(!allows(&folder, &user("user-2"), Action::Read, &mine));
         assert!(!allows(&folder, &user("user-1"), Action::Delete, &mine));
         assert!(!allows(&folder, &Caller::anonymous(), Action::Read, &mine));
@@ -196,45 +186,165 @@ mod tests {
     }
 
     #[test]
-    fn null_literals_test_presence_and_other_nulls_never_match() {
-        let has_team = compare(
-            CompareOp::Ne,
-            Operand::Field("team_id".into()),
-            Operand::Literal(Literal::Null),
-        );
-        let no_team = compare(
-            CompareOp::Eq,
-            Operand::Field("team_id".into()),
-            Operand::Literal(Literal::Null),
-        );
-        let not_owner = compare(
-            CompareOp::Ne,
-            Operand::Claim("sub".into()),
-            Operand::Field("owner_id".into()),
-        );
-        let caller = user("u1");
-        let with_team = item(json!({ "team_id": "t1" }));
-        let without_team = item(json!({ "team_id": null }));
-        assert!(eval(&has_team, &caller, &with_team));
-        assert!(!eval(&has_team, &caller, &without_team));
-        assert!(eval(&no_team, &caller, &without_team));
-        assert!(!eval(&not_owner, &caller, &without_team));
-        let both = PolicyExpr::Or(vec![no_team, has_team]);
-        assert!(eval(&both, &caller, &item(json!({}))));
+    fn comparison_decision_table() {
+        for (fields, eq, neq) in [
+            (json!({"a": "x", "b": "x"}), true, false),
+            (json!({"a": "x", "b": "y"}), false, true),
+            (json!({"a": "x", "b": "X"}), false, true),
+            (json!({"a": null, "b": "x"}), false, true),
+            (json!({"a": "x", "b": null}), false, true),
+            (json!({"b": "x"}), false, true),
+            (json!({"a": null, "b": null}), false, false),
+            (json!({}), false, false),
+            (json!({"a": 1, "b": 1.0}), true, false),
+            (json!({"a": false, "b": false}), true, false),
+        ] {
+            let fields = item(fields);
+            for (op, expected) in [(CompareOp::Eq, eq), (CompareOp::Ne, neq)] {
+                let check = compare(op, Operand::Field("a".into()), Operand::Field("b".into()));
+                assert_eq!(
+                    eval(&check, &user("u"), &fields),
+                    expected,
+                    "{fields:?} {op:?}"
+                );
+            }
+        }
+        for (left, right) in [
+            (json!(1), json!("1")),
+            (json!(true), json!("true")),
+            (json!(["x"]), json!("x")),
+        ] {
+            assert!(!values_equal(&left, &right));
+        }
     }
 
     #[test]
-    fn anonymous_rules_apply_to_everyone_and_star_grants_every_action() {
-        let folder = folder(vec![
-            rule("anonymous", &[Action::Read], None),
-            rule("authenticated", &[Action::All], None),
-        ]);
+    fn authenticated_rules_and_star_grants() {
+        let folder = folder(vec![rule("authenticated", &[Action::All], None)]);
         let any = item(json!({}));
-        assert!(allows(&folder, &Caller::anonymous(), Action::Read, &any));
+        assert!(!allows(&folder, &Caller::anonymous(), Action::Read, &any));
         assert!(!allows(&folder, &Caller::anonymous(), Action::Create, &any));
         assert!(allows(&folder, &user("u"), Action::Read, &any));
         assert!(allows(&folder, &user("u"), Action::Delete, &any));
         assert!(may(&folder, &user("u"), Action::Update));
         assert!(!may(&folder, &Caller::anonymous(), Action::Update));
+    }
+
+    #[test]
+    fn only_baas_rule_roles_paths_and_actions_apply() {
+        for (role, path, granted, expected) in [
+            ("authenticated", "**", Action::Read, true),
+            ("AUTHENTICATED", "**", Action::All, true),
+            ("authenticated", "**", Action::Update, false),
+            ("authenticated", "*.txt", Action::Read, false),
+            ("authenticated", "", Action::Read, false),
+            ("editor", "**", Action::Read, false),
+        ] {
+            let mut rule = rule(role, &[granted], None);
+            rule.path_pattern = path.into();
+            let folder = folder(vec![rule]);
+            assert_eq!(may(&folder, &user("u"), Action::Read), expected);
+            assert_eq!(
+                allows(&folder, &user("u"), Action::Read, &item(json!({}))),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn logical_checks_allow_missing_email_without_a_missing_claim_error() {
+        let missing_email = compare(
+            CompareOp::Eq,
+            Operand::Claim("email".into()),
+            Operand::Field("mail".into()),
+        );
+        let matches_sub = compare(
+            CompareOp::Eq,
+            Operand::Claim("sub".into()),
+            Operand::Literal(Literal::String("u".into())),
+        );
+        for (args, expected_and, expected_or) in [
+            (
+                vec![matches_sub.clone(), missing_email.clone()],
+                false,
+                true,
+            ),
+            (vec![missing_email, matches_sub], false, true),
+        ] {
+            assert_eq!(
+                eval(&PolicyExpr::And(args.clone()), &user("u"), &item(json!({}))),
+                expected_and
+            );
+            assert_eq!(
+                eval(&PolicyExpr::Or(args), &user("u"), &item(json!({}))),
+                expected_or
+            );
+        }
+    }
+
+    #[test]
+    fn missing_allowed_claims_bind_null() {
+        let caller = user("u");
+        for (fields, eq, neq) in [
+            (json!({"mail": "u@example.test"}), false, true),
+            (json!({"mail": null}), false, false),
+            (json!({}), false, false),
+        ] {
+            for (op, expected) in [(CompareOp::Eq, eq), (CompareOp::Ne, neq)] {
+                let check = compare(
+                    op,
+                    Operand::Claim("email".into()),
+                    Operand::Field("mail".into()),
+                );
+                assert_eq!(eval(&check, &caller, &item(fields.clone())), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn matching_rules_form_a_permissive_union() {
+        let check = compare(
+            CompareOp::Eq,
+            Operand::Claim("sub".into()),
+            Operand::Literal(Literal::String("other".into())),
+        );
+        for (checks, expected) in [
+            (vec![Some(check.clone())], false),
+            (vec![Some(check.clone()), None], true),
+            (vec![None, Some(check)], true),
+        ] {
+            let folder = folder(
+                checks
+                    .into_iter()
+                    .map(|check| rule("authenticated", &[Action::Read], check))
+                    .collect(),
+            );
+            assert_eq!(
+                allows(&folder, &user("u"), Action::Read, &item(json!({}))),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_claim_values_are_not_data_policy_roles() {
+        let mut caller = user("u");
+        caller.session.as_mut().unwrap().claims =
+            json!({"role": "editor", "email": "u@example.test"})
+                .as_object()
+                .unwrap()
+                .clone();
+        assert_eq!(claim(&caller, "role"), Some(json!("editor")));
+        assert_eq!(claim(&caller, "email"), Some(json!("u@example.test")));
+        assert_eq!(claim(&caller, "custom"), None);
+        let folder = folder(vec![rule("authenticated", &[Action::Read], None)]);
+        assert!(allows(&folder, &caller, Action::Read, &item(json!({}))));
+        caller
+            .session
+            .as_mut()
+            .unwrap()
+            .claims
+            .insert("role".into(), json!("anonymous"));
+        assert!(!allows(&folder, &caller, Action::Read, &item(json!({}))));
     }
 }

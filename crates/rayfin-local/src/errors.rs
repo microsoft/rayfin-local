@@ -58,6 +58,12 @@ impl HostError {
 
 /// The code and details of an error type that has them.
 fn known(cause: &(dyn StdError + 'static)) -> Option<(ErrorCode, Value)> {
+    if matches!(
+        cause.downcast_ref::<rl_model::ModelError>(),
+        Some(rl_model::ModelError::Storage { .. })
+    ) {
+        return Some((ErrorCode::ConfigInvalid, no_details()));
+    }
     if let Some(err) = cause.downcast_ref::<ProjectError>() {
         return Some(match err {
             ProjectError::NotFound { .. } => (ErrorCode::ProjectNotFound, no_details()),
@@ -187,10 +193,23 @@ impl StdError for Coded {
 
 /// `error`, tagged with `code` and `details`.
 pub fn coded(code: ErrorCode, details: Value, error: impl Into<anyhow::Error>) -> anyhow::Error {
+    let error = error.into();
+    // Storage manifests are deployment configuration, even when discovered during analysis.
+    let code = if code == ErrorCode::AnalysisFailed
+        && error.chain().any(|cause| {
+            matches!(
+                cause.downcast_ref::<rl_model::ModelError>(),
+                Some(rl_model::ModelError::Storage { .. })
+            )
+        }) {
+        ErrorCode::ConfigInvalid
+    } else {
+        code
+    };
     anyhow::Error::new(Coded {
         code,
         details,
-        error: error.into(),
+        error,
     })
 }
 
@@ -222,6 +241,16 @@ mod tests {
 
     #[test]
     fn typed_errors_have_codes_and_details() {
+        let storage = rl_model::ModelError::Storage {
+            folder: "documents".into(),
+            message: "rule[1]: unsupported claim `custom`; use sub, email, role".into(),
+        };
+        let storage = Err::<(), _>(anyhow::Error::new(storage).context("Could not analyze"))
+            .with_code(ErrorCode::AnalysisFailed)
+            .unwrap_err();
+        let host = HostError::classify(&storage);
+        assert_eq!(host.code, ErrorCode::ConfigInvalid);
+        assert!(host.message.contains("documents") && host.message.contains("rule[1]"));
         let not_installed = ProjectError::NotInstalled {
             package: "@microsoft/rayfin-core".into(),
             searched_from: PathBuf::from("app"),
