@@ -171,7 +171,7 @@ async fn queries_read_the_source_with_roles_and_policies() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    // An entity out of step with its table: DAB's error, the server's message as its detail.
+    // Fabric exposes the curated schema mismatch, never SQL object names or raw detail.
     admin(
         &server,
         &database.name,
@@ -185,21 +185,12 @@ async fn queries_read_the_source_with_roles_and_policies() {
     )
     .await;
     let error = &body["errors"][0];
-    assert_eq!(
-        error["extensions"]["code"], "DatabaseOperationFailed",
-        "{body}"
-    );
+    assert_eq!(error["extensions"]["code"], "BadRequest", "{body}");
     assert_eq!(
         error["message"],
-        "While processing your request the database ran into an error."
+        "The destination, destination table, column, or view could not be found. Please contact the API owner to verify the data source."
     );
-    assert!(
-        error["extensions"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Invalid column name 'description'"),
-        "{body}"
-    );
+    assert!(error["extensions"].get("detail").is_none(), "{body}");
     assert_eq!(error["path"], json!(["categories"]));
 
     database.drop().await;
@@ -270,15 +261,13 @@ async fn mutations_on_a_sql_database_return_the_row() {
         json!({"data": {"createStockLevel": {"warehouseCode": "NYC", "quantity": 3}}})
     );
     let body = graphql(&app, Some("alice"), &create).await;
+    assert_eq!(body["errors"][0]["extensions"]["code"], "BadRequest");
     assert_eq!(
-        body["errors"][0]["extensions"]["code"],
-        "DatabaseOperationFailed"
+        body["errors"][0]["message"],
+        "The request failed in data source. Cannot insert duplicate key in object."
     );
     assert!(
-        body["errors"][0]["extensions"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("PRIMARY KEY"),
+        body["errors"][0]["extensions"].get("detail").is_none(),
         "{body}"
     );
     let body = graphql(

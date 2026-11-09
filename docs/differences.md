@@ -99,7 +99,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | `ctx.getDataClient()` | Supported | Calls the local data API as the caller. |
 | `ctx.Tokens.<Audience>` (`Sql`, `Storage`, `Fabric`, `AzureAI`, `ADO`) | Differs | Tokens for you, not the app's identity. A token that can't be minted is left out: the function still runs, reading it throws "No token available for audience…", and `serve` logs why. |
 | `ctx.Secrets.<NAME>` | Differs | Local values, from `local.settings.json` `Values`, the environment, or `.rayfin-local/secrets.json` (`rayfin-local secret set`). |
-| Error messages | Differs | Deployed, 5xx bodies hide their cause behind `internal_server_error`; locally the message says what failed. |
+| Error messages | Supported | Service-generated 5xx responses hide their cause behind Fabric's `InternalServerError`; the original diagnostic is logged with credentials redacted. Client errors and app-authored upstream responses are preserved. See [hosting.md](hosting.md#system-errors). |
 | Limits | Differs | The 250-second timeout (408) is the UDF ceiling, and results over 30 MiB fail with `ResponseTooLarge`, as deployed. Request bodies over 30 MiB get 413, a limit of rayfin-local's own. |
 | Logs | Differs | `console.*` output goes to `serve`'s output, prefixed `[fn]`, not to Fabric's monitoring. |
 
@@ -113,7 +113,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | Category A SQL connectors (`fabric-sqldatabase`, `fabric-warehouse`, `fabric-sqlanalytics`): queries, keys, relationships, filters, `orderBy`, cursor pagination | Differs | The DAB-style GraphQL API that `rayfin up` would deploy, answered by rayfin-local over the connector's real Fabric item. They run as you, with your Entra token, even for `auth: application` connectors (see [Who acts](#who-acts)); a `delegated` connector still needs a signed-in user. [sql-connectors.md](sql-connectors.md) has the details. |
 | Category A mutations | Differs | Run as you on the real item. A SQL database answers the row, a Warehouse `DbOperationResult`, and a SQL analytics endpoint has no mutations, as on Fabric. A create on a keyless entity of a SQL database answers `null` (the row is written). |
 | Category A `@role` grants, field lists and policies | Supported | Enforced by rayfin-local in every statement, against the signed-in local user, as for data entities. Grants beyond the connector's `operations:` (which `rayfin up` refuses) are dropped with a warning. |
-| Category A values and errors | Differs | DAB's formats and error codes. Scalars follow the entity decorators (`@int` is `Int` even on a `bigint` column, where Fabric's DAB says `Long`). Statements the database refuses answer DAB's `DatabaseOperationFailed` with the server's message as `extensions.detail`, which Fabric hides; a database that can't be reached or refuses your sign-in answers a GraphQL error that says what to do. |
+| Category A values and errors | Differs | Scalars follow the entity decorators (`@int` is `Int` even on a `bigint` column, where Fabric's DAB says `Long`). Errors follow Fabric's GraphQL workload: vetted SQL client faults get curated `BadRequest` messages; internal failures get `InternalServerError`. SQL detail is only in redacted serve logs, never `extensions.detail`. |
 | Category A aggregations (`groupBy`, `aggregate`) | Not supported | Answer an error that names them. |
 | Category A setup checks | Differs | Entity names that are reserved or collide across connectors are not refused as `rayfin up` refuses them. |
 | `kusto` and other connector types | Not supported | Answer 501 `not_supported`. |
@@ -137,6 +137,8 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | The app's Vite dev server | Supported | Your `vite.config` and plugins. rayfin-local starts Vite itself with the local environment, never `npm run dev`. |
 | `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`) | Supported | Used when your Vite config has it; otherwise rayfin-local adds a plugin that serves `/rayfin.config.json` and proxies the SDK's routes. |
 | Static hosting | Differs | `--static` builds once with `services.staticHosting.buildCommand` and serves the output from the backend origin, with the SPA fallback to `indexDocument`; it doesn't rebuild on changes. |
+| Protected assets (`assetAccess: protected`) | Differs | Enforced for every asset and runtime config in `--static`: document loads get a sign-in page, asset fetches a 401. Vite is not gated and warns. Local sessions stand in for Fabric item authorization; absent `assetAccess` retains the legacy public default. [hosting.md](hosting.md#asset-access) lists the cookie/auth differences. |
+| Telemetry config | Differs | `services.telemetry.enabled` delivers the optional `applicationInsightsConnectionString` from `[telemetry]` in `rayfin-local.toml`, on static builds and Vite. No Azure resource is provisioned; enabled without a value warns and omits the field. |
 
 ## Platform
 

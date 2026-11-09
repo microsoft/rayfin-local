@@ -687,9 +687,10 @@ async fn serve_until_stopped(
         functions.stop().await;
     });
     // Live reload replaces the router; the listeners stay.
-    let router = RouterHandle::new(rl_server::build_router(
+    let router = RouterHandle::new(rl_server::build_router_with_hosting(
         server_config(ctx, static_site.clone()),
         features.routers(ctx),
+        hosting_options(ctx),
     ));
     let mut stop = running.stop.subscribe();
     let server = running.server.insert(tokio::spawn(rl_server::serve(
@@ -1173,6 +1174,38 @@ pub(crate) fn server_config(
             .iter()
             .map(|path| (*path).to_owned())
             .collect(),
+    }
+}
+
+pub(crate) fn hosting_options(ctx: &ServeContext<'_>) -> rl_server::HostingOptions {
+    let services = &ctx.project.config().services;
+    let protected =
+        services.static_hosting.asset_access == Some(rl_project::config::AssetAccess::Protected);
+    if protected && ctx.options.static_build && !services.auth.enabled {
+        tracing::warn!(
+            "protected static hosting uses local sign-in: enable services.auth and a sign-in \
+             method in rayfin.yml, or the protected app cannot be opened"
+        );
+    }
+    if protected && ctx.frontend_port.is_some() {
+        tracing::warn!(
+            "services.staticHosting.assetAccess is protected, but Vite serves development assets \
+             without the Fabric hosting gate. Use `rayfin-local serve --static` to enforce \
+             sign-in on every asset and /rayfin.config.json"
+        );
+    }
+    rl_server::HostingOptions {
+        telemetry_enabled: services
+            .telemetry
+            .is_some_and(|telemetry| telemetry.enabled),
+        application_insights_connection_string: ctx
+            .project
+            .local_config()
+            .telemetry
+            .application_insights_connection_string
+            .clone(),
+        protected_assets: (protected && ctx.options.static_build)
+            .then(|| Arc::clone(ctx.auth) as Arc<dyn rl_model::CallerResolver>),
     }
 }
 

@@ -263,6 +263,9 @@ pub(crate) fn runs_as_signed_in_user(connector: &ConnectorDef, delegated_by_defa
 /// A service refusal, shaped like the deployed route's (`code`, `message`, `httpStatusCode`). The
 /// SDK throws it as `NetworkError(message, status)`.
 pub(crate) fn service_error(status: StatusCode, code: &str, message: String) -> Response {
+    if status.is_server_error() {
+        return crate::errors::internal(status, code, &message);
+    }
     tracing::debug!(status = status.as_u16(), code, "connector request refused");
     let body = json!({ "code": code, "message": message, "httpStatusCode": status.as_u16() });
     (status, Json(body)).into_response()

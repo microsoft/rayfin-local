@@ -31,14 +31,17 @@
 //!   `Validation/FunctionInputValidation.cs`); `Content-Type: application/json` (415
 //!   `FUNCTION_INVOKE_INVALID_CONTENT_TYPE`). Then rayfin-local's own: a body of at most 30 MiB
 //!   (413), valid JSON (400; an empty body means `{}`).
-//! - **Errors without an envelope** use the deployed shape `{"error": <code>, "message"}`
-//!   (Rayfin: `Middleware/RayfinExceptionMiddleware.cs`): unknown function 404
+//! - **Client errors without an envelope** retain their code and message: unknown function 404
 //!   `FUNCTION_NOT_FOUND`; host (re)starting, or its start failed for a reason that may pass
 //!   (it is tried again), 503 `FUNCTION_HOST_STARTING` with `Retry-After`;
 //!   functions not built or not loadable 503 `FUNCTIONS_UNAVAILABLE`; past the timeout (250 s,
 //!   the UDF ceiling) 408 `FUNCTION_INVOKE_TIMEOUT`; no response from the function (a crash, a
-//!   `BigInt` result) 500 `FUNCTION_INVOKE_FAILED`. Deployed 5xx bodies hide their cause behind
-//!   `internal_server_error`; locally the message says what failed.
+//!   `BigInt` result) 500. Service-generated 5xx bodies use Fabric's masked
+//!   `{"error":{"code":"InternalServerError","message":"An internal execution error occured"}}`;
+//!   the original code and redacted diagnostic are logged at error level. This is BaaS's
+//!   `BaaSCodeMarker` / `ExceptionConstants.InternalError` contract, not the OSS middleware's
+//!   `internal_server_error`. As in BaaS, app-authored HTTP responses and HTTP 200 UDF envelopes
+//!   are relayed unchanged.
 //!
 //! # What the function gets
 //!

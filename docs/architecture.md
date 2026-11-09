@@ -312,10 +312,11 @@ Decimals are stored as `REAL`, so they lose precision beyond about 15 significan
 node vite-dev.mjs --root <frontend dir> --host <host> --port <port> --backend <backend origin>
 ```
 
-The helper starts the app's own `vite` package with its config and plugins, on exactly the chosen port, and adds one plugin, `rayfin-local:shim` (and, for [automatic sign-in](#automatic-sign-in), `rayfin-local:sign-in`):
+The helper starts the app's own `vite` package with its config and plugins, on exactly the chosen port, and adds `rayfin-local:shim`, `rayfin-local:runtime-config` (and, for [automatic sign-in](#automatic-sign-in), `rayfin-local:sign-in`):
 
 - It always proxies `/.well-known/*` and `/.rayfin-local/*` to the backend.
-- When the app's Vite config doesn't use `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`), it also does what that plugin does: it serves `/rayfin.config.json` with the dev server's origin as `apiUrl`, and proxies `/api`, `/graphql`, `/connector-invoke`, `/connectors` and `/functions` to the backend.
+- Before the app's plugins run, it forwards the backend's `/rayfin.config.json`, including telemetry, changing only `apiUrl` to the dev server's origin.
+- When the app's Vite config doesn't use `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`), it also proxies `/api`, `/graphql`, `/connector-invoke`, `/connectors` and `/functions` to the backend.
 
 The local values reach the app through Vite's process environment, which beats the app's `.env` files in Vite's `loadEnv`; no file is written.
 Each value is set under its `RAYFIN_PUBLIC_*` name, which `rayfinLocalDev()` reads, and its `VITE_*` name, which the app reads:
@@ -340,6 +341,11 @@ Each value is set under its `RAYFIN_PUBLIC_*` name, which `rayfinLocalDev()` rea
 The output folder (`services.staticHosting.folder`) must then hold the index document (`indexDocument`, default `index.html`).
 With `--reuse-build`, an output folder that already holds it is served as it is, without running the build command, so it keeps the values it was built with.
 `rl-server` serves it from the backend origin with an SPA fallback, and `/rayfin.config.json` gives the backend origin as `apiUrl`, so the app and the API share one origin.
+
+`assetAccess: protected` gates all static content and runtime config with a verified local
+session cookie. Without one, document navigations get a sign-in interstitial and asset fetches
+get Fabric's JSON 401. Public and absent access settings retain public serving. Vite is not
+gated. [hosting.md](hosting.md) covers the bootstrap, telemetry configuration, and local gaps.
 
 ## Functions
 
