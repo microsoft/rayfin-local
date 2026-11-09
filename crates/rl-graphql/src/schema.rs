@@ -9,7 +9,7 @@
 //! - `type E`: the columns some role may read (exposed names, `!` when NOT NULL), then the
 //!   relationships: `@one` as `Target` (`Target!` when its FK column is NOT NULL and the
 //!   relationship is not self-referencing), `@many` as `TargetConnection` with its own
-//!   `first`/`after`/`filter`/`orderBy`. Relationships to the system `User` are not exposed.
+//!   `first`/`after`/`filter`/`orderBy`, including relationships to the system `User`.
 //! - `EConnection { items: [E!]!, endCursor: String, hasNextPage: Boolean! }`, plus
 //!   `groupBy(fields: [EScalarFields!]): [EGroupBy!]!` and its types (`crate::aggregate`).
 //! - `EFilterInput`: a `<Scalar>FilterInput` per column, a `TargetFilterInput` per relationship,
@@ -267,6 +267,7 @@ impl Schema {
             fields: query_fields,
         }));
         crate::mutation::extend_schema(&mut schema, model);
+        crate::introspection::extend_schema(&mut schema);
         schema
     }
 
@@ -470,15 +471,12 @@ fn entity_object(model: &AppModel, index: usize, exposed: &[bool]) -> ObjectDef 
     }
 }
 
-/// The target entity of an exposed relationship (not the system `User`, and with a type).
+/// The target entity of an exposed relationship, including the system `User` when registered.
 pub fn relationship_target(
     model: &AppModel,
     rel: &rl_model::Relationship,
     exposed: &[bool],
 ) -> Option<usize> {
-    if rel.target_is_system {
-        return None;
-    }
     let target = model.entities.iter().position(|e| e.name == rel.target)?;
     exposed[target].then_some(target)
 }

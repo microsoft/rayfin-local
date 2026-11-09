@@ -3,11 +3,13 @@
 //! [`Db`] is the shared handle. Components keep their own tables (named `_rl_<component>_*`) and
 //! evolve them with [`Db::migrate_component`]; the entity tables are derived from the app model:
 //! [`codec`] (value storage and conversions), [`schema`] (DDL) and [`migrate`] (migrations).
+//! The `system` component owns `Users(Id, Email)`, outside app entity migration snapshots.
 
 pub mod codec;
 mod error;
 pub mod migrate;
 pub mod schema;
+mod system;
 
 use std::{
     path::{Path, PathBuf},
@@ -69,16 +71,16 @@ impl Db {
                 source,
             })?;
         }
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-        configure(&conn)?;
+        configure(&mut conn)?;
         Ok(Self::from_connection(conn, Some(path.to_path_buf())))
     }
 
     /// A private in-memory database, for tests.
     pub fn open_in_memory() -> Result<Self, DbError> {
-        let conn = Connection::open_in_memory()?;
-        configure(&conn)?;
+        let mut conn = Connection::open_in_memory()?;
+        configure(&mut conn)?;
         Ok(Self::from_connection(conn, None))
     }
 
@@ -131,10 +133,11 @@ impl Db {
     }
 }
 
-fn configure(conn: &Connection) -> rusqlite::Result<()> {
+fn configure(conn: &mut Connection) -> Result<(), DbError> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.busy_timeout(Duration::from_secs(5))?;
+    migrate(conn, "system", system::STEPS)?;
     Ok(())
 }
 

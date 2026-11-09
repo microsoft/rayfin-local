@@ -278,15 +278,17 @@ impl Validator<'_> {
             self.no_selection(field, parent, "String!");
             return;
         }
-        if root && (name == "__schema" || name == "__type") && parent == self.schema.query_type {
-            if !self.allow_introspection {
-                self.errors.push(
-                    GraphQlError::new("Introspection is not allowed for the current request.")
-                        .at(field.pos)
-                        .ext("field", name)
-                        .code(crate::error::codes::INTROSPECTION_NOT_ALLOWED),
-                );
-            }
+        if root
+            && (name == "__schema" || name == "__type")
+            && parent == self.schema.query_type
+            && !self.allow_introspection
+        {
+            self.errors.push(
+                GraphQlError::new("Introspection is not allowed for the current request.")
+                    .at(field.pos)
+                    .ext("field", name)
+                    .code(crate::error::codes::INTROSPECTION_NOT_ALLOWED),
+            );
             return;
         }
         let Some(def) = self.schema.object(parent).and_then(|o| o.fields.get(name)) else {

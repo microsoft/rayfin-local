@@ -514,6 +514,103 @@ mod tests {
     use super::*;
     use crate::tests::service;
 
+    fn mirrored(auth: &AuthService) -> Vec<(String, String)> {
+        auth.db.call_blocking(|conn| {
+            conn.prepare("SELECT Id, Email FROM Users ORDER BY Email")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn all_identity_creation_paths_mirror_the_token_subject_and_email() {
+        let (_dir, auth) = service().await;
+        let password = auth
+            .create_user("password@example.test", "secret")
+            .await
+            .unwrap();
+        let automatic = auth.find_or_create_user("automatic").await.unwrap();
+        let external = auth
+            .find_or_create_external_user(
+                "external-oid",
+                Some("external@example.test"),
+                Some("Ada"),
+            )
+            .await
+            .unwrap();
+        for user in [&password, &automatic, &external] {
+            assert!(uuid::Uuid::parse_str(&user.id).is_ok());
+            let tokens = auth.issue_session(user).await.unwrap();
+            let claims = auth.verify_session_token(&tokens.access_token).unwrap();
+            assert_eq!(claims.sub, user.id);
+        }
+        assert_eq!(
+            mirrored(&auth),
+            [
+                (automatic.id, "automatic".into()),
+                (external.id.clone(), "external@example.test".into()),
+                (password.id, "password@example.test".into()),
+            ]
+        );
+        let refreshed = auth
+            .find_or_create_external_user("external-oid", Some("updated@example.test"), None)
+            .await
+            .unwrap();
+        assert_eq!(refreshed.id, external.id);
+        assert!(mirrored(&auth).contains(&(external.id, "updated@example.test".into())));
+    }
+
+    #[tokio::test]
+    async fn old_auth_databases_backfill_before_user_foreign_keys_are_added() {
+        let db = rl_db::Db::open_in_memory().unwrap();
+        db.migrate_component(crate::schema::COMPONENT, &crate::schema::STEPS[..3])
+            .await
+            .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let legacy_id = id.clone();
+        db.call_blocking(|conn| {
+            conn.execute(
+                "INSERT INTO _rl_auth_users \
+             (id, username, username_key, email, created_at, updated_at) VALUES \
+             (?1, 'legacy', 'legacy', 'old@example.test', 0, 0)",
+                [&legacy_id],
+            )
+        })
+        .unwrap();
+        crate::prepare_database(&db).await.unwrap();
+        crate::prepare_database(&db).await.unwrap();
+        let email: String = db
+            .call_blocking(|conn| {
+                conn.query_row("SELECT Email FROM Users WHERE Id = ?1", [&id], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(email, "old@example.test");
+        db.call_blocking(|conn| {
+            conn.execute(
+                "UPDATE _rl_auth_users SET email = 'new@example.test' WHERE id = ?1",
+                [&id],
+            )
+        })
+        .unwrap();
+        let email: String = db
+            .call_blocking(|conn| {
+                conn.query_row("SELECT Email FROM Users WHERE Id = ?1", [&id], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(email, "new@example.test");
+    }
+
+    #[tokio::test]
+    async fn deleting_auth_accounts_keeps_referenced_system_identities() {
+        let (_dir, auth) = service().await;
+        let user = auth.find_or_create_user("retained").await.unwrap();
+        auth.delete_user(&user.id).await.unwrap();
+        assert_eq!(mirrored(&auth), [(user.id, "retained".into())]);
+    }
+
     #[test]
     fn email_detection_needs_a_dotted_domain() {
         assert!(looks_like_email("alice@example.test"));
