@@ -44,8 +44,8 @@ pub struct Request {
 pub enum Outcome {
     /// A GraphQL response body and its HTTP status (200, or 400 as Hot Chocolate/DAB use it).
     Graphql { status: u16, body: Json },
-    /// No token, and an operation `anonymous` may not run but `authenticated` may: 401, so a
-    /// restored session refreshes and replays (micro-fabric compatibility.md §7.6).
+    /// Legacy transport-authentication outcome retained for executor integrations.
+    /// Permission denials, including anonymous callers, use `Graphql` with HTTP 200 instead.
     AuthenticationRequired,
 }
 
@@ -232,18 +232,12 @@ pub(crate) fn prepare(
     })
 }
 
-/// Plans the root fields of a query; `Err` is the 401 for a token-less request that needs a
-/// signed-in user.
+/// Plans query fields under the caller's role; authorization failures stay GraphQL errors.
 pub(crate) fn plan_query(
     ctx: &Ctx<'_>,
     op: &async_graphql_parser::types::OperationDefinition,
 ) -> Result<Vec<QueryRoot>, Outcome> {
     let fields = collect_fields(ctx, &ctx.schema.query_type, &[&op.selection_set.node]);
-    if !ctx.caller.is_authenticated()
-        && requires_authentication(ctx.model, ctx.schema, &ctx.schema.query_type, &fields)
-    {
-        return Err(Outcome::AuthenticationRequired);
-    }
     Ok(fields.iter().map(|field| plan_root(ctx, field)).collect())
 }
 
@@ -386,31 +380,6 @@ pub(crate) fn nesting_depth(query: &str) -> usize {
         }
     }
     max
-}
-
-/// Whether a token-less request runs a root field of type `root` (an entity action) that
-/// `anonymous` may not run but `authenticated` may.
-pub(crate) fn requires_authentication(
-    model: &AppModel,
-    schema: &Schema,
-    root: &str,
-    fields: &[Collected<'_>],
-) -> bool {
-    let Some(root) = schema.object(root) else {
-        return false;
-    };
-    fields.iter().any(|field| {
-        let (index, action) = match root.fields.get(field.name()).map(|f| f.resolver) {
-            Some(Resolver::List(index) | Resolver::ByPk(index)) => (index, Action::Read),
-            Some(Resolver::Create(index)) => (index, Action::Create),
-            Some(Resolver::Update(index)) => (index, Action::Update),
-            Some(Resolver::Delete(index)) => (index, Action::Delete),
-            _ => return false,
-        };
-        let entity = &model.entities[index];
-        access::grant(entity, access::ANONYMOUS, action).is_none()
-            && access::grant(entity, access::AUTHENTICATED, action).is_some()
-    })
 }
 
 /// A planned root field of a query.

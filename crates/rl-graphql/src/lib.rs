@@ -3,7 +3,8 @@
 //!
 //! On Fabric an app's entities are served by Data API Builder (DAB, on Hot Chocolate) over
 //! Fabric SQL. [`DataApi`] answers the documents the Rayfin SDK 1.36.2 sends with the same
-//! schema, data, errors and statuses; "compat" is micro-fabric's `docs/compatibility.md`.
+//! schema and data. Authorization follows Fabric BaaS's embedded DAB 2.0.10 behavior,
+//! including BaaS's sanitized wire codes, rather than raw standalone DAB substatus names.
 //!
 //! # Pipeline
 //!
@@ -12,7 +13,7 @@
 //! | [`schema`] | The schema DAB generates for the model (types, fields, arguments, filter and `orderBy` inputs), built once per model snapshot. Each object field carries a [`schema::Resolver`]. |
 //! | `value` | Argument literals re-read from the document with positions (duplicate input fields kept, for DAB's error). |
 //! | `validate`, `coerce` | Hot Chocolate's validation rules and messages; input coercion into [`Input`]. |
-//! | [`access`] | The grant a role acts under for an action (DAB role inheritance, compat §7.2). |
+//! | [`access`] | Last matching action grant; anonymous inheritance only without an authenticated entry. |
 //! | [`policy`] | `@role` policies compiled to SQL predicates, claims bound and typed per field. |
 //! | [`plan`] | A root field → selections, filters, order and page, authorization decided per field. |
 //! | [`sql`] | Parameterized SQL text and predicates ([`sql::Pred`]). |
@@ -26,7 +27,7 @@
 //! # Notes
 //!
 //! - **Mutations** reuse [`access::grant`], [`policy::action_filter`] for update/delete
-//!   `WHERE`s, [`policy::compile`] over the candidate row for create checks, and
+//!   `WHERE`s, [`policy::create_filter`] over supplied values for create checks, and
 //!   [`plan::object_plan`] to read the row back.
 //! - **Aggregations** add `groupBy` on `{E}Connection` and the `{E}GroupBy`, `{E}Aggregations`,
 //!   `{E}ScalarFields`, `{E}NumericAggregateFields` types in [`schema::Schema::build`]; a

@@ -668,7 +668,7 @@ pub fn filter_object(
             if !grant.is_some_and(|g| access::allows_field(g, name)) {
                 return Err(GraphQlError::dab(
                     messages::FILTER_FIELD_FORBIDDEN,
-                    codes::AUTHORIZATION_CHECK_FAILED,
+                    codes::FORBIDDEN,
                 ));
             }
             preds.push(scalar_filter(alias, column, value)?);
@@ -710,7 +710,7 @@ fn relationship_filter(
     let Some(target_grant) = access::grant(target, ctx.role(), Action::Read) else {
         return Err(GraphQlError::dab(
             messages::FILTER_ENTITY_FORBIDDEN,
-            codes::AUTHORIZATION_CHECK_FAILED,
+            codes::FORBIDDEN,
         ));
     };
     let fields = value.as_object().unwrap_or_default();
@@ -868,7 +868,7 @@ pub fn order_keys(
         if !grant.is_some_and(|g| access::allows_field(g, name)) {
             return Err(GraphQlError::dab(
                 messages::ORDER_BY_FIELD_FORBIDDEN,
-                codes::AUTHORIZATION_CHECK_FAILED,
+                codes::FORBIDDEN,
             ));
         }
         keys.push(OrderKey {

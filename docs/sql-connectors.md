@@ -64,8 +64,9 @@ The answers are DAB's, as for the data API (`/graphql`):
 - The data shapes: `{ "data": { "<field>": { "items": [...], "hasNextPage": …, "endCursor": … } } }` for lists, an object or `null` for `_by_pk`, `{ "items": [...] }` for to-many relationships.
 - Values: UUIDs in lowercase, dates as `YYYY-MM-DDTHH:MM:SS.fffZ` (UTC), decimals and integers as numbers, booleans as `true`/`false`.
 - Cursors: DAB's base64 JSON of the order-by values, then the key columns.
-- Errors: Hot Chocolate's envelope with DAB's messages and codes (`AUTH_NOT_AUTHORIZED`, `AuthorizationCheckFailed`, `ItemNotFound`, `DatabasePolicyFailure`, `DatabaseOperationFailed`, …), with HTTP 200.
-- HTTP statuses: 400 for an unreadable request, 401 `invalid_token` for a bad token, 401 `authentication_required` for a token-less request that needs a signed-in user, 403 for a missing publishable key (checked before the route).
+- Authorization errors: HTTP 200 with BaaS's sanitized codes: `AUTH_NOT_AUTHORIZED` for a schema/directive denial, `Forbidden` for a field or missing-claim denial, and `BadRequest` for rejected creates or policy-filtered updates.
+- HTTP statuses: 400 for an unreadable request, 401 `invalid_token` for a bad token, 403 for a missing publishable key (checked before the route).
+  A valid anonymous caller lacking a grant receives an HTTP 200 GraphQL authorization denial.
 - The SDK throws on `errors` (`GraphQL errors: <message>`); mutations that answer `null` throw `MUTATION_NO_RESULT`.
 
 ## The schema
@@ -117,7 +118,8 @@ sequenceDiagram
 - **Values** come back as SQL Server formats them and are rewritten to DAB's (dates to `…fffZ`, `datetimeoffset` to UTC); the cursor keeps the database's precision.
 - **Mutations** run in a transaction.
   On a SQL database, `INSERT … OUTPUT INSERTED.<key>` (or `UPDATE … OUTPUT …`) returns the key, and the row is read back with the read grant and policy; a delete reads the row first.
-  The action's policy is in the write's `WHERE`; a create's is checked on the candidate row, as for data entities.
+  Update/delete policies constrain the existing row in the write's `WHERE`; create policies check supplied values and reject omitted referenced fields before database defaults apply.
+  A read-policy-hidden response is null after committing the write; no read grant gives a post-commit `Forbidden`.
 
 ## Finding and signing in to the database
 
