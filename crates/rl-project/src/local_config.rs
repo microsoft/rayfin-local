@@ -27,6 +27,9 @@
 //!
 //! [fabric]
 //! anonymous_data_access = false  # act like a tenant without anonymous data access
+//!
+//! [telemetry]
+//! application_insights_connection_string = "InstrumentationKey=..."
 //! ```
 //!
 //! Every setting is optional. Unknown keys are errors, since the file is rayfin-local's own.
@@ -58,6 +61,16 @@ pub struct LocalConfig {
     pub auth: LocalAuthConfig,
     #[serde(default)]
     pub fabric: LocalFabricConfig,
+    #[serde(default)]
+    pub telemetry: LocalTelemetryConfig,
+}
+
+/// `[telemetry]`: the resource Fabric would provision when `services.telemetry.enabled` is true.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalTelemetryConfig {
+    /// Published to the browser in `/rayfin.config.json`, only when telemetry is enabled.
+    pub application_insights_connection_string: Option<String>,
 }
 
 /// `[fabric]`: Fabric tenant settings to act like.
@@ -316,6 +329,22 @@ mod tests {
         );
         assert_eq!(config.fabric.anonymous_data_access, Some(false));
         assert_eq!(parse("").unwrap(), LocalConfig::default());
+    }
+
+    #[test]
+    fn telemetry_is_optional_and_rejects_misspelled_settings() {
+        let config = parse(
+            "[telemetry]\napplication_insights_connection_string = \"InstrumentationKey=local\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .telemetry
+                .application_insights_connection_string
+                .as_deref(),
+            Some("InstrumentationKey=local")
+        );
+        assert!(parse("[telemetry]\nconnection_string = \"wrong\"\n").is_err());
     }
 
     #[test]

@@ -3,12 +3,12 @@
 //!
 //! [`build_router`] merges the feature crates' routers (state already applied) and adds:
 //!
-//! - `GET /rayfin.config.json`: `{apiUrl, publishableKey, workspaceId, itemId, portalUrl,
-//!   tenantId}` with `Cache-Control: no-store` (compat §1). `apiUrl` is
+//! - `GET /rayfin.config.json`: `{serviceMode:"fabric", apiUrl, publishableKey, workspaceId, itemId, portalUrl,
+//!   tenantId, applicationInsightsConnectionString?}` with `Cache-Control: no-store` (compat §1).
+//!   The telemetry field is emitted only when enabled and configured. `apiUrl` is
 //!   [`ServerConfig::api_origin`], the backend's own absolute origin. The SPA reads this file only
-//!   in `--static` mode, where it shares that origin. In dev mode the Vite plugin serves its own
-//!   copy (with the dev server's origin), and without the plugin Vite answers its index.html,
-//!   which the SDK treats as "no file", so it uses the build-time `VITE_RAYFIN_API_URL`.
+//!   in `--static` mode, where it shares that origin. The local Vite runner forwards this config,
+//!   changing only `apiUrl` to the dev server's origin, before the app's plugins run.
 //! - `GET /.rayfin-local/health` ([`HEALTH_PATH`]): `{"ok":true}`.
 //! - The publishable key: `/api/*`, `/graphql`, `/functions/*`, `/connector-invoke/*` and
 //!   `/connectors/*` need `X-Publishable-Key` equal to the app's key. A missing or wrong key is
@@ -23,6 +23,8 @@
 //!   `/.rayfin-local/dev/*`, which programs on this machine call, not browsers.
 //! - The Host check, when [`ServerConfig::allowed_hosts`] is set (DNS-rebinding protection).
 //! - Static hosting with the SPA fallback, when [`ServerConfig::static_site`] is set.
+//!   [`HostingOptions::protected_assets`] gates every static byte, including runtime config:
+//!   unauthenticated document loads receive a sign-in page, asset fetches a JSON 401.
 //! - A JSON 404 (`{"error":"not_found",...}`) for everything else.
 //! - Request logs at debug level: method, path (no query), status and latency; never headers or
 //!   bodies.
@@ -35,6 +37,7 @@ mod guards;
 mod handle;
 mod listen;
 mod routes;
+mod static_access;
 mod static_site;
 
 use std::path::PathBuf;
@@ -93,11 +96,22 @@ pub struct StaticSite {
     pub index_document: String,
 }
 
+/// Optional hosting capabilities. The original [`build_router`] keeps its public-site defaults.
+#[derive(Clone, Default)]
+pub struct HostingOptions {
+    pub telemetry_enabled: bool,
+    pub application_insights_connection_string: Option<String>,
+    /// A resolver verifies the local static-session cookie, not an Authorization header.
+    /// `None` serves public assets (also the legacy default when asset access is unspecified).
+    pub protected_assets: Option<Arc<dyn rl_model::CallerResolver>>,
+}
+
 /// The runtime config file the SDK's `resolveRayfinConfig()` reads (compat §1). Empty values are
 /// left out, as the SDK treats them as absent anyway.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeConfig<'a> {
+    service_mode: &'static str,
     api_url: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     publishable_key: Option<&'a str>,
@@ -109,6 +123,8 @@ struct RuntimeConfig<'a> {
     portal_url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tenant_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application_insights_connection_string: Option<&'a str>,
 }
 
 fn non_empty(value: &str) -> Option<&str> {
@@ -129,14 +145,29 @@ fn loggable_path(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn runtime_config_json(config: &ServerConfig) -> Bytes {
+fn runtime_config_json(config: &ServerConfig, options: &HostingOptions) -> Bytes {
+    let connection_string = options
+        .application_insights_connection_string
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|_| options.telemetry_enabled);
+    if options.telemetry_enabled && connection_string.is_none() {
+        tracing::warn!(
+            "services.telemetry.enabled is true but no Application Insights connection string is \
+             configured: set [telemetry] application_insights_connection_string in \
+             rayfin-local.toml. /rayfin.config.json omits the field until then; no resource is \
+             provisioned locally"
+        );
+    }
     let runtime_config = RuntimeConfig {
+        service_mode: "fabric",
         api_url: config.api_origin.trim().trim_end_matches('/'),
         publishable_key: non_empty(&config.publishable_key),
         workspace_id: non_empty(&config.workspace_id),
         item_id: non_empty(&config.item_id),
         portal_url: non_empty(&config.portal_url),
         tenant_id: config.tenant_id.as_deref().and_then(non_empty),
+        application_insights_connection_string: connection_string,
     };
     Bytes::from(serde_json::to_vec(&runtime_config).expect("the runtime config serializes"))
 }
@@ -156,16 +187,39 @@ fn json_body(body: Bytes) -> impl axum::response::IntoResponse {
 /// Feature routers must not set a fallback or define `/rayfin.config.json` or [`HEALTH_PATH`]:
 /// axum panics on merging those.
 pub fn build_router(config: ServerConfig, features: Vec<Router>) -> Router {
-    let runtime_config = runtime_config_json(&config);
+    build_router_with_hosting(config, features, HostingOptions::default())
+}
+
+/// Builds the router with telemetry and optional protected-asset admission.
+pub fn build_router_with_hosting(
+    config: ServerConfig,
+    features: Vec<Router>,
+    options: HostingOptions,
+) -> Router {
+    let runtime_config = runtime_config_json(&config, &options);
+    let access = options
+        .protected_assets
+        .map(|callers| Arc::new(static_access::StaticAccess::new(&config, callers)));
+    let config_access = access.clone();
     let mut router = Router::new()
         .route(
             "/rayfin.config.json",
-            get(move || async move { json_body(runtime_config) }),
+            get(move |req: Request| async move {
+                if let Some(access) = &config_access
+                    && let Some(response) = access.check(&req)
+                {
+                    return response;
+                }
+                axum::response::IntoResponse::into_response(json_body(runtime_config))
+            }),
         )
         .route(
             HEALTH_PATH,
             get(|| async { json_body(Bytes::from_static(br#"{"ok":true}"#)) }),
         );
+    if let Some(access) = &access {
+        router = router.merge(static_access::routes(Arc::clone(access)));
+    }
     for feature in features {
         router = router.merge(feature);
     }
@@ -173,7 +227,19 @@ pub fn build_router(config: ServerConfig, features: Vec<Router>) -> Router {
     router = match config.static_site {
         Some(site) => {
             let files = Arc::new(static_site::StaticFiles::new(site));
-            router.fallback(move |req: Request| async move { files.respond(req).await })
+            router.fallback(move |req: Request| async move {
+                if !routes::is_backend_path(req.uri().path())
+                    && matches!(
+                        *req.method(),
+                        axum::http::Method::GET | axum::http::Method::HEAD
+                    )
+                    && let Some(access) = &access
+                    && let Some(response) = access.check(&req)
+                {
+                    return response;
+                }
+                files.respond(req).await
+            })
         }
         None => router.fallback(|req: Request| async move {
             routes::not_found(req.method(), req.uri().path())

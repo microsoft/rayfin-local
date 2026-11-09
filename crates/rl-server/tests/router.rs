@@ -105,7 +105,7 @@ async fn runtime_config_has_the_sdk_shape_and_is_never_cached() {
     assert_eq!(reply.header("content-type"), Some("application/json"));
     assert_eq!(reply.header("cache-control"), Some("no-store"));
     let expected = [
-        r#"{"apiUrl":"http://localhost:7171","publishableKey":"pk-local-test","#,
+        r#"{"serviceMode":"fabric","apiUrl":"http://localhost:7171","publishableKey":"pk-local-test","#,
         r#""workspaceId":"11111111-1111-4111-8111-111111111111","#,
         r#""itemId":"22222222-2222-4222-8222-222222222222","#,
         r#""portalUrl":"http://localhost:7171/.rayfin-local/portal","#,

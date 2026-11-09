@@ -9,10 +9,12 @@
 
 mod az;
 mod broker;
+mod diagnostics;
 mod jwt;
 mod rayfin_cli;
 
 pub use broker::{DeveloperIdentity, RayfinCliConfig, TokenBroker, TokenBrokerConfig, TokenMode};
+pub use diagnostics::redact_diagnostic;
 pub use jwt::jwt_claims;
 
 use std::{fmt, future::Future, pin::Pin, time::SystemTime};
