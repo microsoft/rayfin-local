@@ -156,20 +156,25 @@ async fn queries_read_the_source_with_roles_and_policies() {
         ])
     );
 
-    // Anonymous callers may not read the excluded field; signed-in-only entities need a token.
+    // Anonymous callers may not read the excluded field, and an entity without an anonymous
+    // grant is a GraphQL authorization error, not a transport 401.
     let body = graphql(&app, None, "{ products { items { name ownerEmail } } }").await;
     assert_eq!(
         body["errors"][0]["extensions"]["code"],
         "AUTH_NOT_AUTHORIZED"
     );
-    let (status, ..) = post(
+    let (status, _, body) = post(
         &app,
         "/connectors/inventory/graphql",
         None,
         json!({ "query": "{ auditEntries { items { action } } }" }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["errors"][0]["extensions"]["code"],
+        "AUTH_NOT_AUTHORIZED"
+    );
 
     // Fabric exposes the curated schema mismatch, never SQL object names or raw detail.
     admin(
@@ -357,7 +362,7 @@ async fn warehouses_answer_a_status_and_analytics_endpoints_only_read() {
 }
 
 #[tokio::test]
-async fn an_unreachable_database_says_what_to_check() {
+async fn an_unreachable_database_is_masked_like_fabric() {
     let Some(server) = server() else {
         return;
     };
@@ -367,11 +372,16 @@ async fn an_unreachable_database_says_what_to_check() {
         .unwrap()
         .port();
     let app = app(&server, "nowhere", "fabric-sqldatabase", Some(closed));
+    // Fabric masks it; the server's log says what to check.
     let body = graphql(&app, Some("alice"), "{ categories { items { name } } }").await;
-    let message = body["errors"][0]["message"].as_str().unwrap();
-    assert!(
-        message.contains("Couldn't connect to the database of connector 'inventory'"),
-        "{message}"
+    assert_eq!(
+        body["errors"][0]["message"],
+        "An internal execution error occured"
     );
+    assert_eq!(
+        body["errors"][0]["extensions"],
+        json!({"code": "InternalServerError"})
+    );
+    assert!(!body.to_string().contains("nowhere"), "{body}");
     assert_eq!(body["data"], Value::Null);
 }
