@@ -41,7 +41,7 @@ const SETTLE: Duration = Duration::from_secs(3);
 /// when they change. See the [module docs](super) for the routes.
 ///
 /// A build that fails at startup does not fail [`start`](Self::start): the service starts
-/// unavailable, invocations answer 503 with the build error, and the first build output the
+/// unavailable, invocations answer a masked 503, and the first build output the
 /// watcher sees (a fixed build) brings the functions up.
 pub struct FunctionsService {
     pub(super) config: FunctionsConfig,
@@ -258,6 +258,18 @@ impl FunctionsService {
     /// Why invocations can't run, while the functions are not built.
     pub(super) fn unavailable(&self) -> Option<String> {
         lock(&self.unavailable).clone()
+    }
+
+    pub(super) fn diagnostic(&self, message: &str, tokens: &[&str]) -> String {
+        let mut values = self.secret_values();
+        values.extend(local_settings_values(&self.config.functions_dir).unwrap_or_default());
+        rl_tokens::redact_diagnostic(
+            message,
+            values
+                .iter()
+                .map(|(_, value)| value.as_str())
+                .chain(tokens.iter().copied()),
+        )
     }
 
     fn secret_values(&self) -> Vec<(String, String)> {

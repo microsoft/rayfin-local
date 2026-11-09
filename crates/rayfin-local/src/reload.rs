@@ -1204,10 +1204,13 @@ impl Reloader {
     fn rebuild_router(&self) {
         let ctx = self.ctx();
         let config = serve::server_config(&ctx, self.run.static_site.clone());
-        self.run.router.replace(rl_server::build_router(
-            config,
-            self.live.features.routers(&ctx),
-        ));
+        self.run
+            .router
+            .replace(rl_server::build_router_with_hosting(
+                config,
+                self.live.features.routers(&ctx),
+                serve::hosting_options(&ctx),
+            ));
     }
 
     /// Tells what changed: `config-changed`, then (when something applied) the rows of the

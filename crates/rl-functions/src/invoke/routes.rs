@@ -85,6 +85,7 @@ async fn answer(service: &FunctionsService, name: &str, request: Request) -> Ans
     };
 
     if let Some(reason) = service.unavailable() {
+        let reason = service.diagnostic(&reason, &[]);
         return refuse(
             StatusCode::SERVICE_UNAVAILABLE,
             "FUNCTIONS_UNAVAILABLE",
@@ -96,7 +97,7 @@ async fn answer(service: &FunctionsService, name: &str, request: Request) -> Ans
     }
     let host = match service.manager.host().await {
         Ok(host) => host,
-        Err(error) => return host_error(name, error, true),
+        Err(error) => return host_error(name, error, true, service, &[]),
     };
     let function = match host.function(name) {
         Some(function) if function.accepts("POST") => function,
@@ -142,13 +143,17 @@ async fn answer(service: &FunctionsService, name: &str, request: Request) -> Ans
         "invoking function '{name}'"
     );
 
+    let mut sensitive: Vec<&str> = tokens.iter().map(|(_, token)| token.as_str()).collect();
+    if let Some(token) = caller_token {
+        sensitive.push(token);
+    }
     match service
         .manager
         .invoke_on(&host, invocation, service.config.invoke_timeout)
         .await
     {
         Ok(response) => pass_through(response),
-        Err(error) => host_error(name, error, false),
+        Err(error) => host_error(name, error, false, service, &sensitive),
     }
 }
 
@@ -182,7 +187,23 @@ fn pass_through(response: HostResponse) -> Answer {
 
 /// Answers a host error; `starting` when it comes from getting a running host (a failed start)
 /// rather than from the invocation.
-fn host_error(name: &str, error: HostError, starting: bool) -> Answer {
+fn host_error(
+    name: &str,
+    error: HostError,
+    starting: bool,
+    service: &FunctionsService,
+    sensitive: &[&str],
+) -> Answer {
+    let detail = match &error {
+        HostError::Failed {
+            stack: Some(stack), ..
+        }
+        | HostError::Load {
+            stack: Some(stack), ..
+        } => format!("{error}\n{stack}"),
+        _ => error.to_string(),
+    };
+    let diagnostic = service.diagnostic(&detail, sensitive);
     match error {
         HostError::Starting | HostError::ShuttingDown => retry_later(
             "FUNCTION_HOST_STARTING",
@@ -206,26 +227,20 @@ fn host_error(name: &str, error: HostError, starting: bool) -> Answer {
                 describe_timeout(timeout)
             ),
         ),
-        HostError::Failed {
-            error_type,
-            message,
-            ..
-        } => invoke_failed(name, &format!("{error_type}: {message}")),
-        error @ (HostError::Exited { .. } | HostError::Protocol(_) | HostError::Io(_))
-            if !starting =>
-        {
-            invoke_failed(name, &error.to_string())
+        HostError::Failed { .. } => invoke_failed(name, &diagnostic),
+        HostError::Exited { .. } | HostError::Protocol(_) | HostError::Io(_) if !starting => {
+            invoke_failed(name, &diagnostic)
         }
         // The manager starts the host again on the next invocation.
         error if error.is_transient() => retry_later(
             "FUNCTION_HOST_STARTING",
-            format!("The function host could not start: {error}. Try again in a moment."),
+            format!("The function host could not start: {diagnostic}. Try again in a moment."),
         ),
-        start_failure => refuse(
+        _ => refuse(
             StatusCode::SERVICE_UNAVAILABLE,
             "FUNCTIONS_UNAVAILABLE",
             format!(
-                "The functions package can't run: {start_failure}. rayfin-local reloads it when \
+                "The functions package can't run: {diagnostic}. rayfin-local reloads it when \
                  the build output changes."
             ),
         ),
@@ -244,7 +259,6 @@ fn retry_later(code: &'static str, message: String) -> Answer {
 
 /// The function ran but produced no response.
 fn invoke_failed(name: &str, cause: &str) -> Answer {
-    tracing::warn!("function '{name}' failed without a response: {cause}");
     refuse(
         StatusCode::INTERNAL_SERVER_ERROR,
         "FUNCTION_INVOKE_FAILED",
@@ -294,7 +308,21 @@ fn unauthorized() -> Answer {
 
 /// An error in the deployed service's shape, `{"error": <code>, "message"}`.
 fn refuse(status: StatusCode, code: &str, message: impl Into<String>) -> Answer {
-    let body = json!({ "error": code, "message": message.into() });
+    let message = message.into();
+    let body = if status.is_server_error() {
+        tracing::error!(
+            status = status.as_u16(),
+            code,
+            detail = %rl_tokens::redact_diagnostic(&message, []),
+            "function request failed"
+        );
+        json!({ "error": {
+            "code": "InternalServerError",
+            "message": "An internal execution error occured",
+        } })
+    } else {
+        json!({ "error": code, "message": message })
+    };
     ((status, Json(body)).into_response(), code.to_owned())
 }
 
@@ -404,6 +432,52 @@ fn shown(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn body(response: Response) -> serde_json::Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn system_failures_are_masked_but_client_errors_and_retry_headers_survive() {
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (response, _) =
+                refuse(status, "PRIVATE_FAILURE", "private host stack and password");
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                body(response).await,
+                json!({"error": {
+                    "code": "InternalServerError", "message": "An internal execution error occured",
+                }})
+            );
+        }
+        let (response, _) = retry_later("FUNCTION_HOST_STARTING", "private load failure".into());
+        assert_eq!(response.headers()[header::RETRY_AFTER], RETRY_AFTER_SECONDS);
+        assert_eq!(body(response).await["error"]["code"], "InternalServerError");
+
+        let (response, _) = refuse(StatusCode::BAD_REQUEST, "INVALID_INPUT", "Choose a name.");
+        assert_eq!(
+            body(response).await,
+            json!({"error":"INVALID_INPUT", "message":"Choose a name."})
+        );
+    }
+
+    #[tokio::test]
+    async fn app_authored_responses_are_relayed_like_the_baas_udf_proxy() {
+        let (response, _) = pass_through(HostResponse {
+            status: 500,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: Bytes::from_static(br#"{"message":"app-authored response"}"#),
+        });
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body(response).await,
+            json!({"message":"app-authored response"})
+        );
+    }
 
     #[test]
     fn names_follow_the_deployed_rule() {

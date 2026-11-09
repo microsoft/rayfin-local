@@ -305,11 +305,11 @@ impl SqlConnector {
         let outcome = match self.database.pool(&self.def, self.kind).await {
             Ok(pool) => api.execute(caller, request, &TdsBackend(pool)).await,
             Err(problem) => {
-                tracing::warn!("{problem}");
+                tracing::warn!(detail = %rl_tokens::redact_diagnostic(&problem, []), "SQL connector unavailable");
                 unavailable(problem)
             }
         };
-        rl_graphql::outcome_response(outcome)
+        rl_graphql::outcome_response(crate::errors::mask_graphql(outcome))
     }
 }
 

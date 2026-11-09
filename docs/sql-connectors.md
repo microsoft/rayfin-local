@@ -153,7 +153,12 @@ The answer is cached in `.rayfin-local/cache/connectors/<name>.json` for that ty
 
 ### When it fails
 
-Failures answer HTTP 200 with a GraphQL error whose message says what to do, and `serve` logs the same line:
+Execution failures answer HTTP 200 with Fabric's GraphQL error policy: known SQL client
+faults get curated `BadRequest` messages; other failures use `InternalServerError` and
+`An internal execution error occured`. SQL messages and object names never appear in
+`extensions.detail`. Partial data, locations, and paths are preserved.
+
+The full diagnostic and remediation stay in `serve` output, with credentials redacted:
 
 | Failure | Message |
 | --- | --- |
@@ -163,8 +168,8 @@ Failures answer HTTP 200 with a GraphQL error whose message says what to do, and
 | A firewall rule refuses your address (40615) | Connect from an allowed network, or ask the owner to allow your address. |
 | The database is busy, paused or unavailable (40613, 40501, …) | Try again; a paused Fabric capacity must be resumed first. |
 | The server can't be reached (network, DNS, TCP 1433 blocked) | Check the network, VPN and firewall. |
-| A statement fails in the database (an entity out of step with its table, a constraint) | DAB's `DatabaseOperationFailed` error, with the server's message as `extensions.detail` (for example `Invalid column name 'zip'`). |
-| The entities can't be analyzed (a TypeScript error) | 500 `CONNECTOR_MISCONFIGURED` with the analyzer's message, and a warning when they are analyzed (at startup, and after each change). |
+| A statement fails in the database (an entity out of step with its table, a constraint) | The SQL error number and redacted server message. The wire response uses the GraphQL workload's vetted number-to-message mapping. |
+| The entities can't be analyzed (a TypeScript error) | Analyzer diagnostics at startup and after changes; requests get a masked HTTP 500 `{"error":{"code":"InternalServerError","message":"An internal execution error occured"}}`. |
 
 ## Identity
 

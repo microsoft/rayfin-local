@@ -166,7 +166,7 @@ It comes again after each `config-changed` that applied, with the new features; 
 {"v":1,"type":"config-changed","time":"…","applied":true,"restartRequired":false,"what":["storage","functions"],"message":null}
 ```
 
-- `what` lists what changed: `auth` (`services.auth`, `[auth]`), `name`, `data`, `functions` (`services.functions`, `[functions]`), `storage` (`services.storage`, the storage folders), `connectors` (the connectors, their entities, `[connectors]`), `secrets` (the declared secrets, their values) and `fabric` (`[fabric]`) apply while serving; `frontend` (`services.staticHosting` moving the app, `[frontend]`), `server` (`[server]`) and `tokens` (`[tokens]`) need a restart.
+- `what` lists what changed: `auth` (`services.auth`, `[auth]`), `name`, `data`, `functions` (`services.functions`, `[functions]`), `storage` (`services.storage`, the storage folders), `connectors` (the connectors, their entities, `[connectors]`), `secrets` (the declared secrets, their values), `fabric` (`[fabric]`), `telemetry` (`services.telemetry`, `[telemetry]`), and `staticHosting` (`assetAccess`) apply while serving; `frontend` (`services.staticHosting` moving the app, `[frontend]`), `server` (`[server]`) and `tokens` (`[tokens]`) need a restart.
   Settings set by a command-line flag don't count.
 - `applied: true`: the services were rebuilt on the same ports, and a new `ready` event follows with the new features.
   The listeners, the database, the users and their sessions, the signing keys and the [sign-in identity](#automatic-sign-in) (unless `[auth] sign_in_as` changed) stay, and so does the [control API](#control-api).
