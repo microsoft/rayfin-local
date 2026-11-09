@@ -198,6 +198,10 @@ describe('function host (fixture)', () => {
     assert.equal(reply.ok, false);
     assert.equal(reply.error.kind, 'failed');
     assert.match(reply.error.message, /BigInt/);
+    // The host's own log line names the failure only; rayfin-local logs the redacted error.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(host.output.some((line) => line.includes("Executed 'Functions.bigint' (Failed")));
+    assert.ok(!host.output.some((line) => /BigInt|at /.test(line)), host.output.join('\n'));
   });
 
   test('routes console output to the invocation log', async () => {

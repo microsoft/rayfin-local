@@ -40,7 +40,8 @@ function page() {
     },
     crypto: webcrypto, URL, URLSearchParams, TextEncoder, Uint8Array, btoa, atob,
     location: { origin, reload: () => { reloads += 1; } },
-    sessionStorage: { setItem: (key, value) => stored.set(key, value) },
+    // The SDK's default session store; sessionStorage is deliberately absent.
+    localStorage: { setItem: (key, value) => stored.set(key, value) },
     fetch: async (url, options) => {
       requests.push({ url, options });
       return {

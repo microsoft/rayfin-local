@@ -83,11 +83,11 @@
         headers: { authorization: `Bearer ${session.accessToken}` },
       });
       if (!cookie.ok) throw new Error('cookie');
-      // Fabric primes the default SDK session store before reloading the document too.
+      // Fabric primes the SDK's default session store (localStorage, `authSession`) before reloading.
       try {
         const payload = JSON.parse(atob(session.accessToken.split('.')[1]
           .replace(/-/g, '+').replace(/_/g, '/')));
-        sessionStorage.setItem('authSession', JSON.stringify({
+        localStorage.setItem('authSession', JSON.stringify({
           user: { id: payload.sub, email: payload.email },
           accessToken: session.accessToken, refreshToken: session.refreshToken ?? null,
           expiresAt: new Date(Date.now() + session.expiresIn * 1000).toISOString(),
