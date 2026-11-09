@@ -139,6 +139,46 @@ async fn run_as(
     }
 }
 
+#[tokio::test]
+async fn connector_introspection_uses_its_own_schema_without_running_sql() {
+    for target in [
+        Target::SqlDatabase,
+        Target::Warehouse,
+        Target::SqlAnalyticsEndpoint,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let api = TsqlApi::new(
+            Arc::new(inventory()),
+            target,
+            DataApiSettings {
+                allow_introspection: true,
+                ..DataApiSettings::default()
+            },
+        );
+        let request = Request {
+            query: include_str!("introspection.graphql").into(),
+            ..Request::default()
+        };
+        let Outcome::Graphql { status, body } = api
+            .execute(&Caller::anonymous(), request, &Backend(recorder.clone()))
+            .await
+        else {
+            panic!("introspection does not require an entity permission");
+        };
+        assert_eq!(status, 200);
+        assert!(body.get("errors").is_none(), "{body}");
+        let types = body["data"]["__schema"]["types"].as_array().unwrap();
+        assert!(types.iter().any(|ty| ty["name"] == "Product"));
+        assert!(!types.iter().any(|ty| ty["name"] == "User"));
+        if target == Target::SqlAnalyticsEndpoint {
+            assert!(body["data"]["__schema"]["mutationType"].is_null());
+        } else {
+            assert_eq!(body["data"]["__schema"]["mutationType"]["name"], "Mutation");
+        }
+        assert!(recorder.statements().is_empty());
+    }
+}
+
 #[test]
 fn the_schema_follows_the_connectors_keys_and_dialect() {
     let model = inventory();

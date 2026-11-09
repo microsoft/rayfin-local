@@ -497,7 +497,7 @@ async fn validation_errors_read_as_hot_chocolate_writes_them() {
         ),
         (
             "{ users { items { id } } }",
-            "The field `users` does not exist on the type `Query`.",
+            "The field `id` does not exist on the type `User`.",
         ),
         (
             "{ todos(filter: { not: { title: { eq: \"x\" } } }) { items { id } } }",
@@ -732,7 +732,10 @@ async fn set_model_swaps_the_schema_for_new_requests() {
         Vec::<Value>::new()
     );
     app.api.set_model(std::sync::Arc::new(basic_model()));
-    assert_eq!(app.api.model().entities.len(), basic_model().entities.len());
+    assert_eq!(
+        app.api.model().entities.len(),
+        basic_model().entities.len() + 1
+    );
     assert_eq!(
         app.run(&alice, query).await.messages(),
         ["The field `askThreads` does not exist on the type `Query`."]
