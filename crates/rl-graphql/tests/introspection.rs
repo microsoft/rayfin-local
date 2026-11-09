@@ -208,12 +208,18 @@ async fn introspection_updates_with_the_served_model() {
         &json!({"removed": null, "kept": {"name": "User"}})
     );
     app.api.set_model(app.api.model());
+    assert!(app.api.model().entity("User").is_none());
+    let response = app
+        .run(
+            &app.caller(None),
+            "{ __type(name: \"Query\") { fields { name } } }",
+        )
+        .await;
+    let fields = response.data()["__type"]["fields"].as_array().unwrap();
     assert_eq!(
-        app.api
-            .model()
-            .entities
+        fields
             .iter()
-            .filter(|entity| entity.name == "User")
+            .filter(|field| field["name"] == "users")
             .count(),
         1
     );

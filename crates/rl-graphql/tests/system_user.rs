@@ -51,7 +51,7 @@ async fn authenticated_users_can_read_every_user_and_navigate_real_foreign_keys(
         )
     });
     assert!(missing.is_err());
-    assert!(app.api.model().entity("User").is_some());
+    assert!(app.api.model().entity("User").is_none());
 }
 
 #[tokio::test]
