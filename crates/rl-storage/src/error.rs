@@ -13,6 +13,8 @@ use serde_json::json;
 /// Why the storage router could not start, or the stored files could not be cleared.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    #[error(transparent)]
+    InvalidRules(#[from] rl_model::ModelError),
     #[error(
         "could not prepare the storage folder {path}: {source}; check that the project folder is \
          writable"
@@ -105,7 +107,7 @@ impl ApiError {
     pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Unauthenticated(_) => "Unauthenticated",
-            Self::PermissionDenied(_) => "PermissionDenied",
+            Self::PermissionDenied(_) => "PERMISSION_DENIED",
             Self::NotFound(_) => "NotFound",
             Self::Conflict(_) => "Conflict",
             Self::NoStorage => "NoStorageEntitiesConfigured",

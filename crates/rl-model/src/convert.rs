@@ -744,18 +744,25 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
     let rules = folder
         .rules
         .iter()
-        .map(|rule| {
+        .enumerate()
+        .map(|(index, rule)| {
+            let rule_error = |reason| {
+                crate::storage_policy::storage_rule_error(&folder.name, index, &rule.role, reason)
+            };
             let actions = rule
                 .actions
                 .iter()
-                .map(|a| parse_action(a).map_err(&error))
+                .map(|a| {
+                    Action::parse(a)
+                        .ok_or_else(|| rule_error(format!("unknown storage action `{a}`")))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let check = rule
                 .check
                 .as_ref()
-                .map(PolicyExpr::from_check)
+                .map(PolicyExpr::from_storage_check)
                 .transpose()
-                .map_err(|e| error(format!("rule for `{}`: {}", rule.role, e.reason)))?;
+                .map_err(|e| rule_error(e.reason))?;
             Ok(StorageRule {
                 path_pattern: rule.path_pattern.clone(),
                 role: rule.role.clone(),
@@ -764,7 +771,7 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(StorageFolder {
+    let folder = StorageFolder {
         name: folder.name.clone(),
         display_name: folder.display_name.clone(),
         on_conflict,
@@ -772,5 +779,7 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
         allowed_content_types: folder.allowed_content_types.clone(),
         fields,
         rules,
-    })
+    };
+    folder.validate_rules()?;
+    Ok(folder)
 }

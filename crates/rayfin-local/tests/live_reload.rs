@@ -809,6 +809,84 @@ export class Label {
 ";
 
 #[test]
+fn storage_checks_are_config_invalid_at_startup() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let source = app
+        .path()
+        .join("rayfin")
+        .join("storage")
+        .join("Attachments.ts");
+    let valid = std::fs::read_to_string(&source).unwrap();
+    assert!(valid.contains("item.team_id.eq('t1')"));
+    std::fs::write(
+        &source,
+        valid.replace("item.team_id.eq('t1')", "item.team_id.neq(null)"),
+    )
+    .unwrap();
+    let mut serve = Serve::start(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let error = serve.next("error");
+    assert_eq!(error["code"], "config-invalid", "{error}");
+    assert_eq!(error["fatal"], true, "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("todo-attachments") && message.contains("rule[0]"),
+        "{message}"
+    );
+    assert!(message.contains("rayfin up"), "{message}");
+    assert_eq!(serve.close_stdin().code(), Some(1), "{}", serve.report());
+}
+
+#[test]
+fn invalid_storage_reload_keeps_the_previous_rules_and_recovers() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let mut serve = Serve::start_hosted(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let ready = serve.next("ready");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let key = publishable_key(&api_url);
+    let (status, token) = control(&api_url, "POST", "/token", None);
+    assert_eq!(status, 200, "{token}");
+    let bearer = format!("Bearer {}", token["accessToken"].as_str().unwrap());
+    let headers = [
+        ("X-Publishable-Key", key.as_str()),
+        ("Authorization", bearer.as_str()),
+    ];
+    let list_url = format!("{api_url}/api/storage/list?folder=todo-attachments");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+
+    let source = app
+        .path()
+        .join("rayfin")
+        .join("storage")
+        .join("Attachments.ts");
+    let valid = std::fs::read_to_string(&source).unwrap();
+    std::fs::write(
+        &source,
+        valid.replace("item.team_id.eq('t1')", "item.team_id.neq(null)"),
+    )
+    .unwrap();
+    let (status, error) = control(&api_url, "POST", "/reload", None);
+    assert_eq!(status, 422, "{error}");
+    assert_eq!(error["error"]["code"], "config-invalid", "{error}");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+
+    std::fs::write(&source, valid).unwrap();
+    let (status, recovered) = control(&api_url, "POST", "/reload", None);
+    assert_eq!(status, 200, "{recovered}");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
+
+#[test]
 fn a_reload_on_request_answers_a_refused_schema_change_and_forces_it() {
     let Some(app) = App::copy() else {
         return;

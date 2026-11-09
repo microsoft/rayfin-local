@@ -14,6 +14,7 @@ pub mod connector;
 mod convert;
 mod model;
 mod policy;
+mod storage_policy;
 mod system;
 
 use std::path::{Path, PathBuf};

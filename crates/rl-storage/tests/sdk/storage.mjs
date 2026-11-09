@@ -66,4 +66,19 @@ const denied = await anonymous.storage['user-avatars'].list().catch((e) => e);
 assert.equal(denied.code, 'Unauthenticated');
 assert.equal(denied.status, 401);
 
+// Update authorization sees persisted fields, not the replacement.
+await attachments.upload('handoff.pdf', pdf, {
+  contentType: 'application/pdf', fields: { team_id: 't1' },
+});
+await attachments.upload('handoff.pdf', pdf, {
+  contentType: 'application/pdf', fields: { team_id: 't2' },
+});
+const cannotUpdate = await attachments.upload('handoff.pdf', pdf, {
+  contentType: 'application/pdf', fields: { team_id: 't1' },
+}).catch((e) => e);
+assert.ok(isStorageError(cannotUpdate), String(cannotUpdate));
+assert.equal(cannotUpdate.code, 'PERMISSION_DENIED');
+assert.equal(cannotUpdate.status, 403);
+assert.equal((await attachments.list()).items.find((item) => item.path === 'handoff.pdf').team_id, 't2');
+
 console.log('ok');
