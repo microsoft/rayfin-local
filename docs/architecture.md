@@ -297,7 +297,9 @@ The page accepts messages only from the framed app's window and origin, the app'
 4. `rl-graphql` builds the schema DAB would generate, validates documents with Hot Chocolate's rules and messages, and compiles each root field into one parameterized SQL statement that builds its JSON.
    `@role` policies become SQL predicates with the caller's claims bound as parameters.
 
-SQLite stores values the way the SDK observes them from Fabric SQL: case-insensitive text comparison (ASCII), lowercase UUID text with v4 defaults, fixed-width UTC timestamps, JSON booleans, and `@set` enums as `CHECK` constraints.
+SQLite uses the local model's column collations: ASCII-only `NOCASE` for the MSSQL profile, case-sensitive text for PostgreSQL.
+Policy comparisons use those collations rather than universally lowercasing operands; a deployed database's collation may differ.
+Values use lowercase UUID text with v4 defaults, fixed-width UTC timestamps, JSON booleans, and `@set` enums as `CHECK` constraints.
 Decimals are stored as `REAL`, so they lose precision beyond about 15 significant digits.
 
 ## Frontend

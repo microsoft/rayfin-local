@@ -5,9 +5,9 @@
 //! parser): GraphQL validation and execution errors are `200` (the SDK detects
 //! `AggregationNotSupportedError` only on 200), except DAB's `DatabaseInputError` (`400`); an
 //! unreadable request (empty, not JSON, no `query`, a syntax error) is `400` with an `errors`
-//! envelope; a rejected bearer token is `401 invalid_token`, and a token-less request for data
-//! only signed-in users may read is `401 authentication_required`, so the SDK refreshes the
-//! session and replays the call. The publishable key is checked upstream (`rl-server`).
+//! envelope; a rejected bearer token is `401 invalid_token`. A valid anonymous caller lacking
+//! a grant gets an HTTP 200 GraphQL authorization error, not a transport-authentication failure.
+//! The publishable key is checked upstream (`rl-server`).
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -140,7 +140,10 @@ async fn the_sdk_data_client_reads_and_writes_through_rayfin_local() {
         out["pages"],
         json!([["Alice two", "alice three"], ["Alice one"]])
     );
-    assert_eq!(out["anonymous"]["status"], 401);
+    assert_eq!(
+        out["anonymous"]["message"],
+        "GraphQL errors: The current user is not authorized to access this resource."
+    );
     assert_eq!(out["mutations"]["renamed"], "Renamed");
     assert_eq!(
         out["mutations"]["forged"],

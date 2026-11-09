@@ -10,7 +10,7 @@ use rl_graphql::tsql::backend::{
 };
 use rl_graphql::tsql::{Target, TsqlApi};
 use rl_graphql::{DataApiSettings, Outcome, Request};
-use rl_model::{AppModel, Caller, Session};
+use rl_model::{Action, AppModel, Caller, Policy, PolicyExpr, Session};
 use serde_json::{Map, Value as Json, json};
 
 fn inventory() -> AppModel {
@@ -29,6 +29,7 @@ fn inventory() -> AppModel {
 struct Recorder {
     statements: Mutex<Vec<Statement>>,
     answers: Mutex<Vec<Result<Vec<Row>, SqlError>>>,
+    commits: Mutex<usize>,
 }
 
 impl Recorder {
@@ -36,6 +37,7 @@ impl Recorder {
         Arc::new(Self {
             statements: Mutex::default(),
             answers: Mutex::new(answers),
+            commits: Mutex::default(),
         })
     }
 
@@ -69,7 +71,10 @@ impl SqlTransaction for Tx {
     }
 
     fn commit(self: Box<Self>) -> BoxFuture<'static, Result<(), SqlError>> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async move {
+            *self.0.commits.lock().unwrap() += 1;
+            Ok(())
+        })
     }
 }
 
@@ -103,16 +108,33 @@ fn row(json: Json) -> Row {
 }
 
 async fn run(target: Target, recorder: &Arc<Recorder>, query: &str) -> Json {
-    let api = TsqlApi::new(Arc::new(inventory()), target, DataApiSettings::default());
+    run_model(inventory(), target, recorder, query).await
+}
+
+async fn run_model(model: AppModel, target: Target, recorder: &Arc<Recorder>, query: &str) -> Json {
+    run_as(model, &alice(), target, recorder, query).await
+}
+
+async fn run_as(
+    model: AppModel,
+    caller: &Caller,
+    target: Target,
+    recorder: &Arc<Recorder>,
+    query: &str,
+) -> Json {
+    let api = TsqlApi::new(Arc::new(model), target, DataApiSettings::default());
     let request = Request {
         query: query.to_owned(),
         ..Request::default()
     };
     match api
-        .execute(&alice(), request, &Backend(Arc::clone(recorder)))
+        .execute(caller, request, &Backend(Arc::clone(recorder)))
         .await
     {
-        Outcome::Graphql { body, .. } => body,
+        Outcome::Graphql { status, body } => {
+            assert_eq!(status, 200);
+            body
+        }
         Outcome::AuthenticationRequired => panic!("401"),
     }
 }
@@ -239,8 +261,8 @@ async fn keys_policies_and_writes_bind_their_columns_types() {
     assert_eq!(
         statements[0].text,
         "UPDATE [sales].[products] SET [price] = @P3, [in_stock] = @P4 OUTPUT \
-         INSERTED.[product_id] WHERE (([sales].[products].[product_id] = @P1) AND (@P2 = \
-         [sales].[products].[owner_email]))"
+         INSERTED.[product_id] WHERE (([sales].[products].[product_id] = @P1) AND \
+         ([sales].[products].[owner_email] = @P2))"
     );
     assert_eq!(
         statements[0].params,
@@ -280,6 +302,189 @@ async fn keys_policies_and_writes_bind_their_columns_types() {
         "DELETE FROM [sales].[stock_levels] WHERE (([sales].[stock_levels].[product_id] = @P1) \
          AND ([sales].[stock_levels].[warehouse_code] = @P2))"
     );
+}
+
+fn product_policy(model: &mut AppModel, action: Action, check: Json) {
+    let entity = model
+        .entities
+        .iter_mut()
+        .find(|e| e.name == "Product")
+        .unwrap();
+    let grant = entity
+        .permissions
+        .iter_mut()
+        .find(|p| p.role == "authenticated")
+        .unwrap()
+        .actions
+        .iter_mut()
+        .rev()
+        .find(|g| g.action.covers(action))
+        .unwrap();
+    let expr = PolicyExpr::from_check(&check).unwrap();
+    grant.policy = Some(Policy {
+        text: expr.to_string(),
+        expr,
+    });
+}
+
+#[tokio::test]
+async fn connector_create_policy_rejects_omitted_defaulted_columns_without_running_sql() {
+    let mut model = inventory();
+    product_policy(
+        &mut model,
+        Action::Create,
+        json!({"op": "neq", "lhs": {"field": "createdAt"}, "rhs": null}),
+    );
+    let recorder = Recorder::default();
+    let recorder = Arc::new(recorder);
+    let body = run_model(
+        model,
+        Target::SqlDatabase,
+        &recorder,
+        r#"mutation { createProduct(item: {name: "Hammer", price: 1, inStock: true,
+             categoryId: 1,
+             ownerEmail: "alice@contoso.com"}) { name } }"#,
+    )
+    .await;
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "Forbidden",
+        "{body}"
+    );
+    assert!(recorder.statements().is_empty());
+    assert_eq!(*recorder.commits.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn connector_null_tests_and_policy_type_errors_share_data_semantics() {
+    for (check, expected_sql, code) in [
+        (
+            json!({"op": "eq", "lhs": {"field": "ownerEmail"}, "rhs": null}),
+            Some("t0.[owner_email] IS NULL"),
+            None,
+        ),
+        (
+            json!({"op": "neq", "lhs": {"field": "ownerEmail"}, "rhs": null}),
+            Some("t0.[owner_email] IS NOT NULL"),
+            None,
+        ),
+        (
+            json!({"op": "eq", "lhs": {"field": "productId"}, "rhs": {"claim": "sub"}}),
+            None,
+            Some("BadRequest"),
+        ),
+        (
+            json!({"op": "or", "args": [
+                {"op": "eq", "lhs": {"field": "inStock"}, "rhs": true},
+                {"op": "eq", "lhs": {"claim": "absent"}, "rhs": "x"}
+            ]}),
+            None,
+            Some("Forbidden"),
+        ),
+    ] {
+        let mut model = inventory();
+        product_policy(&mut model, Action::Read, check);
+        let recorder = Recorder::answering(vec![Ok(vec![])]);
+        let body = run_model(
+            model,
+            Target::SqlDatabase,
+            &recorder,
+            "{ products { items { name } } }",
+        )
+        .await;
+        if let Some(code) = code {
+            assert_eq!(body["errors"][0]["extensions"]["code"], code);
+            assert!(recorder.statements().is_empty());
+        } else {
+            assert!(body.get("errors").is_none(), "{body}");
+            assert!(
+                recorder.statements()[0]
+                    .text
+                    .contains(expected_sql.unwrap())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn connector_mutation_visibility_does_not_undo_successful_writes() {
+    const ID: &str = "11111111-1111-1111-1111-111111111111";
+    for read_grant in [true, false] {
+        let mut model = inventory();
+        if read_grant {
+            product_policy(
+                &mut model,
+                Action::Read,
+                json!({"op": "eq", "lhs": {"field": "ownerEmail"}, "rhs": {"claim": "email"}}),
+            );
+        } else {
+            let entity = model
+                .entities
+                .iter_mut()
+                .find(|e| e.name == "Product")
+                .unwrap();
+            entity
+                .permissions
+                .iter_mut()
+                .find(|p| p.role == "anonymous")
+                .unwrap()
+                .actions = vec![rl_model::ActionPermission {
+                action: Action::Update,
+                fields: None,
+                policy: None,
+            }];
+        }
+        let recorder =
+            Recorder::answering(vec![Ok(vec![vec![Value::Uuid(ID.into())]]), Ok(vec![])]);
+        let caller = if read_grant {
+            alice()
+        } else {
+            Caller::anonymous()
+        };
+        let body = run_as(
+            model,
+            &caller,
+            Target::SqlDatabase,
+            &recorder,
+            &format!(
+                "mutation {{ updateProduct(productId: \"{ID}\", item: {{price: 2}}) {{ name }} }}"
+            ),
+        )
+        .await;
+        assert_eq!(body["data"]["updateProduct"], Json::Null);
+        assert_eq!(*recorder.commits.lock().unwrap(), 1);
+        if read_grant {
+            assert!(body.get("errors").is_none(), "{body}");
+            assert_eq!(recorder.statements().len(), 2);
+        } else {
+            assert_eq!(body["errors"][0]["extensions"]["code"], "Forbidden");
+            assert_eq!(recorder.statements().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn connector_filtered_update_is_bad_request_but_filtered_delete_is_null() {
+    for (query, expected_code) in [
+        (
+            r#"mutation { updateProduct(productId: "11111111-1111-1111-1111-111111111111",
+              item: {price: 2}) { name } }"#,
+            Some("BadRequest"),
+        ),
+        (
+            r#"mutation { deleteProduct(productId: "11111111-1111-1111-1111-111111111111")
+              { name } }"#,
+            None,
+        ),
+    ] {
+        let recorder = Recorder::answering(vec![Ok(vec![]), Ok(vec![])]);
+        let body = run(Target::SqlDatabase, &recorder, query).await;
+        if let Some(code) = expected_code {
+            assert_eq!(body["errors"][0]["extensions"]["code"], code);
+        } else {
+            assert_eq!(body, json!({"data": {"deleteProduct": null}}));
+        }
+        assert_eq!(*recorder.commits.lock().unwrap(), 0);
+    }
 }
 
 #[tokio::test]
