@@ -534,6 +534,7 @@ async fn start_auth(
     if open_sign_in {
         auth = auth.with_open_dev_sign_in();
     }
+    auth.set_fabric_item_id(Some(state.data().item_id.clone()));
     Ok((Arc::new(auth), settings))
 }
 

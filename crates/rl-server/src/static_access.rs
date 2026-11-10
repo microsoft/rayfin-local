@@ -1,5 +1,7 @@
 //! The protected static-site gate. Fabric's signed hosting cookie is represented locally by a
-//! verified Rayfin session, so expiry and sign-out revoke asset access too.
+//! verified Rayfin session, so expiry and sign-out revoke asset access too. As in Fabric, a
+//! request whose `?_fu=` user hint names another user than the cookie's is gated again (the hint
+//! can only reject a cookie), and the sign-in page may be framed when the app is embedded.
 
 use std::sync::Arc;
 
@@ -10,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rl_model::{CallerResolver, bearer_token};
+use rl_model::{CallerResolver, FABRIC_USER_HINT_PARAM, bearer_token, fabric_user_hint};
 use serde_json::json;
 
 use crate::ServerConfig;
@@ -20,9 +22,15 @@ const SCRIPT_PATH: &str = "/.rayfin-local/static-signin.js";
 const NO_STORE: &str = "no-store, no-cache, must-revalidate";
 const PAGE: &str = include_str!("static_signin.html");
 const SCRIPT: &str = include_str!("static_signin.js");
+/// What marks a request as embedded when the browser sends no `Sec-Fetch-Dest`.
+const EMBEDDED_PARAM: &str = "fabricEmbedded";
+/// Fabric's `frame-ancestors` for gate pages in the portal frame (`EmbeddedFrameAncestors`).
+const EMBEDDED_FRAME_ANCESTORS: &str = "https: http://localhost:* http://127.0.0.1:*";
 
 pub(crate) struct StaticAccess {
     callers: Arc<dyn CallerResolver>,
+    /// The app's item id, which user hints are derived for.
+    project_id: String,
     origin: String,
     cookie_name: &'static str,
     cookie_attributes: &'static str,
@@ -42,6 +50,7 @@ impl StaticAccess {
         .replace('<', "\\u003c");
         Self {
             callers,
+            project_id: config.item_id.clone(),
             origin: config.api_origin.trim_end_matches('/').to_owned(),
             // __Host- requires Secure; use a different name rather than an invalid cookie over HTTP.
             cookie_name: if secure {
@@ -69,10 +78,16 @@ impl StaticAccess {
                     (name == self.cookie_name && !value.is_empty()).then_some(value)
                 })
             });
+        let hint = query_value(req, FABRIC_USER_HINT_PARAM).filter(|hint| !hint.is_empty());
         if token.is_some_and(|token| {
-            self.callers
-                .resolve(Some(token))
-                .is_ok_and(|caller| caller.is_authenticated())
+            self.callers.resolve(Some(token)).is_ok_and(|caller| {
+                caller.session.is_some_and(|session| {
+                    hint.as_deref().is_none_or(|hint| {
+                        fabric_user_hint(&self.project_id, &session.user_id).as_deref()
+                            == Some(hint)
+                    })
+                })
+            })
         }) {
             return None;
         }
@@ -89,7 +104,7 @@ impl StaticAccess {
         if req.method() == Method::HEAD {
             *response.body_mut() = axum::body::Body::empty();
         }
-        security_headers(&mut response);
+        security_headers(&mut response, embedded_request(req));
         if token.is_some() {
             response.headers_mut().insert(
                 header::SET_COOKIE,
@@ -172,20 +187,52 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
-fn security_headers(response: &mut Response) {
+/// The gate's headers. Standalone, nothing may frame its page; embedded, Fabric's portal chain
+/// (and a local one) may.
+fn security_headers(response: &mut Response, embedded: bool) {
+    let frame_ancestors = if embedded {
+        EMBEDDED_FRAME_ANCESTORS
+    } else {
+        "'none'"
+    };
+    let csp = format!(
+        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors {frame_ancestors}"
+    );
+    let headers = response.headers_mut();
     for (name, value) in [
         (header::CACHE_CONTROL, NO_STORE),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::REFERRER_POLICY, "no-referrer"),
-        (
-            header::CONTENT_SECURITY_POLICY,
-            "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
-        ),
     ] {
-        response
-            .headers_mut()
-            .insert(name, HeaderValue::from_static(value));
+        headers.insert(name, HeaderValue::from_static(value));
     }
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_str(&csp).expect("the gate's CSP is header-safe"),
+    );
+    if !embedded {
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
+}
+
+/// Fabric's `IsEmbeddedRequest`: loaded in a frame per `Sec-Fetch-Dest`, or, from browsers that
+/// send no `Sec-Fetch-Dest`, marked with `fabricEmbedded`.
+fn embedded_request(req: &Request) -> bool {
+    match req
+        .headers()
+        .get("sec-fetch-dest")
+        .and_then(|v| v.to_str().ok())
+        .filter(|dest| !dest.is_empty())
+    {
+        Some(dest) => dest.eq_ignore_ascii_case("iframe") || dest.eq_ignore_ascii_case("frame"),
+        None => query_value(req, EMBEDDED_PARAM).is_some(),
+    }
+}
+
+fn query_value(req: &Request, name: &str) -> Option<String> {
+    url::form_urlencoded::parse(req.uri().query()?.as_bytes())
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
 }
 
 fn document_navigation(headers: &HeaderMap) -> bool {

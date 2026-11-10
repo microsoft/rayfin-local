@@ -345,12 +345,23 @@ fn publishable_key(api_url: &str) -> String {
     config["publishableKey"].as_str().unwrap().to_owned()
 }
 
-/// Invokes function `name` anonymously: the status and the envelope's `output`.
+/// Invokes function `name` as a signed-in user, as Fabric requires: the status and the envelope's
+/// `output`.
 fn invoke(api_url: &str, key: &str, name: &str) -> (u16, Value) {
+    let grant = json!({
+        "grantType": "password",
+        "email": "invoker@example.test",
+        "password": "correct horse",
+    });
+    let url = format!("{api_url}/api/auth/v1/token");
+    let (status, body) = request("POST", &url, &[("X-Publishable-Key", key)], Some(&grant));
+    assert_eq!(status, 200, "{body}");
+    let session: Value = serde_json::from_str(&body).unwrap();
+    let bearer = format!("{} {}", "Bearer", session["accessToken"].as_str().unwrap());
     let (status, body) = request(
         "POST",
         &format!("{api_url}/functions/{name}/invoke"),
-        &[("X-Publishable-Key", key)],
+        &[("X-Publishable-Key", key), ("Authorization", &bearer)],
         Some(&json!({})),
     );
     let envelope: Value = serde_json::from_str(&body).unwrap_or(Value::Null);

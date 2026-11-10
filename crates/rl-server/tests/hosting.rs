@@ -10,7 +10,7 @@ use axum::{
     routing::post,
 };
 use http_body_util::BodyExt;
-use rl_model::{Caller, CallerError, CallerResolver, Session};
+use rl_model::{Caller, CallerError, CallerResolver, Session, fabric_user_hint};
 use rl_server::{HostingOptions, ServerConfig, StaticSite, build_router_with_hosting};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -283,5 +283,125 @@ async fn secure_sites_use_fabrics_host_cookie_attributes() {
         "Path=/",
     ] {
         assert!(cookie.contains(attribute), "{cookie}");
+    }
+}
+
+/// The BaaS workload's canonical user-hint vector (`StaticHostingUserHintTests`).
+const PROJECT: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+const USER: &str = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+const USER_HINT: &str = "ToVQv3p2KO1E1KwCWmoxFw";
+
+struct FabricUser;
+
+impl CallerResolver for FabricUser {
+    fn resolve(&self, token: Option<&str>) -> Result<Caller, CallerError> {
+        match token {
+            None => Ok(Caller::anonymous()),
+            Some("valid-session") => Ok(Caller::authenticated(Session {
+                user_id: USER.into(),
+                email: None,
+                claims: Default::default(),
+                access_token: "valid-session".into(),
+            })),
+            _ => Err(CallerError::InvalidToken),
+        }
+    }
+}
+
+fn fabric_site(dir: &std::path::Path) -> Router {
+    std::fs::write(dir.join("index.html"), "APP SHELL").unwrap();
+    build_router_with_hosting(
+        ServerConfig {
+            item_id: PROJECT.into(),
+            static_site: Some(StaticSite {
+                root: dir.to_owned(),
+                index_document: "index.html".into(),
+            }),
+            ..config()
+        },
+        vec![],
+        HostingOptions {
+            protected_assets: Some(Arc::new(FabricUser)),
+            ..Default::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_user_hint_for_someone_else_gates_the_cookie_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = fabric_site(dir.path());
+    let cookie = ("cookie", "rayfin_sh_sid=valid-session");
+    let frame = ("sec-fetch-dest", "iframe");
+
+    // No hint, an empty hint or the cookie's user's hint: the cookie is enough.
+    for path in [
+        "/?fabricEmbedded=true".to_owned(),
+        "/?fabricEmbedded=true&_fu=".to_owned(),
+        format!("/?fabricEmbedded=true&_fu={USER_HINT}"),
+    ] {
+        let (status, _, body) = send(&router, "GET", &path, &[cookie, frame]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(body, b"APP SHELL", "{path}");
+    }
+
+    // Another user's hint can only reject the cookie: sign in again, and drop the cookie.
+    let other = fabric_user_hint(PROJECT, "11111111-2222-4333-8444-555555555555").unwrap();
+    let path = format!("/?fabricEmbedded=true&_fu={other}");
+    let (status, headers, body) = send(&router, "GET", &path, &[cookie, frame]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Sign in to this app")
+    );
+    assert!(
+        headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    let (status, _, _) = send(&router, "GET", &path, &[cookie, ("accept", "*/*")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Nor can a hint stand in for a cookie.
+    let path = format!("/?_fu={USER_HINT}");
+    let (status, _, body) = send(&router, "GET", &path, &[frame]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Sign in to this app")
+    );
+}
+
+#[tokio::test]
+async fn the_sign_in_page_may_be_framed_only_when_embedded() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = fabric_site(dir.path());
+    let embedded = "https: http://localhost:* http://127.0.0.1:*";
+    for (path, dest, framed) in [
+        ("/", Some("document"), false),
+        ("/?fabricEmbedded=true", Some("document"), false),
+        ("/", Some("iframe"), true),
+        ("/", Some("frame"), true),
+        ("/?fabricEmbedded=true", None, true),
+        ("/", None, false),
+    ] {
+        let mut headers = vec![("accept", "text/html")];
+        headers.extend(dest.map(|dest| ("sec-fetch-dest", dest)));
+        let (status, headers, _) = send(&router, "GET", path, &headers).await;
+        assert_eq!(status, StatusCode::OK, "{path} {dest:?}");
+        let csp = headers["content-security-policy"].to_str().unwrap();
+        if framed {
+            assert!(
+                csp.ends_with(&format!("frame-ancestors {embedded}")),
+                "{csp}"
+            );
+            assert!(headers.get("x-frame-options").is_none());
+        } else {
+            assert!(csp.ends_with("frame-ancestors 'none'"), "{csp}");
+            assert_eq!(headers["x-frame-options"], "DENY");
+        }
     }
 }

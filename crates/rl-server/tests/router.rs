@@ -543,6 +543,7 @@ fn write(path: &Path, contents: &str) {
 }
 
 const INDEX: &str = "<!doctype html><title>app</title>";
+const DOCS: &str = "<!doctype html><title>docs</title>";
 const SECRET: &str = "TOP SECRET";
 
 /// A static site in `<dir>/dist`, with a file outside it at `<dir>/secret.txt`.
@@ -552,6 +553,8 @@ fn static_router(dir: &Path) -> Router {
     write(&root.join("assets/app.js"), "console.log('app')");
     write(&root.join("assets/app.css"), "body{}");
     write(&root.join("logo.svg"), "<svg/>");
+    write(&root.join("docs/index.html"), DOCS);
+    write(&root.join("LICENSE"), "MIT");
     write(&dir.join("secret.txt"), SECRET);
     let site = StaticSite {
         root,
@@ -588,8 +591,10 @@ async fn static_files_have_their_mime_type_and_no_cache() {
     assert!(reply.body.is_empty());
 }
 
+/// As BaaS's `StaticWebsiteWorkflow`: every GET that names no file gets the index document,
+/// whatever it accepts, so a missing `/favicon.ico` is the app shell too.
 #[tokio::test]
-async fn page_navigations_fall_back_to_the_index_document() {
+async fn missing_paths_fall_back_to_the_index_document() {
     let dir = tempfile::tempdir().unwrap();
     let router = static_router(dir.path());
     let html = [("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")];
@@ -597,8 +602,16 @@ async fn page_navigations_fall_back_to_the_index_document() {
         ("/", &html[..]),
         ("/threads/42", &html[..]),
         ("/threads/42", &[][..]),
+        ("/threads/42", &[("Accept", "application/json")][..]),
         ("/assets", &html[..]),
         ("/functions-overview", &html[..]),
+        ("/assets/missing.js", &[("Accept", "*/*")][..]),
+        (
+            "/favicon.ico",
+            &[("Accept", "image/avif,image/webp,*/*;q=0.8")][..],
+        ),
+        // Extensionless paths name folders, never files.
+        ("/LICENSE", &[][..]),
     ] {
         let reply = send(&router, Method::GET, uri, headers).await;
         assert_eq!(reply.status, StatusCode::OK, "{uri}");
@@ -606,10 +619,13 @@ async fn page_navigations_fall_back_to_the_index_document() {
         assert_eq!(reply.header("cache-control"), Some("no-cache"), "{uri}");
         assert_eq!(reply.text(), INDEX, "{uri}");
     }
+    for uri in ["/docs", "/docs/"] {
+        let reply = send(&router, Method::GET, uri, &html).await;
+        assert_eq!(reply.status, StatusCode::OK, "{uri}");
+        assert_eq!(reply.text(), DOCS, "{uri}");
+    }
 
     let not_pages = [
-        (Method::GET, "/assets/missing.js", "*/*"),
-        (Method::GET, "/threads/42", "application/json"),
         (Method::POST, "/threads/42", "text/html"),
         (Method::GET, "/api/x", "text/html"),
         (Method::GET, "/graphql", "text/html"),

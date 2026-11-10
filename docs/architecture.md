@@ -282,7 +282,7 @@ The SDK doesn't notice a popup closed by the user, so the page sends `access_den
 
 Apps that call `initEmbeddedAuth` sign in only inside a Fabric frame: Fabric loads them with `?fabricEmbedded=true` and answers their `fabric-auth` bridge requests.
 `/.rayfin-local/portal/embed` plays that host.
-The developer signs in on the host page first; the server then keeps a host session (a random token, stored hashed, in memory, for 12 hours), and the page frames the app.
+The developer signs in on the host page first; the server then keeps a host session (a random token, stored hashed, in memory, for 12 hours), and the page frames the app with Fabric's `_fu` user hint (derived from the item id and the user id as BaaS does), which tells the SDK to keep a session for the same user.
 Each `auth.requestHandoff` from the frame (a PKCE challenge, the app's origin and a state) is answered at once with a one-time handoff code for the host's user, which the app redeems at `/api/auth/v1/token` as in the popup flow.
 Answering at once matters: the SDK gives the host 30 seconds, too little to wait for someone to type a password.
 The page accepts messages only from the framed app's window and origin, the app's origin must pass the same check as a return origin, and its CSP allows only that origin in frames.

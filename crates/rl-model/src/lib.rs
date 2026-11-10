@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-pub use caller::{Caller, CallerError, CallerResolver, Session, bearer_token};
+pub use caller::{
+    Caller, CallerError, CallerResolver, FABRIC_USER_HINT_PARAM, Session, bearer_token,
+    fabric_user_hint,
+};
 pub use model::*;
 pub use policy::{CompareOp, Literal, Operand, PolicyAstError, PolicyExpr};
 pub use system::system_user;
