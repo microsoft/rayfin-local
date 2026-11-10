@@ -38,18 +38,22 @@ fn typescript_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("RAYFIN_LOCAL_TYPESCRIPT_DIR") {
         return Some(dir.into());
     }
+    let has_typescript = |dir: &Path| dir.join("node_modules/typescript/package.json").is_file();
+    // The functions fixture's own devDependency (`npm ci` in tests/fixtures/functions/basic).
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/functions/basic");
+    if has_typescript(&fixture) {
+        return Some(fixture);
+    }
     let functions = explorer()?.join("rayfin").join("functions");
-    functions
-        .join("node_modules/typescript/package.json")
-        .is_file()
-        .then_some(functions)
+    has_typescript(&functions).then_some(functions)
 }
 
 async fn node() -> Option<NodeRuntime> {
     match NodeRuntime::discover().await {
         Ok(node) => Some(node),
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             None
         }
     }
@@ -58,7 +62,7 @@ async fn node() -> Option<NodeRuntime> {
 /// Node and a TypeScript to generate with, or `None` (test skipped).
 async fn toolchain() -> Option<(NodeRuntime, PathBuf)> {
     let Some(typescript) = typescript_dir() else {
-        eprintln!("skipped: no TypeScript (set RAYFIN_LOCAL_TYPESCRIPT_DIR)");
+        rl_test_support::skip("no TypeScript (set RAYFIN_LOCAL_TYPESCRIPT_DIR)");
         return None;
     };
     Some((node().await?, typescript))

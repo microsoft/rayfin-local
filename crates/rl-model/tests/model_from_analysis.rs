@@ -441,7 +441,7 @@ fn basic_storage_folders() {
         delete.check,
         Some(PolicyExpr::And(vec![
             eq(claim("sub"), field("owner_id")),
-            eq(field("team_id"), string("t1")),
+            ne(field("team_id"), string("")),
         ]))
     );
     assert_eq!(

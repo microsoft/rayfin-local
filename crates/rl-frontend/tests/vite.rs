@@ -102,7 +102,7 @@ async fn prerequisites() -> Option<(NodeRuntime, PathBuf)> {
     match NodeRuntime::discover().await {
         Ok(node) => Some((node, explorer)),
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             None
         }
     }
@@ -548,15 +548,15 @@ async fn the_dev_server_signs_the_app_in_before_rayfin_local_dev_does() {
     let node = match NodeRuntime::discover().await {
         Ok(node) => node,
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             return;
         }
     };
     let apps = vite_apps();
     if apps.is_empty() {
-        eprintln!(
-            "skipped: no app has Vite and @microsoft/rayfin-local-dev installed (run `npm ci` in \
-             tests/fixtures/apps/basic)"
+        rl_test_support::skip(
+            "no app has Vite and @microsoft/rayfin-local-dev installed (run `npm ci` in \
+             tests/fixtures/apps/basic)",
         );
     }
     for app in apps {

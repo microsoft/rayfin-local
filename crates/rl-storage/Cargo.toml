@@ -30,6 +30,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+rl-test-support.workspace = true
 rl-server.workspace = true
 tower.workspace = true
 http-body-util.workspace = true

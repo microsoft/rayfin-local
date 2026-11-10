@@ -18,8 +18,9 @@ export function removeStaleToml(): void {
 
 /**
  * The fixture app (`tests/fixtures/apps/basic`) on a fresh database, with fake Power BI and Fabric
- * tokens, its connector pointed at the mock Power BI through a `rayfin-local.toml`, which
- * stop() takes out again, and the control API on.
+ * tokens, its connector pointed at the mock Power BI and nobody signed in up front
+ * (`sign_in_as = "none"`) through a `rayfin-local.toml`, which stop() takes out again, and the
+ * control API on.
  */
 export async function startFixtureSuite(): Promise<RunningSuite> {
   await assertNotServed(FIXTURE_DIR);
@@ -44,7 +45,11 @@ export async function startFixtureSuite(): Promise<RunningSuite> {
     }
   };
   try {
-    toml.write(`${TOML_HEADER}\n[connectors]\npowerbi_base_url = "${mock.baseUrl}"\n`);
+    // Nobody is signed in up front, so the app signs in through the popup; tests that need the
+    // developer switch to them with the control API (support/control.ts).
+    toml.write(
+      `${TOML_HEADER}\n[auth]\nsign_in_as = "none"\n\n[connectors]\npowerbi_base_url = "${mock.baseUrl}"\n`,
+    );
     serve = await ServeProcess.start({
       projectDir: FIXTURE_DIR,
       label: 'fixture',

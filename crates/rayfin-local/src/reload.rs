@@ -1320,7 +1320,7 @@ mod tests {
     async fn a_reload_on_request_applies_the_changes_and_answers_their_events() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let Ok(node) = NodeRuntime::discover().await else {
-            eprintln!("skipped: Node.js is not on PATH");
+            rl_test_support::skip("Node.js is not on PATH");
             return;
         };
         let dir = tempfile::tempdir().unwrap();

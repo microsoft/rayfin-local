@@ -57,12 +57,12 @@ fn sdk_dir() -> PathBuf {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_rayfin_storage_client_uploads_lists_downloads_and_deletes() {
     let Some(node) = node() else {
-        eprintln!("skipped: Node.js was not found (set RAYFIN_LOCAL_NODE)");
+        rl_test_support::skip("Node.js was not found (set RAYFIN_LOCAL_NODE)");
         return;
     };
     let sdk = sdk_dir();
     if !sdk.join("node_modules/@microsoft/rayfin-storage").is_dir() {
-        eprintln!("skipped: run `npm install` in {}", sdk.display());
+        rl_test_support::skip(format_args!("run `npm install` in {}", sdk.display()));
         return;
     }
 

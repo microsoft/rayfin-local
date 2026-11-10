@@ -3,7 +3,7 @@
 A small Rayfin app on SDK and CLI 1.36.2 that uses every service `rayfin-local serve` emulates.
 It is modeled on the reference app (`fabric-apps/apps/explorer`): the same packages, `vite.config.ts`
 with `rayfinLocalDev({ autoLogin: true })`, a client bootstrapped from `import.meta.env.VITE_*`
-(`src/services/bootstrap.ts`), `ConnectorsRayfinClient` and `ensureSignedInWithFabric`.
+(`src/services/bootstrap.ts`), `ConnectorsRayfinClient`, `ensureSignedInWithFabric` and `initEmbeddedAuth`.
 
 | Part | Where | What it exercises |
 | --- | --- | --- |
@@ -41,6 +41,7 @@ gets `data-status="running"`, then `ok` or `error`, and the JSON
 | `config` | Shows the API URL and the Fabric sign-in options from the env. |
 | `sign-in`, `sign-out`, `session` | `ensureSignedInWithFabric` (the popup at `<api>/.rayfin-local/portal`), `signOut`, `getSession`: `{isAuthenticated, user}`. |
 | `auto-sign-in` | What apps from Rayfin's templates do when they load: `fetchRayfinLocalSessionToken()` from the dev server, then `signInWithBrokeredToken`, with no popup: `{isAuthenticated, user}`. |
+| `embedded-auth` | `initEmbeddedAuth`, which also runs once on load, as apps call it at startup. Framed in a Fabric host with `?fabricEmbedded=true` (rayfin-local's is `<api>/.rayfin-local/portal/embed`), it signs in through the host with no popup: `{isAuthenticated, user}`. Standalone: `null`. |
 | `todo-crud` | Creates, lists, updates and deletes a Todo. |
 | `todo-paginate` | Three Todos, two per page: `[{titles: ["1","2"], hasNextPage: true}, {titles: ["3"], ...}]`. |
 | `todo-category` | A Todo with `category.name`, and the Category with `todos.title`. |
