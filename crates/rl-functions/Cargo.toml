@@ -28,6 +28,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+rl-test-support.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 tempfile.workspace = true

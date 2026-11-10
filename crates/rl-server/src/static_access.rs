@@ -139,7 +139,7 @@ pub(crate) fn routes(access: Arc<StaticAccess>) -> Router {
 }
 
 async fn create_session(State(access): State<Arc<StaticAccess>>, headers: HeaderMap) -> Response {
-    if headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) != Some(&access.origin) {
+    if !same_origin(&headers, &access.origin) {
         return (
             StatusCode::FORBIDDEN,
             [(header::CACHE_CONTROL, NO_STORE)],
@@ -176,6 +176,31 @@ async fn create_session(State(access): State<Arc<StaticAccess>>, headers: Header
         ],
     )
         .into_response()
+}
+
+/// Whether the request comes from the site's own origin: the API origin, or the one the page
+/// was opened on under another name the Host check accepted (`127.0.0.1` for `localhost`). The
+/// cookie is host-only, so it serves only that name.
+fn same_origin(headers: &HeaderMap, api_origin: &str) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    if origin == api_origin {
+        return true;
+    }
+    let scheme = if api_origin.starts_with("https://") {
+        "https://"
+    } else {
+        "http://"
+    };
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|host| {
+            origin
+                .strip_prefix(scheme)
+                .is_some_and(|authority| authority.eq_ignore_ascii_case(host))
+        })
 }
 
 fn unauthorized() -> Response {

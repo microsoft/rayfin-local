@@ -65,7 +65,7 @@ async fn the_sdk_reads_and_writes_through_rayfin_local() {
     let project = fixture();
     let node_modules = project.join("node_modules");
     if !node_modules.join("@microsoft/rayfin-connectors").is_dir() {
-        eprintln!("skipped: run `npm install` in {}", project.display());
+        rl_test_support::skip(format_args!("run `npm install` in {}", project.display()));
         return;
     }
     if Command::new("node")
@@ -74,7 +74,7 @@ async fn the_sdk_reads_and_writes_through_rayfin_local() {
         .await
         .is_err()
     {
-        eprintln!("skipped: node isn't on PATH");
+        rl_test_support::skip("node isn't on PATH");
         return;
     }
     let compiled = compile_entities(&project).await;

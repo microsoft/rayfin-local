@@ -5,6 +5,7 @@ import { removeStaleToml, startFixtureSuite } from './support/fixture-suite.ts';
 import { REPO_ROOT } from './support/paths.ts';
 import { killLeftovers } from './support/pids.ts';
 import { run } from './support/project.ts';
+import { startStaticSuite } from './support/static-suite.ts';
 import { SuiteHost } from './support/suites.ts';
 
 /**
@@ -18,7 +19,11 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
     console.log('[e2e] cargo build -p rayfin-local');
     await run('cargo', ['build', '-p', 'rayfin-local'], REPO_ROOT, 'cargo-build');
   }
-  const host = await SuiteHost.start({ fixture: startFixtureSuite, explorer: startExplorerSuite });
+  const host = await SuiteHost.start({
+    fixture: startFixtureSuite,
+    static: startStaticSuite,
+    explorer: startExplorerSuite,
+  });
   process.env.RAYFIN_LOCAL_E2E_CONTROL = host.url;
   return () => host.stopAll();
 }

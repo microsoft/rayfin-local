@@ -20,7 +20,7 @@ const TOKEN_HINT: &str = "Run `az login`, then retry.";
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sdk_normalizes_rayfin_local_answers_as_its_direct_path() {
     let Some(node_modules) = sdk_node_modules() else {
-        eprintln!("skipped: the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
         return;
     };
     if Command::new("node")
@@ -29,7 +29,7 @@ async fn the_sdk_normalizes_rayfin_local_answers_as_its_direct_path() {
         .await
         .is_err()
     {
-        eprintln!("skipped: node isn't on PATH");
+        rl_test_support::skip("node isn't on PATH");
         return;
     }
 

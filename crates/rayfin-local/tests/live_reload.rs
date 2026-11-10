@@ -63,15 +63,15 @@ impl App {
         .iter()
         .all(|package| fixture.join(package).join("package.json").is_file());
         if !installed {
-            eprintln!(
-                "skipped: the fixture's packages are not installed (run `npm ci` in {0} and in \
+            rl_test_support::skip(format_args!(
+                "the fixture's packages are not installed (run `npm ci` in {0} and in \
                  {0}/rayfin/functions)",
                 fixture.display()
-            );
+            ));
             return None;
         }
         if Command::new("node").arg("--version").output().is_err() {
-            eprintln!("skipped: Node.js is not on PATH");
+            rl_test_support::skip("Node.js is not on PATH");
             return None;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -830,10 +830,10 @@ fn storage_checks_are_config_invalid_at_startup() {
         .join("storage")
         .join("Attachments.ts");
     let valid = std::fs::read_to_string(&source).unwrap();
-    assert!(valid.contains("item.team_id.eq('t1')"));
+    assert!(valid.contains("item.team_id.neq('')"));
     std::fs::write(
         &source,
-        valid.replace("item.team_id.eq('t1')", "item.team_id.neq(null)"),
+        valid.replace("item.team_id.neq('')", "item.team_id.neq(null)"),
     )
     .unwrap();
     let mut serve = Serve::start(
@@ -882,7 +882,7 @@ fn invalid_storage_reload_keeps_the_previous_rules_and_recovers() {
     let valid = std::fs::read_to_string(&source).unwrap();
     std::fs::write(
         &source,
-        valid.replace("item.team_id.eq('t1')", "item.team_id.neq(null)"),
+        valid.replace("item.team_id.neq('')", "item.team_id.neq(null)"),
     )
     .unwrap();
     let (status, error) = control(&api_url, "POST", "/reload", None);

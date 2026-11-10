@@ -218,14 +218,44 @@ async fn static_session_requires_a_verified_token_and_same_origin() {
             ..Default::default()
         },
     );
-    for (origin, token, expected) in [
+    for (origin, host, token, expected) in [
         (
             "https://attacker.example",
+            "localhost:7171",
             "valid-session",
             StatusCode::FORBIDDEN,
         ),
-        (ORIGIN, "invalid-session", StatusCode::UNAUTHORIZED),
-        (ORIGIN, "valid-session", StatusCode::NO_CONTENT),
+        // Another name for the site is fine only as the page's own origin.
+        (
+            "http://127.0.0.1:7171",
+            "localhost:7171",
+            "valid-session",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "https://127.0.0.1:7171",
+            "127.0.0.1:7171",
+            "valid-session",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            ORIGIN,
+            "localhost:7171",
+            "invalid-session",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            ORIGIN,
+            "localhost:7171",
+            "valid-session",
+            StatusCode::NO_CONTENT,
+        ),
+        (
+            "http://127.0.0.1:7171",
+            "127.0.0.1:7171",
+            "valid-session",
+            StatusCode::NO_CONTENT,
+        ),
     ] {
         let (status, headers, _) = send(
             &router,
@@ -233,6 +263,7 @@ async fn static_session_requires_a_verified_token_and_same_origin() {
             "/.rayfin-local/static-session",
             &[
                 ("origin", origin),
+                ("host", host),
                 ("authorization", &format!("Bearer {token}")),
             ],
         )

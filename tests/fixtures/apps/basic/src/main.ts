@@ -1,4 +1,8 @@
-import { ensureSignedInWithFabric, signInWithBrokeredToken } from '@microsoft/rayfin-auth-provider-fabric';
+import {
+  ensureSignedInWithFabric,
+  initEmbeddedAuth,
+  signInWithBrokeredToken,
+} from '@microsoft/rayfin-auth-provider-fabric';
 import { fetchRayfinLocalSessionToken } from '@microsoft/rayfin-local-dev';
 
 import type { BasicSchema } from '../rayfin/data/schema';
@@ -11,6 +15,9 @@ import { bootstrap, type AppServices } from './services/bootstrap';
  *
  * Data scenarios work on rows titled with a tag unique to the run, report titles without it, and
  * delete what they created.
+ *
+ * `embedded-auth` also runs once on load, as apps call `initEmbeddedAuth` at startup: framed in a
+ * Fabric host with `?fabricEmbedded=true`, it signs in through the host; standalone it is null.
  */
 
 type Todo = BasicSchema['Todo'];
@@ -32,6 +39,10 @@ const scenarios: Record<string, () => Promise<unknown>> = {
   config: async () => ({ apiUrl: import.meta.env.VITE_RAYFIN_API_URL, ...fabricOptions }),
   'sign-in': async () => sessionInfo(await ensureSignedInWithFabric(client.auth, fabricOptions)),
   'auto-sign-in': autoSignIn,
+  'embedded-auth': async () => {
+    const session = await initEmbeddedAuth(client.auth, fabricOptions);
+    return session && sessionInfo(session);
+  },
   'sign-out': async () => {
     await client.auth.signOut();
     return sessionInfo(client.auth.getSession());
@@ -273,3 +284,4 @@ for (const [name, run] of Object.entries(scenarios)) {
   list.append(section);
 }
 appStatus.textContent = 'ready';
+document.querySelector<HTMLButtonElement>('[data-testid="run-embedded-auth"]')!.click();

@@ -837,9 +837,9 @@ async fn rules_follow_roles_owners_and_checks() {
     );
 
     // Attachments overwrite, but only for the owner (`update` checks `owner_id`), who stays the
-    // owner; deleting also needs `team_id == 't1'`.
-    let attachment =
-        json!({ "folder": "todo-attachments", "fileName": "a.png", "contentType": "image/png" });
+    // owner; deleting also needs a `team_id` other than ''.
+    let attachment = json!({ "folder": "todo-attachments", "fileName": "a.png",
+        "contentType": "image/png", "fields": { "team_id": "" } });
     h.upload(alice, attachment.clone(), b"v1").await.unwrap();
     let denied = h.upload(bob, attachment.clone(), b"v2").await.unwrap_err();
     assert_eq!(denied.code(), "PERMISSION_DENIED");
