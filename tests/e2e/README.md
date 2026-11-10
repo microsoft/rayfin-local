@@ -56,7 +56,8 @@ random one, for the control API. The explorer suite uses your real tokens
 - **One `serve` per suite** (`support/serve.ts`), started on free ports with `--reset`, so every
   run starts from an empty database. It is ready once `GET <api>/.rayfin-local/health` and the
   frontend URL from the startup banner answer. Stopping kills the process tree
-  (`taskkill /T /F` on Windows) and checks that both ports are free again.
+  (`taskkill /T /F` on Windows; elsewhere SIGTERM, which serve answers by stopping Vite and the
+  function host, then SIGKILL to every descendant) and checks that both ports are free again.
 - **Suites start in the Playwright runner** (`support/suites.ts`), on the first test that needs
   them, and stop in the global teardown. So they survive Playwright replacing its worker after a
   failed test, and die with the runner if it is killed (Windows ends `serve` with the runner's job
