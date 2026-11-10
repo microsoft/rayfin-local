@@ -60,7 +60,7 @@ node scripts/check.mjs --help
 | `setup` | `npm ci` in each test fixture and harness (again only when its `package-lock.json` changed), builds `tests/fixtures/functions/basic`, and for `e2e` downloads Playwright's Chromium (not with `PLAYWRIGHT_CHANNEL`). The other steps run it first unless `--no-setup`. | all but `lint` |
 | `lint` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`. | `lint` |
 | `rust` | `cargo test --workspace` and the SDK auth test (`rl-auth --test sdk -- --ignored`), in strict mode. | `test` (Windows, Linux, macOS) |
-| `js` | `node --test js/test/`. | `test` |
+| `js` | `node --test` on each `js/test/*.test.mjs`. | `test` |
 | `e2e` | The Playwright `fixture` and `static` suites ([below](#end-to-end-tests)), and the sign-in portal test (`rl-auth --test portal_e2e -- --ignored`). | `e2e` (Linux) |
 
 While working on one crate, `cargo test -p <crate>` is quicker; run the check before you push.

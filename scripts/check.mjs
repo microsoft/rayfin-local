@@ -21,7 +21,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,7 +107,12 @@ function rust() {
 }
 
 function js() {
-  exec(process.execPath, ['--test', 'js/test/']);
+  // Node 22 doesn't take a folder for --test, so name the files.
+  const files = readdirSync(at('js/test'))
+    .filter((name) => name.endsWith('.test.mjs'))
+    .map((name) => path.join('js', 'test', name));
+  if (files.length === 0) fail('no tests in js/test');
+  exec(process.execPath, ['--test', ...files]);
 }
 
 function e2e() {
