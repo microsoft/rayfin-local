@@ -351,7 +351,7 @@ Content-Type: application/json
 ```
 
 The same works for `POST /functions/<name>/invoke`, `POST /connector-invoke/<name>` and `POST /connectors/<name>/graphql`.
-Leave out `Authorization` to call as an anonymous user.
+Leave out `Authorization` to call as an anonymous user; functions refuse anonymous callers (403 `FUNCTION_ACCESS_DENIED`), as in Fabric.
 
 ## Local secret values
 

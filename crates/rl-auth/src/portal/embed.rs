@@ -12,7 +12,8 @@
 //! 1. app → parent, target `*`: `{channel: 'fabric-auth', version: 1, kind:
 //!    'externalEmbed.ready', requestId}`. Fabric does not answer it, and neither does the
 //!    page: after 300 ms the app takes Fabric's path.
-//! 2. With no `_fu` user hint in its URL (the page adds none), the app signs out, then posts
+//! 2. With the `_fu` user hint the page adds to its URL (when the item and user ids are GUIDs),
+//!    the app keeps its session; without one, it signs out. Then it posts
 //!    (target `*`) `{channel: 'fabric-auth', version: 1, kind: 'auth.requestHandoff',
 //!    requestId, payload: {callbackUrl, codeChallenge, codeChallengeMethod: 'S256', state}}`
 //!    and waits 30 seconds for its parent's answer.
@@ -30,7 +31,8 @@
 //! needs a loopback `Host`):
 //!
 //! - `POST …/api/embed/signin` and `…/embed/signup` (`{username, password}`), `…/embed/entra`
-//!   (`{}`): a host session, `{hostToken, user: {id, username, email, name}}`. The server keeps
+//!   (`{}`): a host session, `{hostToken, user: {id, username, email, name}, userHint}`, where
+//!   `userHint` is the user's `_fu` (`null` when it cannot be derived). The server keeps
 //!   the token's hash only, in memory, for 12 hours; the page keeps the token for its tab.
 //! - `POST …/api/embed/handoff` (`{hostToken, returnOrigin, codeChallenge, codeChallengeMethod,
 //!   state}`): `{handoffCode, state}`, checked like the sign-in page's challenges; 401
@@ -75,6 +77,8 @@ const NOTICE: &str = include_str!("notice.html");
 pub(super) struct Host {
     /// The app to frame when the page's URL names none.
     app_url: RwLock<Option<String>>,
+    /// The app's Fabric item id, which the `_fu` user hint is derived for.
+    item_id: RwLock<Option<String>>,
     /// Signed-in developers, by the SHA-256 of their host token.
     sessions: Mutex<HashMap<[u8; 32], HostSession>>,
 }
@@ -145,6 +149,16 @@ impl AuthService {
         *self.portal.host.app_url.write() = url
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty());
+    }
+
+    /// The app's Fabric item id (`itemId` of `/rayfin.config.json`). With it, the host page frames
+    /// the app with its developer's `_fu` user hint, as Fabric does, so the SDK keeps its session
+    /// and the protected static site's cookie stays valid (the hint is derived only when the item
+    /// and user ids are GUIDs).
+    pub fn set_fabric_item_id(&self, item_id: Option<String>) {
+        *self.portal.host.item_id.write() = item_id
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
     }
 
     /// The host page, under the sign-in page's CSP plus `frame-src` for the app; or a page that
@@ -306,6 +320,13 @@ impl AuthService {
             },
         );
         drop(sessions);
+        let user_hint = self
+            .portal
+            .host
+            .item_id
+            .read()
+            .as_deref()
+            .and_then(|item_id| rl_model::fabric_user_hint(item_id, &user.id));
         Ok(json!({
             "hostToken": token,
             "user": {
@@ -314,6 +335,7 @@ impl AuthService {
                 "email": user.email,
                 "name": user.display_name,
             },
+            "userHint": user_hint,
         }))
     }
 
@@ -602,6 +624,17 @@ mod tests {
         );
         let host_token = signed_in.body["hostToken"].as_str().unwrap();
         assert_eq!(b64url_decode(host_token).unwrap().len(), 32);
+        // No item id yet: no user hint.
+        assert_eq!(signed_in.body["userHint"], Value::Null);
+        let item_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+        app.auth.set_fabric_item_id(Some(format!(" {item_id} ")));
+        let account = json!({ "username": USER, "password": PASSWORD });
+        let hinted = from_host(&app, &csrf, "signin", account).await;
+        assert_eq!(
+            hinted.body["userHint"].as_str(),
+            rl_model::fabric_user_hint(item_id, &ada.id).as_deref()
+        );
+        assert_eq!(hinted.body["userHint"].as_str().unwrap().len(), 22);
 
         // Every load of the app asks for a code, bound to its verifier and origin.
         for _ in 0..2 {

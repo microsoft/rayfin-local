@@ -25,6 +25,10 @@ use crate::host::{
 /// The longest function name the deployed route accepts.
 const MAX_NAME_LENGTH: usize = 128;
 
+/// The dynamic auth-claims provider, which only the service calls while issuing tokens
+/// (`AuthClaimsConstants.AuthClaimsFunctionName` in BaaS).
+const AUTH_CLAIMS_FUNCTION: &str = "rayfin_auth_claims";
+
 /// What a call answered while the host (re)starts should wait before retrying, in seconds.
 const RETRY_AFTER_SECONDS: &str = "5";
 
@@ -66,6 +70,21 @@ async fn answer(service: &FunctionsService, name: &str, request: Request) -> Ans
     let Ok(caller) = service.callers.resolve(bearer_token(authorization)) else {
         return unauthorized();
     };
+    // BaaS's `FunctionAccessAuthorizer`, before any other check.
+    if !caller.is_authenticated() {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "FUNCTION_ACCESS_DENIED",
+            "Anonymous access is not allowed for function invocation.",
+        );
+    }
+    if name.eq_ignore_ascii_case(AUTH_CLAIMS_FUNCTION) {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "FUNCTION_ACCESS_DENIED",
+            format!("Function '{name}' is reserved and cannot be invoked directly."),
+        );
+    }
     if let Err(message) = validate_name(name) {
         return refuse(StatusCode::BAD_REQUEST, "FUNCTION_INVALID_NAME", message);
     }

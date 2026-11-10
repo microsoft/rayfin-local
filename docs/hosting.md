@@ -47,11 +47,25 @@ With `rayfin-local serve --static`, `services.staticHosting.assetAccess: protect
 | Document navigation (`Sec-Fetch-Dest: document`, `iframe`, or `frame`; otherwise `Sec-Fetch-Mode: navigate` or HTML `Accept`) | HTTP 200 sign-in interstitial at the requested URL, not a redirect and not app content. |
 | Asset/config fetch, including a request without navigation headers | HTTP 401 `{"error":"Authentication required."}`. |
 
-The interstitial opens rayfin-local's sign-in popup, exchanges its PKCE handoff, creates an
+The interstitial signs in, exchanges its PKCE handoff, creates an
 HttpOnly hosting cookie through a same-origin POST, primes the SDK's default `authSession`
-store, and reloads the document. An Authorization header alone does not unlock static files.
+store, and reloads the document. Standalone, it opens rayfin-local's sign-in popup. Framed
+with `?fabricEmbedded=true` (remembered for the tab in `sessionStorage`), it asks the parent
+frame for the handoff with the `fabric-auth` `auth.requestHandoff` message, as Fabric's does,
+so `/.rayfin-local/portal/embed` signs it in without a popup. An Authorization header alone
+does not unlock static files.
 Auth/API routes, health, and the interstitial's own script are not static assets and remain
 reachable under their existing guards. Public access skips the hosting-cookie check entirely.
+
+The interstitial may be framed only when the request is embedded (`Sec-Fetch-Dest: iframe` or
+`frame`; without that header, the `fabricEmbedded` query parameter): `Content-Security-Policy:
+frame-ancestors https: http://localhost:* http://127.0.0.1:*`. Otherwise it sends
+`frame-ancestors 'none'` and `X-Frame-Options: DENY`, as Fabric does.
+
+A request carrying Fabric's `_fu` user hint must match the cookie's user: the hint is
+base64url(SHA-256(`rayfin.sh.fu.v1|<item id>|<user id>`)[0..16]), as BaaS derives it. A hint
+for someone else gates the cookie again (the interstitial for documents, 401 for assets) and
+clears it. The hint can only reject a cookie, never grant access.
 
 `public` is also the legacy serving default when `assetAccess` is absent, matching BaaS's
 absent-setting fallback. New deployments to current Fabric require an explicit choice.
@@ -75,8 +89,8 @@ Changing `assetAccess` applies live; it does not rebuild the app.
   context) or HTTPS for the PKCE bootstrap.
 - Static files retain rayfin-local's development `no-cache` policy rather than Fabric's
   immutable-content cache optimization. Interstitials, denials, and runtime config are not stored.
-- Fabric portal embedding, `embedded.only`, tenant hosting policy, and Fabric item permissions
-  are not emulated by this gate.
+- Fabric's `embedded.only`, tenant hosting policy, and Fabric item permissions are not
+  emulated by this gate.
 
 Sources: BaaS `StaticHostingAccessGate.cs:265–275,295–298,371–401,529–533,904–923,1282–1319`,
 `StaticHostingAccessConstants.cs:32,211–226`, `StaticHostingCookieService.cs:39`.

@@ -21,12 +21,14 @@
 //!   `content-type` (`application/json` when it set none) and `x-fabric-udf-status` pass through
 //!   with the body; the deployed workflow adds nothing the SDK reads (Rayfin:
 //!   `Workflow/FunctionInvokeWorkflow.cs` `CopyHttpResponseAsync`).
-//! - **Caller.** Anonymous calls are allowed: the deployed authentication middleware gives
-//!   token-less requests anonymous claims (Rayfin:
-//!   `Auth/Middleware/RayfinAuthenticationMiddleware.cs`) and `InvokeController` has no
-//!   `[Authorize]`. An invalid bearer token is `401 {"error": "Invalid authentication token"}`,
-//!   as that middleware answers.
-//! - **Request checks,** in the deployed order: the bearer token (401); the name,
+//! - **Caller.** Only signed-in callers may invoke, as in Fabric: BaaS's
+//!   `FunctionAccessAuthorizer` answers token-less requests (which its authentication middleware
+//!   gives anonymous claims) 403 `FUNCTION_ACCESS_DENIED` "Anonymous access is not allowed for
+//!   function invocation.", and so does a call to its reserved dynamic auth-claims provider,
+//!   `rayfin_auth_claims`. An invalid bearer token is `401 {"error": "Invalid authentication
+//!   token"}`, as that middleware answers.
+//! - **Request checks,** in the deployed order: the bearer token (401); the caller (403); the
+//!   name,
 //!   `^[A-Za-z0-9_]{1,128}$` (400 `FUNCTION_INVALID_NAME`, Rayfin:
 //!   `Validation/FunctionInputValidation.cs`); `Content-Type: application/json` (415
 //!   `FUNCTION_INVOKE_INVALID_CONTENT_TYPE`). Then rayfin-local's own: a body of at most 30 MiB

@@ -356,7 +356,7 @@
 
   // ---- The local Fabric host ----
 
-  // The developer's session on this page ({ hostToken, user }), kept for the tab and the app.
+  // The developer's session on this page ({ hostToken, user, userHint }), kept for the tab and the app.
   const SESSION_KEY = embed ? `rayfin-local fabric host ${embed.origin}` : '';
   const BRIDGE_CHANNEL = 'fabric-auth';
   let session = null;
@@ -393,10 +393,15 @@
   }
 
   // Loads the app in a new frame: no history entries, and the old frame's messages are ignored.
+  // As in Fabric, the frame URL names the signed-in developer (`_fu`), so the app keeps its session
+  // and a protected site's cookie for someone else is not used.
   function loadApp() {
     const next = document.createElement('iframe');
     next.title = appLabel;
-    next.src = embed.src;
+    const src = new URL(embed.src);
+    src.searchParams.delete('_fu');
+    if (session && typeof session.userHint === 'string') src.searchParams.set('_fu', session.userHint);
+    next.src = src.href;
     el('frame').replaceChildren(next);
     frame = next;
     el('card').hidden = true;
@@ -425,7 +430,7 @@
   }
 
   function startSession(body) {
-    remember({ hostToken: body.hostToken, user: body.user || null });
+    remember({ hostToken: body.hostToken, user: body.user || null, userHint: body.userHint || null });
     el('password').value = '';
     el('confirm').value = '';
     loadApp();
