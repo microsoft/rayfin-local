@@ -433,10 +433,16 @@ fn processes() -> Vec<(u32, u32, String)> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            let mut parts = line.trim().splitn(3, char::is_whitespace);
-            let pid = parts.next()?.parse().ok()?;
-            let parent = parts.next()?.parse().ok()?;
-            Some((pid, parent, parts.next().unwrap_or_default().to_owned()))
+            // `ps` pads its columns, so fields can be separated by more than one space.
+            let line = line.trim_start();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let rest = rest.trim_start();
+            let (parent, command) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            Some((
+                pid.parse().ok()?,
+                parent.parse().ok()?,
+                command.trim().to_owned(),
+            ))
         })
         .collect()
 }
