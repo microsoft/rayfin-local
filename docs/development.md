@@ -68,7 +68,7 @@ Unit tests sit next to the code (`#[cfg(test)]`); integration tests are in `crat
 
 **Strict mode.** The check sets `RAYFIN_LOCAL_TEST_STRICT=1`, and points `RAYFIN_SDK_NODE_MODULES` at the basic fixture's `node_modules`.
 In strict mode a test that needs Node.js, a fixture's packages or the SDK fails when they are missing, instead of skipping, so a broken setup can't pass for a green run.
-The tests that need what CI doesn't have still skip: the reference app (`fabric-apps`), a SQL Server (`RAYFIN_LOCAL_TEST_MSSQL`; CI's `sql-connectors` job has one), and a signed-in Azure CLI.
+The tests that need what CI doesn't have still skip: an app outside this repository (the variables below), a SQL Server (`RAYFIN_LOCAL_TEST_MSSQL`; CI's `sql-connectors` job has one), and a signed-in Azure CLI.
 Skips go through `rl_test_support::skip` (`crates/rl-test-support`); a new test that needs an optional dependency should too.
 
 ### Tests that use Node.js and the real SDK

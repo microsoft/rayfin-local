@@ -5,7 +5,7 @@
 //! install everything first and set [`STRICT_VAR`], so that a test that would skip fails instead:
 //! a moved fixture or a renamed package can't turn a test off unnoticed.
 //!
-//! Prerequisites that CI doesn't have (the reference app, SQL Server, an Azure sign-in) keep
+//! Prerequisites that CI doesn't have (an external app checkout, SQL Server, an Azure sign-in) keep
 //! skipping with a plain `eprintln!("skipped: …")`.
 
 use std::fmt::Display;

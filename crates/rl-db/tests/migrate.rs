@@ -11,10 +11,15 @@ fn explorer() -> AppModel {
     AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap()
 }
 
+/// The fixture app's model (`tests/fixtures/apps/basic`).
+fn basic() -> AppModel {
+    let json = include_str!("../../rl-model/tests/fixtures/basic.analysis.json");
+    AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap()
+}
+
 #[tokio::test]
 async fn upgrading_system_relationships_rebuilds_old_tables_and_preserves_users() {
-    let json = include_str!("../../rl-model/tests/fixtures/basic.analysis.json");
-    let model = AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap();
+    let model = basic();
     let db = Db::open_in_memory().unwrap();
     let mut old = model.clone();
     let person = entity(&mut old, "Person");
@@ -52,7 +57,7 @@ async fn upgrading_system_relationships_rebuilds_old_tables_and_preserves_users(
 #[tokio::test]
 async fn app_schema_cannot_replace_the_users_table() {
     let db = Db::open_in_memory().unwrap();
-    let mut model = explorer();
+    let mut model = basic();
     model.entities[0].table = "uSeRs".into();
     assert!(matches!(
         apply(&db, &model, true).await,
@@ -62,7 +67,7 @@ async fn app_schema_cannot_replace_the_users_table() {
 
 #[test]
 fn legacy_app_snapshots_cannot_schedule_a_system_table_drop() {
-    let mut model = explorer();
+    let mut model = basic();
     model.entities.clear();
     let current = rl_db::StoredSchema {
         format: rl_db::schema::FORMAT,
