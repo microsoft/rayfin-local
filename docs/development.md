@@ -183,6 +183,11 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 ## Releasing
 
+The manual-only [official ADO pipeline](release-signing.md) is a Windows
+build-validation pilot for resource approval before ESRP signing is enabled.
+It publishes metadata only and does not replace or gate the GitHub release
+workflow below.
+
 1. Set the new version in `[workspace.package]` of the root `Cargo.toml`, and commit (with the updated `Cargo.lock`).
 2. Tag the commit `v<version>` (for example `v0.2.0`, or `v0.2.0-rc.1` for a prerelease) and push the tag.
 
