@@ -37,14 +37,14 @@ extends:
 
     stages:
       - stage: ValidateWindows
-        displayName: Validate Windows binary (no signing or distribution)
+        displayName: Sign and validate Windows binary (no distribution)
         jobs:
           - job: BuildWindows
             displayName: Build and test Windows x64
             timeoutInMinutes: 120
             templateContext:
               outputs:
-                # Unsigned executables stay on the agent during the approval pilot.
+                # Executables stay on the agent until distribution is approved separately.
                 - output: pipelineArtifact
                   displayName: Publish source and binary validation metadata
                   targetPath: $(Build.ArtifactStagingDirectory)/validation
@@ -68,7 +68,23 @@ extends:
                       $commit -ne $env:BUILD_SOURCEVERSION) {
                     throw 'Checkout does not match Build.SourceVersion; queue the intended commit again.'
                   }
+                  $required = @(
+                    'ESRP_APP_REGISTRATION_CLIENT_ID', 'ESRP_APP_REGISTRATION_TENANT_ID',
+                    'ESRP_CLIENT_ID', 'ESRP_KEY_VAULT_NAME', 'ESRP_SIGN_CERT_NAME'
+                  )
+                  foreach ($name in $required) {
+                    $value = [Environment]::GetEnvironmentVariable($name)
+                    if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('$(')) {
+                      throw "Configure the pipeline's $name ESRP setting before queueing signing."
+                    }
+                  }
                 displayName: Verify agent and exact source commit
+                env:
+                  ESRP_APP_REGISTRATION_CLIENT_ID: $(EsrpAppRegistrationClientId)
+                  ESRP_APP_REGISTRATION_TENANT_ID: $(EsrpAppRegistrationTenantId)
+                  ESRP_CLIENT_ID: $(EsrpClientId)
+                  ESRP_KEY_VAULT_NAME: $(EsrpKeyVaultName)
+                  ESRP_SIGN_CERT_NAME: $(EsrpSignCertName)
 
               - task: UseNode@1
                 displayName: Install Node.js for workspace tests
@@ -126,8 +142,66 @@ extends:
                   RUST_TARGET: $(Target)
                   RUSTFLAGS: -C target-feature=+crt-static
 
+              - task: EsrpCodeSigning@6
+                displayName: Sign Windows executable through ESRP
+                inputs:
+                  ConnectedServiceName: Fabric-ESRP-Secure-AppDev
+                  UseMSIAuthentication: true
+                  AppRegistrationClientId: $(EsrpAppRegistrationClientId)
+                  AppRegistrationTenantId: $(EsrpAppRegistrationTenantId)
+                  EsrpClientId: $(EsrpClientId)
+                  AuthAKVName: $(EsrpKeyVaultName)
+                  AuthSignCertName: $(EsrpSignCertName)
+                  FolderPath: $(Build.SourcesDirectory)/target/$(Target)/release
+                  Pattern: rayfin-local.exe
+                  signConfigType: inlineSignParams
+                  inlineOperation: |
+                    [
+                      {
+                        "keyCode": "CP-231522",
+                        "operationSetCode": "SigntoolSign",
+                        "parameters": [
+                          { "parameterName": "OpusName", "parameterValue": "Microsoft" },
+                          { "parameterName": "OpusInfo", "parameterValue": "https://www.microsoft.com" },
+                          { "parameterName": "FileDigest", "parameterValue": "/fd \"SHA256\"" },
+                          { "parameterName": "PageHash", "parameterValue": "/NPH" },
+                          {
+                            "parameterName": "TimeStamp",
+                            "parameterValue": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+                          }
+                        ],
+                        "toolName": "sign",
+                        "toolVersion": "1.0"
+                      },
+                      {
+                        "keyCode": "CP-231522",
+                        "operationSetCode": "SigntoolVerify",
+                        "parameters": [],
+                        "toolName": "sign",
+                        "toolVersion": "1.0"
+                      }
+                    ]
+                  SessionTimeout: 90
+                  MaxConcurrency: 1
+                  MaxRetryAttempts: 5
+                  PendingAnalysisWaitTimeoutMinutes: 5
+
               - pwsh: |
                   $ErrorActionPreference = 'Stop'
+                  $binary = Join-Path $env:BUILD_SOURCESDIRECTORY "target/$env:RUST_TARGET/release/rayfin-local.exe"
+                  $signature = Get-AuthenticodeSignature -LiteralPath $binary
+                  if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
+                    throw "Windows executable signature verification failed: $($signature.Status)."
+                  }
+                  $signer = $signature.SignerCertificate.GetNameInfo(
+                    [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
+                  )
+                  if ($signer -cne 'Microsoft Corporation') {
+                    throw 'Windows executable must be signed by Microsoft Corporation.'
+                  }
+                  if ($null -eq $signature.TimeStamperCertificate) {
+                    throw 'Windows executable must have a trusted timestamp.'
+                  }
                   $metadata = & cargo metadata --no-deps --format-version 1 --locked
                   if ($LASTEXITCODE -ne 0) { throw 'Cannot read Cargo package metadata.' }
                   $packages = @(
@@ -140,7 +214,6 @@ extends:
                       $env:BUILD_SOURCEBRANCH -cne "refs/tags/v$version") {
                     throw "Release tag must be v$version to match Cargo.toml."
                   }
-                  $binary = Join-Path $env:BUILD_SOURCESDIRECTORY "target/$env:RUST_TARGET/release/rayfin-local.exe"
                   $reportedVersion = & $binary --version
                   if ($LASTEXITCODE -ne 0 -or $reportedVersion -cne "rayfin-local $version") {
                     throw "Built binary must report 'rayfin-local $version'."
@@ -157,10 +230,13 @@ extends:
                     target = $env:RUST_TARGET
                     rustToolchain = $env:RUSTUP_TOOLCHAIN
                     binarySha256 = (Get-FileHash -Algorithm SHA256 $binary).Hash.ToLowerInvariant()
-                    signed = $false
+                    signed = $true
+                    signingKeyCode = 'CP-231522'
+                    signerSubject = $signature.SignerCertificate.Subject
+                    signerThumbprint = $signature.SignerCertificate.Thumbprint
                     distribution = 'none'
                   } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $output 'source.json')
-                displayName: Verify binary version and record validation metadata
+                displayName: Verify signature and binary version and record validation metadata
                 env:
                   RUSTUP_TOOLCHAIN: $(RustVersion)
                   RUST_TARGET: $(Target)

@@ -1,14 +1,13 @@
 # Official binary-signing pipeline
 
-`.azure-pipelines/rayfin-local.official.yml` is the initial Windows-only validation
+`.azure-pipelines/rayfin-local.official.yml` is the Windows-only signing-validation
 pipeline for [powerbi/AppDev](https://dev.azure.com/powerbi/AppDev/_build).
 The registered definition is
 [`rayfin-local` (20870)](https://dev.azure.com/powerbi/AppDev/_build?definitionId=20870).
-It establishes the official build definition and resource approvals before ESRP
-signing is enabled. It follows the
+It follows the
 [Fabricator pilot](https://github.com/microsoft/rayfin-fabricator/blob/019198cf0a11c0acc712425043d7478287c4a47d/.azure-pipelines/fabricator.official.yml).
 
-## Initial scope
+## Current scope
 
 CI and PR triggers are disabled. Queue the pipeline manually for a reviewed source
 commit. It extends `v1/1ES.Official.PipelineTemplate.yml`, keeps the template's
@@ -18,7 +17,12 @@ The job verifies the checkout against `Build.SourceVersion`, installs Rust 1.96.
 and Node.js 22, runs the workspace tests with the lockfile, and builds the Windows
 x64 release binary with the static C runtime, matching the existing GitHub release
 build. It checks the binary's version against Cargo metadata; a tag run must use
-`v<package version>`.
+`v<package version>`. After building, `EsrpCodeSigning@6` signs only
+`rayfin-local.exe` using the owner-approved OSS/component keycode `CP-231522`.
+The operation requests SHA-256 Authenticode signing, an RFC 3161 SHA-256 timestamp,
+and ESRP signature verification. The job then independently requires a valid
+Authenticode signature from Microsoft Corporation and a timestamp before
+executing the binary's version check or recording its hash.
 
 The official job generates a checkout-local `.cargo/config.toml` that replaces
 crates.io with the existing AppDev `rayfin-official` Azure Artifacts Cargo feed.
@@ -27,15 +31,23 @@ or new service connection is needed. The config is generated only in the officia
 job so local development and public GitHub CI do not require internal feed access.
 The lockfile and vendored TDS patch remain unchanged.
 
-The only published artifact is `windows-validation/source.json`: source commit,
-version, target, toolchain, build ID, and the unsigned binary's SHA-256. The binary
-stays on the agent. This pipeline does not call ESRP, access signing credentials,
+The `windows-validation` artifact contains `source.json`: source commit, version,
+target, toolchain, build ID, the signed binary's SHA-256, signing keycode, and signer
+certificate subject/thumbprint. The official template also adds SBOM/provenance
+metadata. The binary stays on the agent. Signing or verification failure blocks
+metadata publication; there is no unsigned fallback. This pipeline does not
 publish executables or GitHub releases, or publish crates or npm packages.
 
-## Register and request admin approval
+The [unsigned validation run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21383235&view=results)
+succeeded for commit `e2aba0e69627faf8cfdd2be8aa83ec4e71650f27`, including the
+workspace tests, release build, and official security checks. Its historical
+metadata correctly records `signed: false`. Owner approval for client reuse and
+`CP-231522` was confirmed for the next signing phase; that approval is separate
+from a successful signing run.
 
-Make the YAML available on the branch used for registration before creating the
-definition. An AppDev pipeline administrator can then register:
+## Pipeline configuration and resource approvals
+
+The existing AppDev definition uses:
 
 | Setting | Value |
 | --- | --- |
@@ -48,7 +60,28 @@ definition. An AppDev pipeline administrator can then register:
 | Agent pool / image | `1ES-AppDev` / `windows-2022` |
 | Template repository | `1ESPipelineTemplates/1ESPipelineTemplates`, `refs/tags/release` |
 | Template | `v1/1ES.Official.PipelineTemplate.yml` |
-| Published output | Validation JSON only; no executables |
+| ESRP connection | `Fabric-ESRP-Secure-AppDev` |
+| Windows signing keycode | `CP-231522` (OSS/component signing) |
+| Published output | Validation and SBOM/provenance metadata only; no executables |
+
+Configure these pipeline variables from the approved AppDev ESRP registration.
+The existing `rayfin-official` definition (18716) provides the configuration for
+the shared client. Reuse only the approved identity and certificate references,
+not unrelated publishing settings or signing keycodes.
+
+| Variable | Purpose |
+| --- | --- |
+| `EsrpAppRegistrationClientId` | Authentication identity client ID |
+| `EsrpAppRegistrationTenantId` | Authentication identity tenant ID |
+| `EsrpClientId` | Registered ESRP client ID |
+| `EsrpKeyVaultName` | Vault holding the request-signing certificate |
+| `EsrpSignCertName` | Request-signing certificate name |
+
+`UseMSIAuthentication: true` follows the existing AppDev signing configuration.
+The service connection supplies authentication; no PAT, private key, or certificate
+contents belong in YAML. Missing settings fail before the build. The connection
+and signing keycode are fixed in the reviewed YAML rather than selected at queue
+time.
 
 Request these permissions **only for this pipeline**, not for all pipelines:
 
@@ -65,28 +98,37 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   on the AppDev `rayfin-official` feed if it cannot restore dependencies. Upstream
   saving requires this role; Feed Reader alone can only read already-saved crates.
   Do not grant feed publishing or owner access.
+- Authorize `Fabric-ESRP-Secure-AppDev` for definition 20870 only. Confirm that the
+  approved identity can use the configured request-signing certificate and the
+  ESRP client can use `CP-231522`. Do not grant global pipeline access, broader
+  vault roles, or additional keycodes to work around an authorization failure.
 
 Pool role permissions and pipeline resource authorization are separate. Check
 [AppDev agent pools](https://dev.azure.com/powerbi/AppDev/_settings/agentqueues)
 under `1ES-AppDev` -> Security and Pipeline permissions. The Fabricator pilot
-initially encountered a missing pool **Use** permission; no successful run of
-this new pipeline should be assumed until its own approval and validation finish.
+initially encountered a missing pool **Use** permission. The initial rayfin-local
+validation has since succeeded, but signing resource authorization and a real
+signing run must be verified separately.
 
 Suggested approval-request text:
 
-> Please register/authorize `rayfin-local` in powerbi/AppDev using
+> Please authorize the Windows signing phase of `rayfin-local` (20870) in powerbi/AppDev using
 > `microsoft/rayfin-local` and `/.azure-pipelines/rayfin-local.official.yml`.
-> This is a manual-only 1ES official Windows validation pipeline using
+> This is a manual-only 1ES official Windows signing-validation pipeline using
 > `1ES-AppDev/windows-2022` and the 1ES official template repository.
-> It builds/tests rayfin-local but publishes only validation JSON, never unsigned
-> binaries. Please grant the necessary pool Use permission and authorize the
-> GitHub connection, template repository and pool for this pipeline only.
-> No ESRP connection, signing-key access, package publishing or release publishing
-> permission is requested in this phase.
+> ESRP registration-owner approval has been confirmed for reusing
+> `Fabric-ESRP-Secure-AppDev` with OSS/component keycode `CP-231522`.
+> Please authorize that connection for this pipeline only and configure its
+> approved identity/vault/certificate references.
+> It builds/tests and signs rayfin-local but publishes metadata only, never
+> executables. No package publishing or public release permission is requested.
 
-After authorization, queue a reviewed commit and confirm the build, template
-security checks and metadata artifact succeed. Retain the run link for the
-subsequent signing approval.
+After authorization, queue a reviewed commit and confirm the signing task,
+independent signature/version checks, official security checks, and metadata
+artifact succeed. Download `windows-validation` and verify `source.json` matches
+the queued commit, records `signed: true` and `signingKeyCode: CP-231522`, and has
+`distribution: none`. Retain the run link; do not claim signing succeeded merely
+because the service connection is ready or the unsigned pilot passed.
 
 ### Dependency restore failures
 
@@ -103,28 +145,20 @@ For feed 401/403 errors, check the build identity's feed role. If a dependency i
 blocked by feed policy, resolve it with the feed/security owners rather than
 falling back to crates.io.
 
-## Subsequent signing phases
+## Subsequent phases
 
-The initial definition deliberately has no placeholder credentials or signing
-task that could produce an unsigned release on failure.
+Windows signing validation deliberately does not enable binary distribution.
 
-- Confirm registration-owner approval to reuse the existing AppDev ESRP client
-  and `Fabric-ESRP-Secure-AppDev` connection. Authorize that connection for this
-  pipeline separately.
-- Confirm the binary's signing classification and approved keycode with the ESRP
-  owners: product signing versus separately distributed component signing must
-  not be inferred merely from the repository being Microsoft-owned or OSS.
-- Add Windows ESRP signing after the build, verify the signature, and only then
-  package the executable and calculate distribution checksums. Signing failures
-  must block release output.
+- Decide the protected distribution path for signed archives separately.
+  Package the executable and calculate distribution checksums only after
+  signature verification. Signing failures must block release output.
 - Establish an approved macOS build pool and the required Apple signing and
   notarization operations before adding macOS output.
 - Define the future Node adapter's actual native artifact and packaging format
   before adding its build/signing stage. It is not part of this pilot.
-- Decide the protected distribution path for signed archives separately.
-  crates.io publishing remains out of scope.
+- crates.io publishing remains out of scope.
 
 The existing `.github/workflows/release.yml` is unchanged: version tags still
 trigger its current GitHub binary-release workflow. This pilot neither signs
 those artifacts nor replaces or gates that workflow. Do not treat a successful
-validation run as a signed release.
+validation run as a distributed release.
