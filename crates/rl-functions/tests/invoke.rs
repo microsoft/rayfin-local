@@ -576,6 +576,44 @@ fn link_dir(target: &Path, link: &Path) {
 }
 
 #[tokio::test]
+async fn cancelled_start_keeps_the_loading_host_owned_until_stop() {
+    let package = PackageCopy::of(fixture());
+    package.edit("src/function_app.ts", |source| {
+        format!(
+            "console.log('startup-owner-marker');\n\
+             await new Promise<void>((resolve) => setTimeout(resolve, 300));\n{source}"
+        )
+    });
+    let loading = Arc::new(tokio::sync::Notify::new());
+    let mut config = package.config().await;
+    let output = loading.clone();
+    config.sink = Arc::new(move |_, _, line| {
+        if line.contains("startup-owner-marker") {
+            output.notify_one();
+        }
+    });
+    let (owned, owner) = tokio::sync::oneshot::channel();
+    let startup = tokio::spawn(FunctionsService::start_with_owner(
+        config,
+        Arc::new(Callers),
+        Arc::new(Tokens::default()),
+        move |service| {
+            let _ = owned.send(service);
+        },
+    ));
+    let service = owner.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(20), loading.notified())
+        .await
+        .expect("the host must be loading when startup is cancelled");
+    startup.abort();
+    assert!(startup.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(5), service.stop())
+        .await
+        .expect("stop must join the cancelled startup's host");
+    assert!(service.functions().is_empty());
+}
+
+#[tokio::test]
 async fn rebuilt_functions_are_reloaded() {
     let package = PackageCopy::of(fixture());
     let mut config = package.config().await;

@@ -56,7 +56,7 @@ use crate::events::{
     self, Analysis, ConfigChanged, EntityChanges, ErrorCode, Event, Functions, FunctionsStatus,
     Schema, SchemaResult,
 };
-use crate::integrations::{self, SecretValues, ServeContext};
+use crate::integrations::{self, FunctionsSlot, SecretValues, ServeContext};
 use crate::shutdown::StopHooks;
 use crate::ui;
 
@@ -129,7 +129,7 @@ pub fn channel() -> (ReloadHandle, Requests) {
 }
 
 /// What live reload gets from `serve` once the backend runs.
-pub struct Serving {
+pub(crate) struct Serving {
     pub features: Features,
     /// The router the backend serves.
     pub router: RouterHandle,
@@ -141,7 +141,12 @@ pub struct Serving {
 
 /// Starts live reload: watches the project's files and serves `requests`, until `hooks` run.
 /// When the files can't be watched, changes apply only on request.
-pub fn start(ctx: &ServeContext<'_>, serving: Serving, requests: Requests, hooks: &mut StopHooks) {
+pub(crate) fn start(
+    ctx: &ServeContext<'_>,
+    serving: Serving,
+    requests: Requests,
+    hooks: &mut StopHooks,
+) {
     let Serving {
         features,
         router,
@@ -163,6 +168,7 @@ pub fn start(ctx: &ServeContext<'_>, serving: Serving, requests: Requests, hooks
             control_token: ctx.control_token.map(str::to_owned),
             model_stamp: ctx.model_stamp.clone(),
             reload: ctx.reload.clone(),
+            starting_functions: ctx.starting_functions.clone(),
             router,
             static_site,
             app_url,
@@ -199,7 +205,7 @@ pub fn start(ctx: &ServeContext<'_>, serving: Serving, requests: Requests, hooks
     for change in [Change::Config, Change::Secrets] {
         let _ = messages.send(Message::Changed(change));
     }
-    let task = tokio::spawn(reloader.run(requests.0));
+    let task = events::spawn(reloader.run(requests.0));
     hooks.add("live reload", move || async move {
         task.abort();
         let _ = task.await;
@@ -699,6 +705,7 @@ struct Run {
     control_token: Option<String>,
     model_stamp: SourcesStamp,
     reload: ReloadHandle,
+    starting_functions: FunctionsSlot,
     router: RouterHandle,
     static_site: Option<StaticSite>,
     app_url: Option<String>,
@@ -865,6 +872,7 @@ impl Reloader {
             sign_in_secret: &self.run.sign_in_secret,
             control_token: self.run.control_token.as_deref(),
             reload: self.run.reload.clone(),
+            starting_functions: self.run.starting_functions.clone(),
         }
     }
 
@@ -1309,7 +1317,6 @@ mod tests {
 
     use super::*;
     use crate::errors::HostError;
-    use crate::integrations::FunctionsSlot;
 
     const AUTH_ONLY: &str = "name: notes\nservices:\n  auth:\n    enabled: true\n";
 
@@ -1363,6 +1370,7 @@ mod tests {
             sign_in_secret: "a-sign-in-secret",
             control_token: None,
             reload: reload.clone(),
+            starting_functions: FunctionsSlot::default(),
         };
         let router = RouterHandle::new(Router::new());
         let (stop, stopped) = oneshot::channel::<()>();

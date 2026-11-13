@@ -33,6 +33,42 @@ cargo run -p rayfin-local -- serve -C tests/fixtures/apps/basic
 
 `-v` shows rayfin-local's debug logs, and `RUST_LOG` (for example `rl_graphql=trace`) replaces the default filters.
 
+### Native npm package
+
+`rl-runtime` owns shared service orchestration; the executable supplies CLI integration, and
+`rl-napi` supplies the private Node-API bridge. The supported JS API and binary-only export live in
+[`npm/rayfin-local-runtime`](../npm/rayfin-local-runtime/README.md). Nothing is published automatically.
+
+Build both artifacts and assemble their exact-version platform package. For example, on macOS arm64:
+
+```sh
+cargo build -p rayfin-local -p rl-napi
+node scripts/assemble-npm.mjs --target aarch64-apple-darwin \
+  --binary target/debug/rayfin-local --addon target/debug/librl_napi.dylib
+npm ci --prefix tests/fixtures/apps/basic --ignore-scripts
+npm ci --prefix tests/fixtures/apps/basic/rayfin/functions --ignore-scripts
+node scripts/test-npm.mjs \
+  --platform .artifacts/npm/rayfin-local-runtime-darwin-arm64 \
+  --project tests/fixtures/apps/basic
+```
+
+Use the matching target and artifact paths on other systems: `librl_napi.so` on Linux, and
+`rayfin-local.exe` plus `rl_napi.dll` on Windows. The assembler supports macOS arm64/x64,
+glibc Linux arm64/x64, and Windows x64. On Windows, build the executable with
+`RUSTFLAGS="-C target-feature=+crt-static"` separately; do **not** apply that flag to the addon.
+
+The smoke runner packs and installs both packages offline with scripts disabled, exercises their
+public exports against actual native artifacts, and checks TypeScript ESM/CommonJS consumers.
+It requires the installed fixture and never silently skips missing SDK or functions dependencies.
+Coverage includes concurrent instances, state locks, cancellation, reload, worker teardown,
+normal host exit, Vite/functions shutdown, and real SDK data/auth/function requests.
+CI builds and runs this on all five target architectures. Local validation on one machine does
+not certify the other platforms.
+
+The assembler copies the final artifacts unchanged. When release signing is configured, sign
+and verify **both** the executable and addon before assembly, then hash/package/publish.
+npm publication, provenance and OS signing identities are intentionally not configured yet.
+
 ## Lint and format
 
 CI runs these on every push to `main` and every pull request, with Rust 1.96.0:
@@ -170,6 +206,8 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 - **Rust:** edition 2024, Rust 1.96.
   Shared dependency versions live in the root `[workspace.dependencies]`, every crate has `[lints] workspace = true`, and `cargo fmt` (100 columns) and `cargo clippy -D warnings` must pass.
 - **TLS** is rustls with ring only, never aws-lc-rs.
+  Production HTTP clients use `rl_http::client_builder()`, which selects ring and platform trust
+  explicitly without changing the embedding host's global provider.
   Tests that build a `reqwest` client install the provider first: `let _ = rustls::crypto::ring::default_provider().install_default();`.
 - **Crypto:** `ring` for ES256, RS256 verification, SHA-256, HMAC and random numbers; `argon2` for passwords.
 - **Crate contracts:** feature crates take `Arc<dyn CallerResolver>` and `Arc<dyn TokenSource>`, and expose an `axum::Router` with its state applied.

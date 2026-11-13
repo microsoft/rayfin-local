@@ -1,0 +1,1302 @@
+//! Shared service orchestration; adapters own cancellation and host integration.
+
+use std::collections::HashMap;
+use std::fs;
+use std::io;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, anyhow, bail};
+use axum::Router;
+use ring::rand::{SecureRandom as _, SystemRandom};
+use rl_auth::{AuthService, AuthSettings, SignInAs as Identity};
+use rl_connectors::SqlConnectorModel;
+use rl_db::Db;
+use rl_model::AppModel;
+use rl_project::{LocalState, Project, ServeInfo, ServeLock};
+use rl_server::{RouterHandle, ServerConfig, StaticSite};
+use rl_tokens::{TokenBroker, TokenMode};
+use serde_json::json;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+
+use crate::analysis;
+use crate::control;
+use crate::errors::{HostError, WithCode, coded};
+use crate::events::{
+    self, Analysis, AuthFeature, ConnectorFeature, DataFeature, ErrorCode, Event, FunctionsFeature,
+    ProjectInfo, Ready, Schema, Sdk, SignInAs, Starting, StopReason, Stopped, StorageFeature,
+    WarningCode,
+};
+use crate::integrations::{self, FunctionsSlot, SecretValues, ServeContext};
+use crate::ports::{self, DEFAULT_API_PORT, PortRequest};
+use crate::reload;
+use crate::seed;
+use crate::shutdown::StopHooks;
+use crate::ui;
+
+/// The interface to listen on when neither `--host` nor `[server] host` is set.
+const DEFAULT_HOST: &str = "127.0.0.1";
+/// How long the backend has to answer its health check once it listens.
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long each started process has to stop.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+/// How long the backend has to finish open requests (it allows them 5 seconds itself).
+const SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(7);
+/// The variable that turns on the control API for hosts.
+const CONTROL_TOKEN_VAR: &str = "RAYFIN_LOCAL_CONTROL_TOKEN";
+/// The shortest control token accepted.
+const MIN_CONTROL_TOKEN_CHARS: usize = 32;
+
+/// `serve`'s command-line settings.
+#[derive(Clone, Default)]
+pub struct ServeOptions {
+    /// Events on stdout, and a graceful stop when stdin ends.
+    pub json: bool,
+    pub port: Option<u16>,
+    pub frontend_port: Option<u16>,
+    pub static_build: bool,
+    /// `--reuse-build`: with `static_build`, serve the existing build when there is one.
+    pub reuse_build: bool,
+    pub no_frontend: bool,
+    pub no_functions: bool,
+    pub host: Option<String>,
+    pub token_source: Option<TokenMode>,
+    pub tenant: Option<String>,
+    pub force_schema: bool,
+    pub reset: bool,
+    /// `--seed`: load the seed data once the backend is up.
+    pub seed: bool,
+    pub inspect: Option<u16>,
+    /// `--sign-in-as`: who apps are signed in as automatically.
+    pub sign_in_as: Option<rl_project::SignInAs>,
+    /// `--open-sign-in`: automatic sign-in answers pages another dev server or proxy serves.
+    pub open_sign_in: bool,
+    pub open: bool,
+    pub verbose: bool,
+    /// Explicit helper executable for embedders; the CLI discovers it from the environment.
+    pub node_path: Option<PathBuf>,
+    /// Only the CLI adapter supplies this; native calls never expose the HTTP control API.
+    pub control_token: Option<String>,
+}
+
+/// How serving ended.
+pub enum Outcome {
+    /// The backend stopped by itself.
+    BackendExited(anyhow::Error),
+}
+
+/// Shared CLI orchestration; the caller owns cancellation and must await `shut_down`.
+pub async fn serve(
+    at: &super::Location,
+    options: &ServeOptions,
+    running: &mut Running,
+) -> anyhow::Result<Outcome> {
+    start(at, options, running, None).await
+}
+
+async fn start(
+    at: &super::Location,
+    options: &ServeOptions,
+    running: &mut Running,
+    embedded: Option<&crate::runtime::Shared>,
+) -> anyhow::Result<Outcome> {
+    let project = at.discover()?;
+    events::emit(Event::Starting(Starting {
+        pid: std::process::id(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        project: ProjectInfo {
+            root: project.root().display().to_string(),
+            name: project.display_name().to_owned(),
+        },
+    }));
+    let control_token = if embedded.is_some() {
+        None
+    } else {
+        check_control_token(options.control_token.as_deref())?
+    };
+    check_open_sign_in(&project, options)?;
+    super::check_project(&project)?;
+    let (mut state, serve_lock) = open_state(&project, options.reset)?;
+    if embedded.is_some() && !serve_lock.is_exclusive() {
+        return Err(coded(
+            ErrorCode::ConfigInvalid,
+            json!({ "stateDir": state.dir() }),
+            anyhow!(
+                "In-process serving requires exclusive state locking. Use a state directory on a local disk."
+            ),
+        ));
+    }
+    running.lock = Some(serve_lock);
+    let node = match &options.node_path {
+        Some(path) => rl_node::NodeRuntime::at(path.clone()).await?,
+        None => super::find_node().await?,
+    };
+    let analyzed = analysis::analyze(&project, &state, &node, options.verbose).await;
+    events::emit(Event::Analysis(Analysis::of(
+        &project,
+        analyzed.as_ref().map(|(model, _)| model),
+    )));
+    let (model, model_stamp) = analyzed.with_code(ErrorCode::AnalysisFailed)?;
+    check_anonymous_access(&project, &model).with_code(ErrorCode::AnalysisFailed)?;
+    let model = Arc::new(model);
+    let db = open_database(&project, &state, &model, options.force_schema).await?;
+    let broker = Arc::new(
+        integrations::token_broker(
+            &project,
+            &state,
+            Some(&node),
+            options.token_source,
+            options.tenant.clone(),
+        )
+        .with_code(ErrorCode::ConfigInvalid)?,
+    );
+    let host = listen_host(&project, options);
+    let sign_in_secret = new_secret()?;
+    let (auth, auth_settings) = start_auth(
+        &project,
+        &state,
+        &db,
+        &host,
+        &broker,
+        &sign_in_secret,
+        options.open_sign_in,
+    )
+    .await?;
+    auth.set_sign_in_as(sign_in_identity(&project, options));
+    let bound = bind_ports(&project, &mut state, options, &host).await?;
+    let api_origin = format!("http://{}:{}", origin_host(&host), bound.api_port);
+    let data_api = integrations::data_api(&project, &db, &model, auth.clone());
+    // Live reload applies `rayfin.yml`, the entities, the connectors and the secret values on
+    // demand through `reload` (the control API's `POST /reload`), once `reload_requests` is
+    // served after the backend starts.
+    let (reload, reload_requests) = reload::channel();
+    if let Some(shared) = embedded {
+        shared.set_reload(reload.clone());
+    }
+
+    let ctx = ServeContext {
+        project: &project,
+        state: &state,
+        node: &node,
+        model: &model,
+        model_stamp: &model_stamp,
+        db: &db,
+        auth: &auth,
+        broker: &broker,
+        data_api,
+        options,
+        host: &host,
+        api_origin: &api_origin,
+        frontend_port: bound.frontend_port,
+        sign_in_secret: &sign_in_secret,
+        control_token: control_token.as_deref(),
+        reload,
+        starting_functions: FunctionsSlot::default(),
+    };
+    serve_until_stopped(
+        &ctx,
+        bound.listeners,
+        &auth_settings,
+        running,
+        reload_requests,
+    )
+    .await
+}
+
+pub(crate) async fn run_embedded(
+    at: &super::Location,
+    options: &ServeOptions,
+    shared: &crate::runtime::Shared,
+    mut stop: watch::Receiver<bool>,
+) -> crate::runtime::StopInfo {
+    let mut running = Running::new();
+    let outcome = tokio::select! {
+        biased;
+        _ = stop.wait_for(|requested| *requested) => None,
+        outcome = start(at, options, &mut running, Some(shared)) => Some(outcome),
+    };
+    let error = match outcome {
+        None => None,
+        Some(Ok(Outcome::BackendExited(error))) | Some(Err(error)) => {
+            events::emit(HostError::classify(&error).event(true));
+            Some(crate::runtime::RuntimeError::from_error(&error))
+        }
+    };
+    shared.stopping();
+    let cleanup = running.shut_down().await;
+    let info = crate::runtime::StopInfo {
+        reason: if error.is_some() { "error" } else { "closed" }.to_owned(),
+        error,
+        cleanup_errors: cleanup,
+    };
+    events::finish(Stopped {
+        reason: if info.error.is_some() {
+            StopReason::Error
+        } else {
+            StopReason::Closed
+        },
+        exit_code: u8::from(info.error.is_some() || !info.cleanup_errors.is_empty()),
+    });
+    info
+}
+
+/// `RAYFIN_LOCAL_CONTROL_TOKEN`, which turns on the control API: `None` when unset or empty, an
+/// error when too short to be a secret.
+fn check_control_token(token: Option<&str>) -> anyhow::Result<Option<String>> {
+    let token = token.filter(|token| !token.is_empty());
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    let length = token.chars().count();
+    if length < MIN_CONTROL_TOKEN_CHARS {
+        return Err(coded(
+            ErrorCode::ConfigInvalid,
+            events::no_details(),
+            anyhow!(
+                "{CONTROL_TOKEN_VAR} is {length} characters long; the control API needs a secret \
+                 of at least {MIN_CONTROL_TOKEN_CHARS}. Set it to a long random value, or unset \
+                 it."
+            ),
+        ));
+    }
+    Ok(Some(token.to_owned()))
+}
+
+/// A new random secret for this run, as hex.
+fn new_secret() -> anyhow::Result<String> {
+    let mut bytes = [0; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| anyhow!("Could not generate a secret: the system has no randomness."))?;
+    Ok(hex::encode(bytes))
+}
+
+/// `--sign-in-as`, else `[auth] sign_in_as`, else the developer.
+pub(crate) fn sign_in_identity(project: &Project, options: &ServeOptions) -> Identity {
+    let configured = options
+        .sign_in_as
+        .clone()
+        .or_else(|| project.local_config().auth.sign_in_as.clone())
+        .unwrap_or_default();
+    match configured {
+        rl_project::SignInAs::Developer => Identity::Developer,
+        rl_project::SignInAs::User(username) => Identity::User(username),
+        rl_project::SignInAs::None => Identity::None,
+    }
+}
+
+/// The project's state folder (created on first use), locked against a second `serve` before
+/// `state.json` is read or created. `--reset` then empties the database and storage, which hold
+/// the users, the entity data and the stored files.
+fn open_state(project: &Project, reset: bool) -> anyhow::Result<(LocalState, ServeLock)> {
+    let (state, lock) = LocalState::open_for_serve(project)?;
+    if !lock.is_exclusive() {
+        warn_lock_unavailable(&state);
+    }
+    if reset {
+        let cleared = clear_data(&state)?;
+        let what = if cleared.is_empty() {
+            "nothing to delete".to_owned()
+        } else {
+            format!("deleted {}", cleared.join(", "))
+        };
+        ui::step(format_args!(
+            "Started from an empty database (--reset: {what} in {}; kept the ports, keys, \
+             secrets and caches)",
+            state.dir().display()
+        ));
+    }
+    Ok((state, lock))
+}
+
+/// Says that the state folder's file system can't lock files, so nothing keeps a second `serve`,
+/// a `reset` or a `restore` off the same state while this one runs. Serving goes on: refusing
+/// would make state folders on such file systems (some network shares and mounted folders)
+/// unusable.
+pub fn warn_lock_unavailable(state: &LocalState) {
+    ui::warning(
+        WarningCode::ServeLockUnavailable,
+        format_args!(
+            "The file system of {} can't lock files, so nothing stops another rayfin-local from \
+             using the same state at the same time. Run one at a time, or use a state folder on \
+             a local disk (--state-dir).",
+            state.dir().display()
+        ),
+        json!({ "stateDir": state.dir() }),
+    );
+}
+
+/// Deletes the database (with its SQLite side files) and the stored files; returns the names of
+/// those that existed.
+pub fn clear_data(state: &LocalState) -> anyhow::Result<Vec<String>> {
+    let in_use = "Stop any other rayfin-local serving this project and close programs that have \
+                  its database or files open, then try again.";
+    let mut cleared = Vec::new();
+    let db = state.db_path();
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut path = db.clone().into_os_string();
+        path.push(suffix);
+        let path = PathBuf::from(path);
+        match fs::remove_file(&path) {
+            Ok(()) => cleared.push(file_name(&path)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("Could not delete {}. {in_use}", path.display()));
+            }
+        }
+    }
+    let storage = state.storage_dir();
+    let had_files = fs::read_dir(&storage).is_ok_and(|mut entries| entries.next().is_some());
+    match fs::remove_dir_all(&storage) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("Could not delete {}. {in_use}", storage.display()));
+        }
+    }
+    if had_files {
+        cleared.push(format!("{}/", file_name(&storage)));
+    }
+    fs::create_dir_all(&storage)
+        .with_context(|| format!("Could not create {}", storage.display()))?;
+    Ok(cleared)
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// The project database, with entity tables matching the model (when `services.data` is on).
+async fn open_database(
+    project: &Project,
+    state: &LocalState,
+    model: &AppModel,
+    force: bool,
+) -> anyhow::Result<Db> {
+    let path = state.db_path();
+    let db = Db::open(&path)
+        .with_context(|| {
+            format!(
+                "Could not open the database {}. Close any program that has it open, or start \
+                 from an empty one with `rayfin-local serve --reset`.",
+                path.display()
+            )
+        })
+        .inspect_err(|err| events::emit(Event::Schema(Schema::failed(err, false))))?;
+    // With the data service off, the existing tables are left alone rather than dropped.
+    if project.config().services.data.enabled {
+        integrations::apply_schema(&db, model, force).await?;
+    } else {
+        events::emit(Event::Schema(Schema::unchanged(false)));
+    }
+    Ok(db)
+}
+
+/// `--host`, else `[server] host`, else loopback.
+fn configured_host(project: &Project, options: &ServeOptions) -> String {
+    options
+        .host
+        .clone()
+        .or_else(|| project.local_config().server.host.clone())
+        .map(|host| host.trim().to_owned())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| DEFAULT_HOST.to_owned())
+}
+
+/// With `--open-sign-in`, refuses a host other machines can reach, and warns that any local
+/// process can now sign in as the identity.
+fn check_open_sign_in(project: &Project, options: &ServeOptions) -> anyhow::Result<()> {
+    if !options.open_sign_in {
+        return Ok(());
+    }
+    let host = configured_host(project, options);
+    if !integrations::is_loopback(&host) {
+        return Err(coded(
+            ErrorCode::ConfigInvalid,
+            json!({ "host": host }),
+            anyhow!(
+                "--open-sign-in needs the backend on a loopback address, but it would listen on \
+                 {host}. Use `--host 127.0.0.1` (or `localhost`), or leave out --open-sign-in."
+            ),
+        ));
+    }
+    ui::warning(
+        WarningCode::OpenSignIn,
+        "Open sign-in is on (--open-sign-in): any program or page on this machine, on the app's \
+         own origin, can get a session for the sign-in identity from \
+         /.rayfin-local/dev/session-token, without rayfin-local's dev server. The developer \
+         identity signs in as developer@example.com. Leave it off unless a page another dev \
+         server or proxy serves needs to sign in automatically.",
+        events::no_details(),
+    );
+    Ok(())
+}
+
+/// [`configured_host`], with a warning when other machines can reach it.
+fn listen_host(project: &Project, options: &ServeOptions) -> String {
+    let host = configured_host(project, options);
+    if !integrations::is_loopback(&host) {
+        let mut message = format!(
+            "The backend listens on {host}, so other machines can reach it. It acts with your \
+             Azure identity for connectors and functions; use 127.0.0.1 unless you need this."
+        );
+        if is_wildcard(&host) {
+            message.push_str(
+                " The app's URLs point at localhost, which other devices can't reach: to use the \
+                 app from another device, use `--host <this machine's LAN address>` instead.",
+            );
+        }
+        ui::warn(message);
+    }
+    host
+}
+
+/// `0.0.0.0` or `::`: every interface.
+fn is_wildcard(host: &str) -> bool {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| ip.is_unspecified())
+}
+
+/// The auth service. Signing in as the developer's Entra identity ("Continue as <you>", the
+/// Entra exchange and automatic sign-in) is on only on loopback, with the developer's tokens
+/// from `broker`. They are optional there: without one, automatic sign-in signs in as the local
+/// developer account and the sign-in page says why, so a missing token is no `azure-sign-in`
+/// warning. Automatic sign-in answers the holder of `sign_in_secret` (the app's dev server), and
+/// with `open_sign_in` any loopback request from the app's own origin.
+async fn start_auth(
+    project: &Project,
+    state: &LocalState,
+    db: &Db,
+    host: &str,
+    broker: &Arc<TokenBroker>,
+    sign_in_secret: &str,
+    open_sign_in: bool,
+) -> anyhow::Result<(Arc<AuthService>, AuthSettings)> {
+    let settings = integrations::auth_settings(
+        project,
+        &state.data().app_id,
+        integrations::is_loopback(host),
+    );
+    let mut auth = AuthService::new(db.clone(), state.keys_dir(), settings.clone())
+        .await
+        .context("Could not start the local auth service")?
+        .with_entra(broker.clone())
+        .with_dev_sign_in_secret(sign_in_secret);
+    if open_sign_in {
+        auth = auth.with_open_dev_sign_in();
+    }
+    Ok((Arc::new(auth), settings))
+}
+
+struct BoundPorts {
+    listeners: Vec<TcpListener>,
+    api_port: u16,
+    /// `None` when no dev server runs (`--no-frontend`, `--static`).
+    frontend_port: Option<u16>,
+}
+
+/// Chooses the ports, listens on the backend's, and remembers both in `state.json`.
+async fn bind_ports(
+    project: &Project,
+    state: &mut LocalState,
+    options: &ServeOptions,
+    host: &str,
+) -> anyhow::Result<BoundPorts> {
+    let local = project.local_config();
+    let is_free = |port| rl_server::is_port_free(host, port);
+    let request = PortRequest::resolve(
+        "--port",
+        options.port,
+        "[server] port",
+        local.server.port,
+        state.data().api_port.unwrap_or(DEFAULT_API_PORT),
+    );
+    let frontend_request = (!options.no_frontend && !options.static_build).then(|| {
+        PortRequest::resolve(
+            "--frontend-port",
+            options.frontend_port,
+            "[frontend] port",
+            local.frontend.port,
+            project.preferred_frontend_port(),
+        )
+    });
+    let port = ports::choose_port(
+        request,
+        request.yields_to(frontend_request.as_ref()),
+        is_free,
+    )?;
+    let listeners = rl_server::bind(host, port).await.map_err(|err| {
+        if matches!(
+            err.kind(),
+            io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+        ) {
+            coded(ErrorCode::PortInUse, json!({ "port": port }), err)
+        } else {
+            anyhow::Error::new(err)
+        }
+    })?;
+    // Port 0 asks the system for one.
+    let api_port = listeners
+        .first()
+        .and_then(|listener| listener.local_addr().ok())
+        .map_or(port, |addr| addr.port());
+
+    let frontend_port = frontend_request
+        .map(|request| ports::choose_port(request, Some(api_port), is_free))
+        .transpose()?;
+
+    let data = state.data_mut();
+    data.api_port = Some(api_port);
+    if frontend_port.is_some() {
+        data.frontend_port = frontend_port;
+    }
+    state.save()?;
+    Ok(BoundPorts {
+        listeners,
+        api_port,
+        frontend_port,
+    })
+}
+
+/// The host name for URLs: `localhost` for loopback and wildcard addresses (the backend listens
+/// on both 127.0.0.1 and ::1 for those), else the host itself.
+fn origin_host(host: &str) -> String {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<IpAddr>() {
+        Ok(ip)
+            if ip.is_unspecified()
+                || ip == IpAddr::V4(Ipv4Addr::LOCALHOST)
+                || ip == IpAddr::V6(Ipv6Addr::LOCALHOST) =>
+        {
+            "localhost".to_owned()
+        }
+        Ok(IpAddr::V6(ip)) => format!("[{ip}]"),
+        Ok(ip) => ip.to_string(),
+        Err(_) => bare.to_ascii_lowercase(),
+    }
+}
+
+/// The Host header check: off for wildcard addresses (other machines use names we can't know),
+/// else the host (loopback names are always allowed).
+fn allowed_hosts(host: &str) -> Option<Vec<String>> {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<IpAddr>() {
+        Ok(ip) if ip.is_unspecified() => None,
+        _ => Some(vec![bare.to_owned()]),
+    }
+}
+
+/// What `serve` started, to stop on the way out.
+pub struct Running {
+    ready: watch::Sender<bool>,
+    stop: watch::Sender<bool>,
+    server: Option<JoinHandle<io::Result<()>>>,
+    hooks: StopHooks,
+    /// Released last, once everything stopped.
+    lock: Option<ServeLock>,
+}
+
+impl Running {
+    pub fn ready(&self) -> watch::Receiver<bool> {
+        self.ready.subscribe()
+    }
+
+    pub fn new() -> Self {
+        Self {
+            ready: watch::channel(false).0,
+            stop: watch::channel(false).0,
+            server: None,
+            hooks: StopHooks::default(),
+            lock: None,
+        }
+    }
+
+    /// Stops the backend (letting open requests finish) and every started process.
+    pub async fn shut_down(mut self) -> Vec<String> {
+        let _ = self.stop.send(true);
+        let mut errors = std::mem::take(&mut self.hooks).run(STOP_GRACE).await;
+        if let Some(mut server) = self.server.take() {
+            match tokio::time::timeout(SERVER_STOP_TIMEOUT, &mut server).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(err))) => {
+                    errors.push(format!("the backend stopped with an error: {err}"))
+                }
+                Ok(Err(err)) => errors.push(format!("the backend task failed: {err}")),
+                Err(_) => {
+                    server.abort();
+                    let _ = server.await;
+                    errors.push("the backend did not stop in time".into());
+                }
+            }
+        }
+        for error in &errors {
+            tracing::warn!("{error}");
+        }
+        errors
+    }
+}
+
+impl Default for Running {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.stop.send_replace(true);
+        if let Some(server) = &self.server {
+            server.abort();
+        }
+    }
+}
+
+/// Starts the backend and the frontend, shows the banner (`ready` with `--json`), starts live
+/// reload (serving `reload_requests`), and serves until Ctrl+C (without `--json`) or until the
+/// backend stops on its own. Returns an error if anything fails to start.
+async fn serve_until_stopped(
+    ctx: &ServeContext<'_>,
+    listeners: Vec<TcpListener>,
+    auth_settings: &AuthSettings,
+    running: &mut Running,
+    reload_requests: reload::Requests,
+) -> anyhow::Result<Outcome> {
+    let starting_functions = ctx.starting_functions.clone();
+    running
+        .hooks
+        .add("the starting function host", move || async move {
+            starting_functions.stop().await;
+        });
+    let static_site = integrations::static_site(ctx).await?;
+    let serves_static = static_site.is_some();
+    let features = start_features(ctx).await?;
+    let functions = features.functions.clone();
+    running.hooks.add("the function host", move || async move {
+        functions.stop().await;
+    });
+    // Live reload replaces the router; the listeners stay.
+    let router = RouterHandle::new(rl_server::build_router(
+        server_config(ctx, static_site.clone()),
+        features.routers(ctx),
+    ));
+    let mut stop = running.stop.subscribe();
+    let server = running.server.insert(events::spawn(rl_server::serve(
+        router.router(),
+        listeners,
+        async move {
+            // An error means `Running` is gone, which also means stop.
+            let _ = stop.wait_for(|stop| *stop).await;
+        },
+    )));
+    tokio::select! {
+        ready = wait_until_ready(ctx.api_origin) => ready?,
+        result = &mut *server => {
+            running.server = None;
+            return Err(server_stopped(result));
+        }
+    }
+    ui::step(format_args!("Backend listening on {}", ctx.api_origin));
+    if ctx.options.seed {
+        load_seed(ctx).await;
+    }
+
+    let frontend_url = integrations::start_frontend(ctx, &mut running.hooks).await?;
+    let app_url = if serves_static {
+        Some(ctx.api_origin.to_owned())
+    } else {
+        frontend_url
+    };
+    // What the local Fabric host frames, for apps that sign in embedded.
+    ctx.auth.set_embed_app_url(app_url.clone());
+    ui::banner(&ui::Banner {
+        app_name: ctx.project.display_name(),
+        rows: banner_rows(ctx, &features, app_url.as_deref(), auth_settings),
+    });
+    // For the error a second `serve` on this project reports.
+    if let Some(lock) = &running.lock {
+        let published = lock.publish(&ServeInfo {
+            pid: std::process::id(),
+            app_url: app_url.clone(),
+            api_url: Some(ctx.api_origin.to_owned()),
+        });
+        if let Err(err) = published {
+            tracing::debug!("{err}");
+        }
+    }
+    let ready = ready_event(ctx, &features, app_url.clone(), auth_settings);
+    // Its first changes come after `ready`: they wait for the edits to settle.
+    reload::start(
+        ctx,
+        reload::Serving {
+            features,
+            router,
+            static_site,
+            app_url: app_url.clone(),
+        },
+        reload_requests,
+        &mut running.hooks,
+    );
+    events::emit(Event::Ready(Box::new(ready)));
+    running.ready.send_replace(true);
+    if ctx.options.open && !ctx.options.json {
+        match &app_url {
+            Some(url) => {
+                if let Err(err) = open::that_detached(url) {
+                    ui::warn(format_args!(
+                        "Could not open a browser ({err}); open {url} yourself."
+                    ));
+                }
+            }
+            None => ui::warn("--open: there is no app to open with --no-frontend."),
+        }
+    }
+
+    let server = running
+        .server
+        .as_mut()
+        .expect("the backend was started above");
+    let result = server.await;
+    running.server = None;
+    Ok(Outcome::BackendExited(server_stopped(result)))
+}
+
+fn server_stopped(result: Result<io::Result<()>, tokio::task::JoinError>) -> anyhow::Error {
+    match result {
+        Ok(Ok(())) => anyhow!("The backend stopped unexpectedly."),
+        Ok(Err(err)) => anyhow!(err).context("The backend stopped"),
+        Err(err) => anyhow!("The backend crashed: {err}"),
+    }
+}
+
+/// `--seed`: replaces the local data with the project's seed data, or says why it didn't.
+async fn load_seed(ctx: &ServeContext<'_>) {
+    let dir = ctx.project.seed_dir();
+    let model = Arc::clone(ctx.model);
+    let storage = integrations::storage_runs(ctx.project, ctx.model);
+    let services = seed::Services {
+        data: ctx.data_api.is_some(),
+        storage,
+    };
+    let seed = match tokio::task::spawn_blocking(move || seed::read(&dir, &model, services)).await {
+        Ok(seed) => seed,
+        Err(err) => return ui::warn(format_args!("--seed: could not read the seed data: {err}")),
+    };
+    if !seed.exists {
+        return ui::warn(
+            "--seed: the project has no seed data in rayfin/seed, so none was loaded (see \
+             docs/seed-data.md).",
+        );
+    }
+    let storage_dir = ctx.state.storage_dir();
+    let target = seed::Target {
+        auth: ctx.auth,
+        db: ctx.db,
+        model: ctx.model,
+        data: ctx.data_api.is_some(),
+        storage,
+        storage_dir: &storage_dir,
+        dry_run: false,
+    };
+    match seed::load(seed, target).await {
+        Ok(loaded) => ui::step(format_args!("Loaded the seed data: {}", loaded.describe())),
+        Err(seed::LoadError::Invalid(problems)) => {
+            ui::warn("--seed: the seed data has problems, so none of it was loaded:");
+            for problem in &problems {
+                ui::warn(format_args!("  {problem}"));
+            }
+        }
+        Err(seed::LoadError::Failed(err)) => {
+            ui::warn(format_args!(
+                "--seed: could not load the seed data: {err:#}"
+            ));
+        }
+    }
+}
+
+/// The feature services that run, for the router, the banner and `ready`; live reload replaces
+/// those whose settings change.
+pub(crate) struct Features {
+    /// `/connector-invoke/*` and `/connectors/*/graphql`.
+    pub connectors: Router,
+    /// The SQL connectors' entities `connectors` serves.
+    pub connector_models: HashMap<String, SqlConnectorModel>,
+    /// `/api/storage/*`, when `services.storage` is on and `rayfin/storage` declares folders.
+    pub storage: Option<Router>,
+    pub functions: FunctionsSlot,
+    /// The secret values the functions run with.
+    pub secrets: SecretValues,
+}
+
+impl Features {
+    /// Every feature's router: auth and connectors, then the services configured in
+    /// `integrations`, then the host's control API when `RAYFIN_LOCAL_CONTROL_TOKEN` turns it on.
+    /// With `[fabric] anonymous_data_access = false`, the routes Fabric's authentication
+    /// middleware guards answer requests without a token with its 401.
+    pub(crate) fn routers(&self, ctx: &ServeContext<'_>) -> Vec<Router> {
+        let reject_anonymous =
+            ctx.project.local_config().fabric.anonymous_data_access == Some(false);
+        let guarded = |router: Router| {
+            if reject_anonymous {
+                router.layer(axum::middleware::from_fn(rl_server::reject_anonymous))
+            } else {
+                router
+            }
+        };
+        let mut routers = vec![
+            Arc::clone(ctx.auth).router(),
+            guarded(self.connectors.clone()),
+        ];
+        routers.extend(integrations::graphql_router(ctx).map(guarded));
+        routers.extend(self.storage.clone().map(guarded));
+        routers.extend(
+            self.functions
+                .get()
+                .map(|service| guarded(service.router())),
+        );
+        routers.extend(
+            ctx.control_token
+                .map(|token| control_router(ctx, token, &self.functions)),
+        );
+        routers
+    }
+}
+
+/// The host's control API (docs/embedding.md), answering `token`, over the services `ctx` has
+/// and `functions`; `POST /reload` goes to live reload.
+fn control_router(ctx: &ServeContext<'_>, token: &str, functions: &FunctionsSlot) -> Router {
+    control::Control {
+        token: token.to_owned(),
+        auth: Arc::clone(ctx.auth),
+        db: ctx.db.clone(),
+        data: ctx.data_api.clone(),
+        model: Arc::clone(ctx.model),
+        functions: functions.clone(),
+        storage_dir: ctx.state.storage_dir(),
+        seed_dir: ctx.project.seed_dir(),
+        storage_on: integrations::storage_runs(ctx.project, ctx.model),
+        reload: Arc::new(ctx.reload.clone()),
+        live: events::live(),
+    }
+    .router()
+}
+
+/// Starts the feature services: the connectors (telling which run only on Fabric), storage and
+/// the functions.
+async fn start_features(ctx: &ServeContext<'_>) -> anyhow::Result<Features> {
+    let connector_models = integrations::connector_models(ctx).await;
+    let connectors = integrations::connectors_router(ctx, connector_models.clone());
+    integrations::warn_unsupported_connectors(&ctx.project.config().connectors);
+    let storage = integrations::storage_router(ctx).await?;
+    let secrets = SecretValues::read(ctx);
+    let functions = integrations::start_functions(ctx, &secrets).await?;
+    Ok(Features {
+        connectors,
+        connector_models,
+        storage,
+        functions: FunctionsSlot::new(functions),
+        secrets,
+    })
+}
+
+/// The `ready` event: where the app and the API are and what runs.
+pub(crate) fn ready_event(
+    ctx: &ServeContext<'_>,
+    features: &Features,
+    app_url: Option<String>,
+    auth_settings: &AuthSettings,
+) -> Ready {
+    let config = ctx.project.config();
+    let fabric_sign_in = auth_settings.enabled && auth_settings.fabric_enabled;
+    let data_enabled = ctx.data_api.is_some();
+    let entities = if data_enabled {
+        ctx.model
+            .entities
+            .iter()
+            .map(|entity| entity.name.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let folders = if features.storage.is_some() {
+        integrations::storage_folders(ctx.model)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let functions = features.functions.get();
+    Ready {
+        embed_url: (app_url.is_some() && fabric_sign_in)
+            .then(|| format!("{}{}", ctx.api_origin, rl_auth::EMBED_HOST_PATH)),
+        app_url,
+        api_url: ctx.api_origin.to_owned(),
+        portal_url: format!("{}{}", ctx.api_origin, rl_auth::PORTAL_PATH),
+        data_dir: ctx.state.dir().display().to_string(),
+        sign_in_as: SignInAs::of(&ctx.auth.sign_in_as()),
+        open_sign_in: ctx.auth.open_dev_sign_in(),
+        sdk: Sdk::of(ctx.project),
+        features: events::Features {
+            data: DataFeature {
+                enabled: data_enabled,
+                entities,
+            },
+            functions: FunctionsFeature {
+                enabled: functions.is_some(),
+                names: functions
+                    .as_ref()
+                    .map(|service| service.functions())
+                    .unwrap_or_default(),
+            },
+            storage: StorageFeature {
+                enabled: features.storage.is_some(),
+                folders,
+            },
+            auth: AuthFeature {
+                enabled: auth_settings.enabled,
+                fabric: fabric_sign_in,
+                password: auth_settings.enabled && auth_settings.password_enabled,
+            },
+            connectors: config
+                .connectors
+                .iter()
+                .map(|connector| ConnectorFeature {
+                    name: connector.name.clone(),
+                    kind: connector.connector_type.clone(),
+                    supported: integrations::connector_runs_locally(&connector.connector_type),
+                })
+                .collect(),
+        },
+    }
+}
+
+/// The banner's rows: where the app and the API are, what runs, and how to sign in.
+pub(crate) fn banner_rows(
+    ctx: &ServeContext<'_>,
+    features: &Features,
+    app_url: Option<&str>,
+    auth_settings: &AuthSettings,
+) -> Vec<(&'static str, String)> {
+    let config = ctx.project.config();
+    let app = match app_url {
+        Some(url) if ctx.options.static_build => format!("{url} (static build)"),
+        Some(url) => url.to_owned(),
+        None => "not started (--no-frontend)".to_owned(),
+    };
+    let entities = if ctx.data_api.is_some() {
+        count(ctx.model.entities.len(), "entity", "entities")
+    } else if config.services.data.enabled {
+        "off (the schema change was not applied: see above)".to_owned()
+    } else {
+        "off (services.data is disabled in rayfin.yml)".to_owned()
+    };
+    let functions = match features.functions.get() {
+        Some(service) => match service.functions() {
+            names if names.is_empty() => "none loaded (see the function output above)".to_owned(),
+            names => format!(
+                "{} ({})",
+                count(names.len(), "function", "functions"),
+                name_list(&names)
+            ),
+        },
+        None if ctx.options.no_functions => "off (--no-functions)".to_owned(),
+        None if config.services.functions.enabled => {
+            "off (they could not start: see above)".to_owned()
+        }
+        None => "off (services.functions is disabled in rayfin.yml)".to_owned(),
+    };
+    let connectors = integrations::connectors_summary(&config.connectors);
+    let folders = integrations::storage_folders(ctx.model);
+    let storage = if features.storage.is_some() {
+        format!(
+            "{} ({})",
+            count(folders.len(), "folder", "folders"),
+            folders.join(", ")
+        )
+    } else if config.services.storage.enabled {
+        "off (no folders in rayfin/storage)".to_owned()
+    } else {
+        "off (services.storage is disabled in rayfin.yml)".to_owned()
+    };
+    let mut rows = vec![("App", app)];
+    if app_url.is_some() && auth_settings.enabled && auth_settings.fabric_enabled {
+        rows.push((
+            "Embedded",
+            format!(
+                "{}{} (the app inside a local Fabric frame)",
+                ctx.api_origin,
+                rl_auth::EMBED_HOST_PATH
+            ),
+        ));
+    }
+    rows.extend([
+        ("API", ctx.api_origin.to_owned()),
+        ("Entities", entities),
+        ("Functions", functions),
+        ("Connectors", connectors),
+        ("Storage", storage),
+        ("Data", ctx.state.dir().display().to_string()),
+        ("Sign in", sign_in_hint(auth_settings)),
+    ]);
+    if ctx.auth.open_dev_sign_in() {
+        rows.push((
+            "Open sign-in",
+            format!(
+                "on: pages on this machine get sessions from {}{}",
+                ctx.api_origin,
+                rl_auth::DEV_SESSION_TOKEN_PATH
+            ),
+        ));
+    }
+    rows
+}
+
+/// The entities that grant the `anonymous` role.
+fn anonymous_entities(model: &AppModel) -> Vec<&str> {
+    model
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.permissions.iter().any(|permission| {
+                permission.role.eq_ignore_ascii_case("anonymous") && !permission.actions.is_empty()
+            })
+        })
+        .map(|entity| entity.name.as_str())
+        .collect()
+}
+
+/// Fabric accepts the `anonymous` role only when a tenant administrator allows anonymous data
+/// access, which is off by default. `[fabric] anonymous_data_access = false` refuses such
+/// entities, as `rayfin up` does on such a tenant; leaving it unset warns about them.
+pub fn check_anonymous_access(project: &Project, model: &AppModel) -> anyhow::Result<()> {
+    let entities = anonymous_entities(model);
+    let (subject, verb) = match entities.as_slice() {
+        [] => return Ok(()),
+        [one] => (format!("Entity {one}"), "grants"),
+        many => (format!("Entities {}", many.join(", ")), "grant"),
+    };
+    let setting = "\"Enable anonymous data access for Fabric Apps (Preview)\"";
+    match project.local_config().fabric.anonymous_data_access {
+        Some(true) => Ok(()),
+        Some(false) => bail!(
+            "{subject} {verb} the anonymous role, which a Fabric tenant without {setting} refuses: \
+             `rayfin up` fails with ANONYMOUS_DATA_ACCESS_BLOCKED_BY_TENANT_ADMIN, and \
+             rayfin-local.toml asks rayfin-local to act like such a tenant ([fabric] \
+             anonymous_data_access = false). Grant access with @authenticated instead, or change \
+             the setting."
+        ),
+        None => {
+            ui::warning(
+                WarningCode::AnonymousRole,
+                format_args!(
+                    "{subject} {verb} the anonymous role. Fabric accepts it only when a tenant \
+                     administrator turns on {setting}, which is off by default; otherwise \
+                     `rayfin up` refuses the schema. In rayfin-local.toml, set [fabric] \
+                     anonymous_data_access to true if your tenant allows it (hides this \
+                     warning), or to false to act like a tenant that doesn't."
+                ),
+                json!({ "entities": entities }),
+            );
+            Ok(())
+        }
+    }
+}
+
+/// `1 entity`, `3 entities`.
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// How many names a banner row shows.
+const BANNER_NAMES: usize = 8;
+
+/// `names` joined, cut to the first [`BANNER_NAMES`] and `… and N more`.
+fn name_list(names: &[String]) -> String {
+    match names.get(BANNER_NAMES..) {
+        Some(rest) if !rest.is_empty() => format!(
+            "{} … and {} more",
+            names[..BANNER_NAMES].join(", "),
+            rest.len()
+        ),
+        _ => names.join(", "),
+    }
+}
+
+pub(crate) fn server_config(
+    ctx: &ServeContext<'_>,
+    static_site: Option<StaticSite>,
+) -> ServerConfig {
+    let data = ctx.state.data();
+    ServerConfig {
+        api_origin: ctx.api_origin.to_owned(),
+        publishable_key: data.publishable_key.clone(),
+        workspace_id: data.workspace_id.clone(),
+        item_id: data.item_id.clone(),
+        tenant_id: data.tenant_id.clone(),
+        portal_url: format!("{}{}", ctx.api_origin, rl_auth::PORTAL_PATH),
+        allowed_origins: ctx
+            .project
+            .config()
+            .services
+            .auth
+            .allowed_redirect_uris
+            .clone(),
+        allowed_hosts: allowed_hosts(ctx.host),
+        static_site,
+        publishable_key_exempt: rl_auth::PUBLISHABLE_KEY_EXEMPT_PATHS
+            .iter()
+            .map(|path| (*path).to_owned())
+            .collect(),
+    }
+}
+
+/// Polls the health route until the backend answers.
+async fn wait_until_ready(api_origin: &str) -> anyhow::Result<()> {
+    let url = format!("{api_origin}{}", rl_server::HEALTH_PATH);
+    let client = rl_http::client_builder()?
+        .no_proxy()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .context("Could not create an HTTP client")?;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let problem = match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => format!("it answered {}", response.status()),
+            Err(err) => err.to_string(),
+        };
+        if Instant::now() >= deadline {
+            bail!(
+                "The backend did not answer {url} within {} seconds ({problem}). Check that no \
+                 firewall or proxy blocks local connections, then try again.",
+                READY_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn sign_in_hint(settings: &AuthSettings) -> String {
+    if !settings.enabled {
+        return "auth is off (services.auth.enabled is false in rayfin.yml)".to_owned();
+    }
+    if settings.fabric_enabled {
+        let mut hint = "Fabric sign-in opens a local page: create any account there".to_owned();
+        if settings.entra_signin.enabled {
+            hint.push_str(", or continue as your Azure identity");
+        }
+        return hint;
+    }
+    if settings.password_enabled && settings.signup_enabled {
+        return "sign up in the app with any email and password (users stay on this machine)"
+            .to_owned();
+    }
+    "no sign-in method is enabled in services.auth of rayfin.yml".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_clears_the_database_and_files_but_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rayfin")).unwrap();
+        fs::write(dir.path().join("rayfin").join("rayfin.yml"), "name: app\n").unwrap();
+        let project = Project::load(dir.path()).unwrap();
+        let state = LocalState::load_or_create(&project).unwrap();
+        let db = state.db_path();
+        fs::write(&db, "db").unwrap();
+        fs::write(db.with_extension("sqlite-wal"), "wal").unwrap();
+        fs::create_dir_all(state.storage_dir().join("objects")).unwrap();
+        fs::write(state.storage_dir().join("objects").join("a"), "a").unwrap();
+        fs::write(state.keys_dir().join("key.pem"), "key").unwrap();
+
+        let cleared = clear_data(&state).unwrap();
+        assert_eq!(cleared, ["db.sqlite", "db.sqlite-wal", "storage/"]);
+        assert!(!db.exists());
+        assert!(state.storage_dir().is_dir());
+        assert_eq!(fs::read_dir(state.storage_dir()).unwrap().count(), 0);
+        assert!(state.keys_dir().join("key.pem").is_file());
+        assert!(state.dir().join("state.json").is_file());
+        assert!(clear_data(&state).unwrap().is_empty());
+    }
+
+    #[test]
+    fn urls_use_localhost_for_loopback_and_wildcard_hosts() {
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost", "0.0.0.0", "::"] {
+            assert_eq!(origin_host(host), "localhost", "{host}");
+        }
+        assert_eq!(origin_host("192.168.1.10"), "192.168.1.10");
+        assert_eq!(origin_host("fe80::1"), "[fe80::1]");
+        assert_eq!(allowed_hosts("0.0.0.0"), None);
+        assert_eq!(allowed_hosts("[::1]"), Some(vec!["::1".to_owned()]));
+    }
+
+    #[test]
+    fn the_banner_lists_at_most_eight_names() {
+        let names: Vec<String> = (1..=10).map(|n| format!("f{n}")).collect();
+        assert_eq!(
+            name_list(&names),
+            "f1, f2, f3, f4, f5, f6, f7, f8 … and 2 more"
+        );
+        assert_eq!(name_list(&names[..8]), "f1, f2, f3, f4, f5, f6, f7, f8");
+    }
+
+    #[test]
+    fn anonymous_grants_follow_the_tenant_setting() {
+        let model =
+            |json: &str| AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap();
+        let basic = model(include_str!(
+            "../../../rl-model/tests/fixtures/basic.analysis.json"
+        ));
+        let mut names = anonymous_entities(&basic);
+        names.sort_unstable();
+        assert_eq!(names, ["Category", "Comment", "Project", "Todo"]);
+        let explorer = model(include_str!(
+            "../../../rl-model/tests/fixtures/explorer.analysis.json"
+        ));
+        assert!(anonymous_entities(&explorer).is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rayfin")).unwrap();
+        fs::write(dir.path().join("rayfin").join("rayfin.yml"), "name: app\n").unwrap();
+        let project = |setting: &str| {
+            fs::write(dir.path().join("rayfin-local.toml"), setting).unwrap();
+            Project::load(dir.path()).unwrap()
+        };
+        let refused = check_anonymous_access(
+            &project("[fabric]\nanonymous_data_access = false\n"),
+            &basic,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refused.starts_with("Entities ") && refused.contains("anonymous_data_access = false"),
+            "{refused}"
+        );
+        assert!(
+            check_anonymous_access(
+                &project("[fabric]\nanonymous_data_access = false\n"),
+                &explorer
+            )
+            .is_ok()
+        );
+        assert!(
+            check_anonymous_access(&project("[fabric]\nanonymous_data_access = true\n"), &basic)
+                .is_ok()
+        );
+        assert!(check_anonymous_access(&project(""), &basic).is_ok());
+    }
+}

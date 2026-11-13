@@ -15,7 +15,11 @@ Each service has a local stand-in:
 
 | Path | Purpose |
 | --- | --- |
-| `crates/rayfin-local` | The binary: CLI (`clap`), `serve` orchestration and supervision. |
+| `crates/rayfin-local` | The binary: CLI (`clap`), signals/stdin, exit codes and administrative commands. |
+| `crates/rl-runtime` | Shared service orchestration, instance lifecycle/events, reload and supervision. |
+| `crates/rl-napi` | Private Node-API bridge to the shared runtime. |
+| `crates/rl-http` | HTTP clients with explicit ring/platform trust, without global crypto configuration. |
+| `npm/rayfin-local-runtime` | Supported JS lifecycle API and separate binary-path export. |
 | `crates/rl-project` | Project discovery; `rayfin.yml`, `rayfin/.env`, `package.json`, `rayfin-local.toml`; the `.rayfin-local/` state folder. |
 | `crates/rl-node` | Node discovery, embedded JS helpers (`run_helper`), supervised process trees (`ManagedChild`). |
 | `crates/rl-model` | The app model (IR) from `@microsoft/rayfin-core`'s analyzer; `Caller`/`CallerResolver` (request identity). |
@@ -67,6 +71,8 @@ Never modify files in it, except generated artifacts that `rayfin dev` would als
   `cargo fmt` and `cargo clippy -D warnings` must pass.
 - **TLS is rustls with ring only.** Never aws-lc-rs.
   `reqwest` uses `rustls-no-provider`, and the binary installs ring as rustls' default provider at startup.
+  Production HTTP clients use `rl_http::client_builder()` so embedding does not change or rely on
+  the host's default crypto provider.
   Tests that build a `reqwest` client install it too: `let _ = rustls::crypto::ring::default_provider().install_default();`.
 - **Crypto:** `ring` for ES256, RS256 verification, SHA-256, HMAC and random; `argon2` for passwords.
 - **Contracts between crates:**

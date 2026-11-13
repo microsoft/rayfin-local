@@ -100,7 +100,10 @@ flowchart LR
 
 ```text
 crates/
-  rayfin-local/    the binary: CLI, serve orchestration, live reload, the other commands
+  rayfin-local/    the binary: CLI, signals/stdin, exit codes, the other commands
+  rl-runtime/      shared orchestration, live reload, instance lifecycle and bounded events
+  rl-napi/         private Node-API bridge to rl-runtime
+  rl-http/         HTTP clients with an explicit ring provider and platform trust
   rl-project/      project discovery, rayfin.yml, .env, package.json, rayfin-local.toml, .rayfin-local/
   rl-node/         Node.js discovery, embedded helpers, supervised process trees
   rl-model/        the app model built from @microsoft/rayfin-core's analysis; request identity
@@ -114,6 +117,8 @@ crates/
   rl-frontend/     Vite dev server and static builds
   rl-server/       router composition and the request guards
 js/                helpers embedded in the binary and run with the project's Node.js
+npm/               the JS runtime wrapper and independent executable-path export
+scripts/           native npm package assembly and packed-artifact smoke tests
 tests/fixtures/    a fixture Rayfin app and functions package used by the tests
 tests/e2e/         Playwright tests: the fixture app and the explorer app in a browser
 docs/              this document, differences.md, development.md, embedding.md
@@ -123,7 +128,10 @@ docs/              this document, differences.md, development.md, embedding.md
 
 | Crate | Role | Depends on |
 | --- | --- | --- |
-| `rayfin-local` | The binary: CLI (`clap`), `serve` orchestration and supervision, live reload, the host contract (`--json`), the other commands. | All the crates below. |
+| `rayfin-local` | The binary: CLI (`clap`), signal/stdin ownership, exit codes, the host contract (`--json`), the other commands. | `rl-runtime` and the feature crates used by commands. |
+| `rl-runtime` | Shared orchestration, state locking, reload, child supervision, instance-owned lifecycle and events. | Feature crates, `rl-project`, `rl-node`, `rl-http`. |
+| `rl-napi` | Thin Node-API bridge; the npm wrapper owns the supported JS API. | `rl-runtime` |
+| `rl-http` | Ring-backed HTTP clients with platform certificate verification, without a process-global crypto provider. | |
 | `rl-project` | Project discovery; `rayfin.yml`, `rayfin/.env`, `package.json`, `rayfin-local.toml`; the `.rayfin-local/` state folder. | |
 | `rl-node` | Node.js discovery, embedded JS helpers (`Helper`, `run_helper`), supervised process trees (`ManagedChild`). | |
 | `rl-model` | The app model (IR) built from `@microsoft/rayfin-core`'s analysis; `Caller` and `CallerResolver` (request identity). | |
