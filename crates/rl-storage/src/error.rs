@@ -30,7 +30,7 @@ pub enum StorageError {
     Sqlite(#[from] rusqlite::Error),
 }
 
-/// A request failure. Each variant is one `StorageErrorCode` of the 1.36.2 client
+/// A request failure. Each variant is one `StorageErrorCode` of the 2.0.0 client
 /// (`storageErrorCodes.js`).
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ApiError {

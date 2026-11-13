@@ -1,5 +1,6 @@
-// The declarations of `@microsoft/fabric-user-data-functions` 1.36.2 that metadata generation
-// resolves: `RayfinContext`'s type parameters, the `AudienceType` string enum, and `func`.
+// The declarations of `@microsoft/fabric-user-data-functions` 2.0.0 that metadata generation
+// resolves: `RayfinContext`'s type parameters, the `AudienceType` string enum, the `WithSql`
+// marker, and `func`.
 
 export declare enum AudienceType {
   Sql = 'Sql',
@@ -21,6 +22,10 @@ export declare class RayfinContext<
   readonly Tokens: { readonly [K in TokenTypes]: string };
   readonly Secrets: { readonly [K in TSecretNames]: string };
   readonly schema?: TSchema;
+}
+
+export interface WithSql {
+  readonly sql: unknown;
 }
 
 export declare class UserDataFunctions {

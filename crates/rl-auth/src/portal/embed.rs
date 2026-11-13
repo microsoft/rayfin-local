@@ -5,7 +5,7 @@
 //! `GET` [`EMBED_HOST_PATH`](crate::EMBED_HOST_PATH)`?app=<url>` (without `app`, the URL set
 //! with [`AuthService::set_embed_app_url`]) serves a page where the developer signs in with the
 //! sign-in page's form; the page then frames the app, with `fabricEmbedded=true` added to its
-//! query. The SDK 1.36.2 (`initEmbeddedAuth.js` and `embeddedFabricLogin.js` in
+//! query. The SDK 2.0.0 (`initEmbeddedAuth.js` and `embeddedFabricLogin.js` in
 //! `@microsoft/rayfin-auth-provider-fabric`, `postMessageBridge.js` in
 //! `@microsoft/fabric-embedded-host`) then runs this handshake with the page:
 //!

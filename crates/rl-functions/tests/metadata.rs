@@ -1,6 +1,6 @@
 //! `runtimemetadata.json` generation with `js/udf-metadata.mjs` on Node and TypeScript.
 //!
-//! The expected files under `tests/fixtures` were produced by the Rayfin CLI 1.36.2 generator on
+//! The expected files under `tests/fixtures` were produced by the Rayfin CLI 2.0.0 generator on
 //! the same sources. Tests skip (with a note) when Node or TypeScript is unavailable: TypeScript
 //! comes from `RAYFIN_LOCAL_TYPESCRIPT_DIR` (a folder `typescript` resolves from) or from the
 //! explorer app (`RAYFIN_LOCAL_EXPLORER`, else `fabric-apps/apps/explorer` beside this repository).
@@ -199,6 +199,8 @@ async fn fixture_metadata_matches_the_cli() {
             "lakeFile",
             "namespaced",
             "nothingDeclared",
+            "report",
+            "aliasedReport",
             "destructured",
             "legacyStyle",
             "syncHandler",
@@ -218,6 +220,8 @@ async fn fixture_metadata_matches_the_cli() {
     let ask = metadata.function("askAgent").unwrap();
     assert!(ask.delegate_parameters[1].is_context());
     assert!(!ask.delegate_parameters[0].is_context());
+    let report = metadata.function("aliasedReport").unwrap();
+    assert_eq!(report.capabilities, Some(vec!["sql".to_owned()]));
 }
 
 #[tokio::test]
@@ -247,17 +251,18 @@ async fn without_tsconfig_audiences_come_from_the_annotation_text() {
         .iter()
         .map(|diagnostic| (diagnostic.function_name.as_str(), diagnostic.code.as_str()))
         .collect();
+    let audience = "unverified-context-audience";
     assert_eq!(
         warned,
         [
-            "addNote",
-            "askAgent",
-            "backlog",
-            "legacyContext",
-            "namespaced",
-            "legacyStyle"
+            ("addNote", audience),
+            ("askAgent", audience),
+            ("backlog", audience),
+            ("legacyContext", audience),
+            ("namespaced", audience),
+            ("report", "unverified-context-capability"),
+            ("legacyStyle", audience),
         ]
-        .map(|name| (name, "unverified-context-audience"))
     );
     // An alias cannot be resolved without the checker; the runtime binds nothing for it.
     assert_eq!(generated.metadata.audiences("backlog"), []);

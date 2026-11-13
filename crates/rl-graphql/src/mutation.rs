@@ -1,5 +1,5 @@
 //! Mutations: `create{E}(item:)`, `update{E}(id:, item:)` and `delete{E}(id:)`, the documents the
-//! SDK 1.36.2 sends for `create`/`update`/`delete` (its `upsert` is a `_by_pk` read followed by one
+//! SDK 2.0.0 sends for `create`/`update`/`delete` (its `upsert` is a `_by_pk` read followed by one
 //! of them; it never sends nested or multiple creates), run as DAB's `SqlMutationEngine` runs them
 //! (micro-fabric compatibility.md §6.8, §6.9, §7.3-§7.5).
 //!

@@ -11,7 +11,7 @@ Anything else bumps it.
 `rayfin-local version --json` prints one JSON object and exits 0:
 
 ```json
-{"version":"0.2.0","contract":1,"sdk":{"supported":">=1.36.0 <1.37.0","tested":"1.36.2"}}
+{"version":"0.2.0","contract":1,"sdk":{"supported":">=2.0.0 <2.1.0","tested":"2.0.0"}}
 ```
 
 - `contract` is the version of this contract.
@@ -73,7 +73,7 @@ The app model was analyzed (at start, and after each live change of the entity s
 With a data package (`services.data.buildCommand`), its build command runs first, as at start, after changes of its sources or of `services.data`, and for `POST /reload`; a failed build is an `analysis` with `ok: false`.
 
 ```json
-{"v":1,"type":"analysis","time":"…","ok":true,"sdk":{"version":"1.36.2","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}
+{"v":1,"type":"analysis","time":"…","ok":true,"sdk":{"version":"2.0.0","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}
 ```
 
 - `ok: false` with `message` when the analysis failed (a compile error in `rayfin/data`, a failed data build).
@@ -137,7 +137,7 @@ It comes again after each `config-changed` that applied, with the new features; 
   "dataDir": "C:\\apps\\notes\\.rayfin-local",
   "signInAs": {"kind": "developer"},
   "openSignIn": false,
-  "sdk": {"version": "1.36.2", "supported": true},
+  "sdk": {"version": "2.0.0", "supported": true},
   "features": {
     "data": {"enabled": true, "entities": ["Note", "Tag"]},
     "functions": {"enabled": true, "names": ["getBacklog"]},

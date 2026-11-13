@@ -1,10 +1,13 @@
-import { ConnectorsRayfinClient } from '@microsoft/rayfin-client';
+import { browserSession } from '@microsoft/rayfin-auth';
+import { RayfinClient } from '@microsoft/rayfin-client';
+import { dataService } from '@microsoft/rayfin-data';
 import {
   fabricSemanticModel,
   type FabricSemanticModel,
 } from '@microsoft/rayfin-connector-fabric-semanticmodel';
-import type { ConnectorConfig } from '@microsoft/rayfin-connectors';
-import { createStorageClient, type StorageClient } from '@microsoft/rayfin-storage';
+import { connectorsService, type ConnectorConfig } from '@microsoft/rayfin-connectors';
+import { functionsService } from '@microsoft/rayfin-functions';
+import { storageService } from '@microsoft/rayfin-storage';
 
 import type { BasicSchema } from '../../rayfin/data/schema';
 import type { AppFunctionsSchema } from '../../rayfin/functions/src/types';
@@ -39,30 +42,23 @@ export interface AppClientConfig {
   functionsBaseUrl?: string;
 }
 
-/**
- * Data, auth, functions and connectors from `ConnectorsRayfinClient`, plus `storage` on the
- * same API client (and so the same session), as `ExtendableRayfinClient` composes it.
- */
-export class AppClient extends ConnectorsRayfinClient<
-  BasicSchema,
-  AppFunctionsSchema,
-  AppConnectorsSchema
-> {
-  readonly storage: StorageClient<AppStorageSchema>;
-
-  constructor(config: AppClientConfig) {
-    super(
-      {
-        baseUrl: config.baseUrl,
-        publishableKey: config.publishableKey,
-        useProxy: false,
-        authStorage: true,
-        functionsBaseUrl: config.functionsBaseUrl,
-        connectors: connectorConfigs,
-      },
-      // Required: the semantic-model runtime decodes the Arrow response.
-      { salesmodel: fabricSemanticModel() },
-    );
-    this.storage = createStorageClient<AppStorageSchema>(this.apiClient);
-  }
+export function createAppClient(config: AppClientConfig) {
+  return RayfinClient.create({
+    baseUrl: config.baseUrl,
+    publishableKey: config.publishableKey,
+    auth: browserSession({ storage: true }),
+    functionsBaseUrl: config.functionsBaseUrl,
+    services: {
+      data: dataService<BasicSchema>(),
+      functions: functionsService<AppFunctionsSchema>(),
+      connectors: connectorsService<AppConnectorsSchema>({
+        configs: connectorConfigs,
+        // Required: the semantic-model runtime decodes the Arrow response.
+        runtime: { salesmodel: fabricSemanticModel() },
+      }),
+      storage: storageService<AppStorageSchema>(),
+    },
+  });
 }
+
+export type AppClient = ReturnType<typeof createAppClient>;

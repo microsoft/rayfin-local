@@ -19,10 +19,10 @@
 //! Decimals are IEEE doubles: about 15 significant digits are exact (a `DECIMAL(18,2)` above
 //! ~10^13 loses cents), where Fabric's `DECIMAL(p,s)` is exact to `p` digits.
 //!
-//! Who validates what (1.36.2): Hot Chocolate's scalar coercion rejects wrong types ([`encode`]
+//! Who validates what (2.0.0): Hot Chocolate's scalar coercion rejects wrong types ([`encode`]
 //! reports it with Hot Chocolate's message); the database enforces `NOT NULL`, lengths
-//! (`NVARCHAR(n)`), `@set` membership, the email `LIKE` shape, minimum lengths, ranges (only under
-//! `cli-minor-fixes`), uniqueness and foreign keys (the DDL of [`crate::schema`]; violations are
+//! (`NVARCHAR(n)`), `@set` membership, the email `LIKE` shape, minimum lengths, ranges, uniqueness
+//! and foreign keys (the DDL of [`crate::schema`]; violations are
 //! DAB's [`DATABASE_ERROR_MESSAGE`]). Patterns, the email regex and the other `min`/`max` options
 //! are only checked by the SDK's form validation (`toStandardSchema`), never by the server, so
 //! rayfin-local accepts what Fabric accepts.

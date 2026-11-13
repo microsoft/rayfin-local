@@ -6,8 +6,7 @@
 //! database has: `NOT NULL`, the decorator defaults (the `id` key gets a random uuid, as
 //! `NEWID()` gives it), the primary key, unique indexes, non-cascading foreign keys (`ON DELETE
 //! NO ACTION ON UPDATE NO ACTION`, including the system `Users` table) with an
-//! index per foreign key (as EF Core adds), the `@set`, minimum-length, email and (under
-//! `cli-minor-fixes`) range CHECKs of the IR, translated from their typed form, plus local
+//! index per foreign key (as EF Core adds), the `@set`, minimum-length, email and range CHECKs of the IR, translated from their typed form, plus local
 //! CHECKs that stand in for the SQL Server types (lengths, 32-bit ints, decimal precision, the
 //! uuid, date and boolean formats).
 
@@ -519,7 +518,7 @@ fn column_checks(entity: &Entity, column: &Column, case_insensitive: bool) -> Ve
             push("_email", expression);
         }
         FieldKind::Set { allowed, .. } => {
-            // `cli-minor-fixes` makes the check case-sensitive (Latin1_General_100_BIN2).
+            // rayfin-core 2.0 makes the check case-sensitive (Latin1_General_100_BIN2).
             let binary = !case_insensitive
                 || ir_check("").is_some_and(|check| check.expression.contains("COLLATE"));
             let values: Vec<String> = allowed.iter().map(|v| quote_literal(v)).collect();

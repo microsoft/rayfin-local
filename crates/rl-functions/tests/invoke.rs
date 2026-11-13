@@ -304,12 +304,12 @@ async fn functions_answer_with_the_deployed_envelope() {
         (StatusCode::OK, Some("Failed"))
     );
 
-    // No envelope at all: the deployed route's 500.
+    // A result JSON can't serialize: the 2.0 runtime's `Failed` envelope.
     let bigint = invoke(&router, "bigint", json!({})).await;
-    assert_eq!(bigint.status, StatusCode::INTERNAL_SERVER_ERROR);
-    let (code, message) = bigint.error();
-    assert_eq!(code, "InternalServerError");
-    assert_eq!(message, "An internal execution error occured");
+    assert_eq!(
+        (bigint.status, bigint.header("x-fabric-udf-status")),
+        (StatusCode::OK, Some("Failed"))
+    );
 
     service.stop().await;
     let stopped = invoke(&router, "hello", json!({})).await;

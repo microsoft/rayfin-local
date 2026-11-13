@@ -1,6 +1,6 @@
 # `basic`: the end-to-end fixture app
 
-A small Rayfin app on SDK and CLI 1.36.2 that uses every service `rayfin-local serve` emulates.
+A small Rayfin app on SDK and CLI 2.0.0 that uses every service `rayfin-local serve` emulates.
 It is modeled on the reference app (`fabric-apps/apps/explorer`): the same packages, `vite.config.ts`
 with `rayfinLocalDev({ autoLogin: true })`, a client bootstrapped from `import.meta.env.VITE_*`
 (`src/services/bootstrap.ts`), `ConnectorsRayfinClient`, `ensureSignedInWithFabric` and `initEmbeddedAuth`.
@@ -69,7 +69,7 @@ rows with a tag unique to the run, report titles without it and delete what they
 ## Generated files
 
 `rayfin/functions/src/types.ts`, `src/secrets.generated.ts` and `runtimemetadata.json` were
-written by the Rayfin CLI 1.36.2 generator; `js/udf-metadata.mjs` writes an identical
+written by the Rayfin CLI 2.0.0 generator; `js/udf-metadata.mjs` writes an identical
 `runtimemetadata.json`. After changing `function_app.ts` or the `secrets` in `rayfin.yml`, run
 this from the fixture root (it works locally and does not contact Fabric):
 

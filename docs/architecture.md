@@ -15,9 +15,9 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
 
 ### Goals
 
-- **Unmodified apps.** Any Rayfin project on SDK 1.36.x runs with `rayfin-local serve`, without code or config changes.
+- **Unmodified apps.** Any Rayfin project on SDK 2.0.x runs with `rayfin-local serve`, without code or config changes.
 - **Wire compatibility.** For every supported feature, the SDK sees the same status codes, headers, bodies and errors as from Fabric.
-  The real SDK 1.36.2 is the oracle in tests.
+  The real SDK 2.0.0 is the oracle in tests.
 - **No Fabric dependency** for the core services: auth, data, functions and storage run entirely on the machine.
 - **Real data where needed.** Functions and connectors reach real Azure and Fabric resources, Fabric SQL databases included, with the developer's own identity.
 - **A fast inner loop.** Schema changes migrate the database live, functions rebuild and reload, and Vite hot-reloads the UI.
@@ -33,7 +33,7 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
 ## Design principles
 
 1. **The SDK's wire contract is the specification.**
-   rayfin-local implements what `@microsoft/rayfin-*` 1.36.x sends and expects, not the internals of the Fabric services.
+   rayfin-local implements what `@microsoft/rayfin-*` 2.0.x sends and expects, not the internals of the Fabric services.
    Where the SDK depends on a detail, such as 403 rather than 401 for a bad publishable key, or HTTP 200 envelopes for failed functions, rayfin-local reproduces it.
    The tests run the real SDK against rayfin-local.
 2. **Run the project's own packages instead of reimplementing them.**
@@ -229,7 +229,7 @@ The data API, storage, functions and connectors all identify the caller this way
 - Users are local accounts with argon2id password hashes, in `db.sqlite`.
 - Access tokens are ES256 JWTs shaped like the real service's, signed with keys in `.rayfin-local/keys/` and published at `/.well-known/jwks.json`.
 - Sessions are refresh-token families: each refresh rotates the token, and sign-out ends the family.
-- A password sign-in for an unknown email creates the account when sign-up is allowed (`[auth] auto_create_users`, on by default), because the 1.36.2 SDK's `MockAuthService` pattern can't reach its sign-up fallback.
+- A password sign-in for an unknown email creates the account when sign-up is allowed (`[auth] auto_create_users`, on by default).
 - "Continue as &lt;you&gt;" and the Entra exchange (`/api/auth/v1/brokered/token`) verify an Entra token against Microsoft's signing keys and sign in a local user keyed by the token's object id.
   "Continue as" uses the developer's own Power BI token from the token broker, and both are on only when the backend listens on loopback.
 
@@ -410,7 +410,7 @@ Other connector types answer 501.
 
 ## Storage
 
-`rl-storage` serves the routes of the 1.36.2 `StorageFolderClient` on files under `.rayfin-local/storage`, with the app's `@blob` folder rules.
+`rl-storage` serves the routes of the 2.0.0 `StorageFolderClient` on files under `.rayfin-local/storage`, with the app's `@blob` folder rules.
 Files are stored under random ids; their paths and metadata live in SQLite tables.
 Uploads and downloads go through signed URLs under `/.rayfin-local/storage/`, whose HMAC token is the credential.
 `rl-model` validates every storage check before the model can be served or reloaded, using BaaS's storage-specific whitelist and operand types rather than data-policy semantics.
@@ -427,7 +427,7 @@ String comparisons are exact locally, not lowercased (BaaS delegates text compar
 1. `RAYFIN_LOCAL_TOKEN_<AUDIENCE>`, read at startup, wins for its audience.
 2. Otherwise the mode (`--token-source`) picks the providers:
    - `az`: `az account get-access-token --scope <scope> [--tenant <tenant>]`.
-   - `rayfin`: `js/rayfin-token.mjs`, which calls `getAuthenticatedToken` from the project's `@microsoft/rayfin-cli/auth`.
+   - `rayfin`: `js/rayfin-token.mjs`, which calls `getAuthenticatedToken` from the project's `@microsoft/rayfin-cli/_internal/auth`.
      It serves tokens from the Rayfin CLI's cache (`rayfin login`) and may sign in interactively, which the broker waits up to 180 seconds for.
    - `auto`: the Azure CLI, then the Rayfin CLI.
 
@@ -472,14 +472,14 @@ rayfin-local is a development tool for one person, but it holds the keys to that
 - **A new route.** Add it to the owning feature crate's router.
   Routes the SDK calls without a publishable key belong in that crate's exempt list (as `rl_auth::PUBLISHABLE_KEY_EXEMPT_PATHS` does for auth).
 - **A new Node helper.** Add the script to `js/`, declare it with `rl_node::Helper::new(name, include_str!(...))` in the crate that uses it (with the modules it imports, written next to it by `rl_node::materialize_bundle`, as for `vite-dev.mjs`), and run it with `run_helper` (one-shot) or `ManagedChild` (long-running).
-- **A new SDK version.** Compare its wire contract with 1.36.2 (routes, bodies, headers, error shapes), update the version check in `rl-project`, and run the conformance tests and the e2e suites with the new packages.
+- **A new SDK version.** Compare its wire contract with 2.0.0 (routes, bodies, headers, error shapes), update the version check in `rl-project`, and run the conformance tests and the e2e suites with the new packages.
   The analysis runs the project's own `@microsoft/rayfin-core`, so changes to the analyzer's output show up as `rl-model` parse errors and in its golden tests.
 
 ## Testing
 
 - **Unit and integration tests** in each crate (`cargo test --workspace`): the GraphQL compiler, policies, migrations, auth flows, storage and the token broker run against SQLite and fakes.
 - **SQL connectors** against a real SQL Server (`rl-connectors`' `sql_server.rs` and `sql_sdk.rs`, with `RAYFIN_LOCAL_TEST_MSSQL`; CI runs them in a SQL Server container), and their T-SQL on a fake database (`rl-graphql`'s `tsql.rs`).
-- **SDK conformance**: the `sdk.rs` tests of `rl-auth`, `rl-graphql` and `rl-storage`, `rl-connectors`' `sdk_decode.rs` and `rl-functions`' `host.rs` drive rayfin-local with the real `@microsoft/rayfin-*` 1.36.2 packages from the fixture app, and skip when Node.js or the packages are missing.
+- **SDK conformance**: the `sdk.rs` tests of `rl-auth`, `rl-graphql` and `rl-storage`, `rl-connectors`' `sdk_decode.rs` and `rl-functions`' `host.rs` drive rayfin-local with the real `@microsoft/rayfin-*` 2.0.0 packages from the fixture app, and skip when Node.js or the packages are missing.
 - **The host contract**: `crates/rayfin-local/tests/host_contract.rs` runs the built binary: `version --json`, fatal errors of `serve --json`, and a `serve --json` of the fixture app from its events to the end of stdin (it skips without the fixture's packages).
   `control_api.rs` drives the control API and automatic sign-in of the fixture app the same way.
 - **Live reload**: `crates/rayfin-local/tests/live_reload.rs` runs `serve --json` on a copy of the fixture app: `rayfin.yml` edits applied on the same ports, a data package built before its entities are analyzed again, `secret set` restarting the function host, Vite started again after it is killed, and the control API, its `POST /reload` and automatic sign-in across changes, with seed data checked against the entities served now.

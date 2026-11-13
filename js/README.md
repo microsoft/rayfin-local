@@ -7,7 +7,7 @@ They run on the developer's own Node.js (20 or later), in a folder of the projec
 | Helper | Owner crate | Kind | Purpose |
 | --- | --- | --- | --- |
 | `analyze.mjs` | `rl-model` | One-shot | Compile `rayfin/data` (and `rayfin/storage`) and run the project's `@microsoft/rayfin-core` analyzer, as `rayfin dev db apply` does; in connectors mode, analyze the SQL connectors' entities in `rayfin/connectors`, as `rayfin up` does. |
-| `rayfin-token.mjs` | `rl-tokens` | One-shot | Mint a token with the developer's Rayfin CLI login (`@microsoft/rayfin-cli/auth`). |
+| `rayfin-token.mjs` | `rl-tokens` | One-shot | Mint a token with the developer's Rayfin CLI login (`@microsoft/rayfin-cli/_internal/auth`). |
 | `udf-metadata.mjs` | `rl-functions` | One-shot | Generate `runtimemetadata.json` from the `udf.func(...)` declarations, byte for byte as the Rayfin CLI does. |
 | `function-host.mjs` | `rl-functions` | Long-running: stdout announcements, then TCP JSON lines | Host the app's functions on the real UDF package, without Azure Functions Core Tools. |
 | `vite-dev.mjs` | `rl-frontend` | Long-running: stdout announcements and signals | Run the app's own Vite dev server, with the `rayfin-local:shim` plugin that wires it to the local backend, the `rayfin-local:sign-in` plugin that signs the app in automatically, and the `rayfin-local:session-stamp` plugin that makes pages forget stale sessions (with `session-stamp.mjs`, written next to it). |
