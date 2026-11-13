@@ -77,6 +77,25 @@ extends:
 
               - pwsh: |
                   $ErrorActionPreference = 'Stop'
+                  $configDirectory = Join-Path $env:BUILD_SOURCESDIRECTORY '.cargo'
+                  New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
+                  @'
+                  [registries.rayfin-official]
+                  index = "sparse+https://pkgs.dev.azure.com/powerbi/AppDev/_packaging/rayfin-official/Cargo/index/"
+                  credential-provider = "cargo:token"
+
+                  [source.crates-io]
+                  replace-with = "rayfin-official"
+                  '@ | Set-Content -Encoding utf8 (Join-Path $configDirectory 'config.toml')
+                displayName: Configure Cargo to use the internal Rayfin feed
+
+              - task: CargoAuthenticate@0
+                displayName: Authenticate Cargo with the pipeline identity
+                inputs:
+                  configFile: $(Build.SourcesDirectory)/.cargo/config.toml
+
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
                   $cargoBin = Join-Path $env:USERPROFILE '.cargo/bin'
                   $rustup = Join-Path $cargoBin 'rustup.exe'
                   if (-not (Test-Path $rustup)) {
