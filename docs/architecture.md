@@ -188,7 +188,7 @@ With `--json`, the end of stdin stops `serve` the same way (see [Hosts](#hosts-s
 
 ## Hosts (`serve --json`)
 
-Programs such as Fabricator run `serve --json` as a child process; [embedding.md](embedding.md) is their contract, and its version is `events::CONTRACT_VERSION`.
+Embedding hosts run `serve --json` as a child process; [embedding.md](embedding.md) is their contract, and its version is `events::CONTRACT_VERSION`.
 
 - **Events.** `crates/rayfin-local/src/events.rs` defines every event and writes them to stdout, one JSON line each, under a lock and flushed; `stopped` is the last, and anything emitted after it is dropped.
   The same calls that print the human output emit events with `--json`: `ui::step`, `status`, `warn` and `error` become `log` events, tracing goes through `events::LogLayer`, and `ui::child_sink` turns child output into `log` events by label (`[vite]`, `[fn]`, `[build]`, ANSI codes stripped).

@@ -1,6 +1,6 @@
 //! Automatic sign-in and the control API (docs/embedding.md) of the built binary: a host runs
-//! `serve --json` on the fixture app with a control token, then drives it the way Fabricator
-//! does, and signs the app in through the app's dev server as its page would.
+//! `serve --json` on the fixture app with a control token, then drives it as a control API
+//! client and signs the app in through the app's dev server as its page would.
 //!
 //! It needs Node.js and the fixture's npm packages (`npm ci` in `tests/fixtures/apps/basic`);
 //! without them it prints a note and passes.
