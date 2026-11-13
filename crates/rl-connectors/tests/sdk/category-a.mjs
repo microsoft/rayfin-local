@@ -74,12 +74,12 @@ await check('select, where, orderBy and dotted relationship paths', async () => 
   assert.deepEqual(rows[0].stockLevels.map((level) => level.quantity).sort(), [0, 5]);
 });
 
-await check('findByKey reads the full row and deserializes dates', async () => {
+// SDK 2.0 returns date columns as ISO strings, not Date objects.
+await check('findByKey reads the full row and returns dates as ISO strings', async () => {
   const hammer = await alice.inventory.Product.findByKey({ productId: cfg.hammer });
   assert.equal(hammer.name, 'Hammer');
   assert.equal(hammer.inStock, true);
-  assert.ok(hammer.createdAt instanceof Date, `createdAt: ${hammer.createdAt}`);
-  assert.equal(hammer.createdAt.toISOString(), '2024-01-15T10:30:00.123Z');
+  assert.equal(hammer.createdAt, '2024-01-15T10:30:00.123Z');
   assert.equal(await alice.inventory.Product.findByKey({ productId: '00000000-0000-0000-0000-000000000000' }), null);
 });
 
@@ -105,7 +105,8 @@ await check('a keyless entity', async () => {
   const rows = await alice.inventory.AuditEntry.findMany();
   assert.deepEqual(rows.map((row) => row.action).sort(), ['login', 'logout']);
   const login = rows.find((row) => row.action === 'login');
-  assert.equal(login.at.toISOString(), '2024-01-15T08:30:00.000Z');
+  assert.equal(typeof login.at, 'string');
+  assert.equal(new Date(login.at).toISOString(), '2024-01-15T08:30:00.000Z');
 });
 
 await check('create, update and delete on a SQL database return the row', async () => {
@@ -117,7 +118,8 @@ await check('create, update and delete on a SQL database return the row', async 
     ownerEmail: 'alice@contoso.com',
   });
   assert.match(created.productId, /^[0-9a-f-]{36}$/);
-  assert.ok(created.createdAt instanceof Date);
+  assert.equal(typeof created.createdAt, 'string');
+  assert.ok(!Number.isNaN(Date.parse(created.createdAt)), `createdAt: ${created.createdAt}`);
   const updated = await alice.inventory.Product.update({ productId: created.productId }, { price: 21 });
   assert.equal(updated.price, 21);
   const deleted = await alice.inventory.Product.delete({ productId: created.productId });
