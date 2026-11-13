@@ -220,7 +220,7 @@ rayfin-local serve --reset --seed          # start from the project's seed data 
 rayfin-local serve --json                  # for programs: JSON events on stdout, stops when stdin closes
 ```
 
-Programs that run rayfin-local for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator), use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
+Programs that run rayfin-local for the developer use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
 
 ### The backend's routes
 
@@ -601,7 +601,7 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
 - [SQL connectors](docs/sql-connectors.md): Category A connectors locally, their contract, schema, database and identity.
 - [Seed data](docs/seed-data.md): the rows and files a project declares in `rayfin/seed` for local development.
 - [Differences from Fabric](docs/differences.md): what is supported, what differs and what is missing, per SDK surface.
-- [Embedding](docs/embedding.md): the contract for programs that run rayfin-local, such as Fabricator: `serve --json` events, error codes, exit codes and the control API.
+- [Embedding](docs/embedding.md): the contract for programs that run rayfin-local: `serve --json` events, error codes, exit codes and the control API.
 - [Development](docs/development.md): building, testing and releasing rayfin-local.
 
 ## License

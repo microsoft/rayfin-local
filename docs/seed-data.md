@@ -1,7 +1,7 @@
 # Seed data
 
 A project can declare rows and files for local development in `rayfin/seed`.
-`rayfin-local serve --seed` loads them in place of the local data, and so do programs that run rayfin-local, such as Fabricator, through the [control API](embedding.md#control-api).
+`rayfin-local serve --seed` loads them in place of the local data, and so do programs that run rayfin-local through the [control API](embedding.md#control-api).
 Everyone who opens the project starts from the same data, including rows that belong to a signed-in user.
 [Seed scripts](https://rayfin.ai/docs/data/seeding) can't write those: they can only act as an anonymous caller.
 

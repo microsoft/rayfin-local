@@ -1,6 +1,6 @@
 # Embedding rayfin-local
 
-This page is the contract between `rayfin-local` and programs that run it for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator).
+This page is the contract between `rayfin-local` and programs that run it for the developer.
 A host starts `rayfin-local serve --json` as a child process, reads events from its stdout, controls it through a loopback HTTP API, and stops it by closing its stdin.
 Contract version: **1**.
 Additive changes (new event types, new fields, new endpoints) keep the version; hosts ignore what they don't know.
