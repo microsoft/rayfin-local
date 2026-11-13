@@ -361,8 +361,8 @@ pub struct ForeignKey {
     pub columns: Vec<String>,
     pub referenced_table: String,
     pub referenced_columns: Vec<String>,
-    /// `None` for the system `User` entity (`Users(Id)`), which lives in Fabric's control
-    /// plane, not in the app database.
+    /// `None` for the analyzer's system `User` reference (`Users(Id)`). The local data API
+    /// registers that entity separately, and the database still enforces its foreign keys.
     pub referenced_entity: Option<String>,
 }
 
@@ -381,7 +381,7 @@ pub struct Relationship {
     pub cardinality: Cardinality,
     /// The target entity `E`.
     pub target: String,
-    /// The target is the system `User` entity, which the app database does not have.
+    /// The target is the system `User` entity, registered separately from app-owned entities.
     pub target_is_system: bool,
     /// Columns of this entity (`[rel_id]` for `One`, `[id]` for `Many`).
     pub source_columns: Vec<String>,
@@ -553,8 +553,8 @@ pub struct StorageRule {
     pub path_pattern: String,
     pub role: String,
     pub actions: Vec<Action>,
-    /// Over `claims.*` and `item.<field>` (intrinsic object fields such as `owner_id`, or the
-    /// folder's app fields).
+    /// BaaS storage checks: `sub`/`email`/`role` claims, `owner_id` and declared metadata;
+    /// matching primitive types and no null literals. Admitted by `validate_rules`.
     pub check: Option<PolicyExpr>,
 }
 

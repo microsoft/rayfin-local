@@ -18,7 +18,7 @@ async fn has_node() -> bool {
     match NodeRuntime::discover().await {
         Ok(_) => true,
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             false
         }
     }

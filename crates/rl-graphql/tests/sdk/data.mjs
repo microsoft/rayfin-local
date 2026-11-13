@@ -182,14 +182,15 @@ assert.equal(forged, 'GraphQL errors: Could not insert row with given values.');
 assert.equal((await data.AskThread.findMany()).length, 3);
 out.mutations = { created: created.title, renamed: renamed.title, blocked, bobUpdate, bobDelete, forged };
 
-// An anonymous client gets 401 (refresh, retry, then the error).
+// An anonymous client receives a GraphQL authorization error, not a refresh-triggering 401.
 const anonymous = client();
 const anonymousError = await anonymous.data.AskThread.select(['id']).execute().then(
   () => null,
   (e) => ({ name: e.name, status: e.status, message: e.message }),
 );
 out.anonymous = anonymousError;
-assert.equal(anonymousError.status, 401);
+assert.equal(anonymousError.message,
+  'GraphQL errors: The current user is not authorized to access this resource.');
 
 for (const c of [alice, bob, anonymous]) c.auth.destroy();
 print('RESULT ' + JSON.stringify(out));

@@ -1,7 +1,7 @@
 //! The entity tables as a host's control API reads and clears them, whatever the permissions:
 //! row counts, pages of rows with each value as the data API answers it (the same
 //! `rl_db::codec::json_expr` the queries use), and clearing rows. [`replace_rows`] writes seed
-//! data in place of every row.
+//! data in place of every app row. System identities are not app-owned or writable here.
 
 use std::collections::HashMap;
 
@@ -124,12 +124,13 @@ impl From<rl_db::DbError> for AdminError {
 }
 
 impl DataApi {
-    /// How many rows each entity of the served model holds, in the model's order.
+    /// How many rows each app-owned entity holds, in the model's order.
     pub async fn row_counts(&self) -> Result<Vec<(String, u64)>, AdminError> {
         let model = self.model();
         let entities: Vec<(String, String)> = model
             .entities
             .iter()
+            .filter(|entity| app_owned(entity))
             .map(|entity| (entity.name.clone(), entity.table.clone()))
             .collect();
         let counts = self
@@ -260,12 +261,13 @@ impl DataApi {
         }
     }
 
-    /// Deletes every row of every entity of the served model; returns how many.
+    /// Deletes every row of every app-owned entity; returns how many. System identities stay.
     pub async fn clear_all_rows(&self) -> Result<u64, AdminError> {
         let model = self.model();
         let tables: Vec<String> = model
             .entities
             .iter()
+            .filter(|entity| app_owned(entity))
             .map(|entity| entity.table.clone())
             .collect();
         let deleted = self
@@ -287,7 +289,7 @@ impl DataApi {
     }
 }
 
-/// In `conn`'s transaction: deletes every row of every entity of `model`, then inserts the rows
+/// In `conn`'s transaction: deletes every app-owned row of `model`, then inserts the rows
 /// of `tables`, whatever the permissions. References between rows are checked once all of them
 /// are in, so rows may come in any order.
 ///
@@ -302,7 +304,7 @@ pub fn replace_rows(
 ) -> Result<Result<Vec<u64>, Vec<RowProblem>>, AdminError> {
     // Until the commit, as rows refer to each other across tables.
     conn.pragma_update(None, "defer_foreign_keys", true)?;
-    for entity in &model.entities {
+    for entity in model.entities.iter().filter(|entity| app_owned(entity)) {
         conn.execute(&format!("DELETE FROM {}", quote_ident(&entity.table)), [])?;
     }
     let mut problems = Vec::new();
@@ -637,14 +639,20 @@ fn find_entity<'a>(model: &'a AppModel, name: &str) -> Result<&'a Entity, AdminE
     model
         .entities
         .iter()
+        .filter(|entity| app_owned(entity))
         .find(|entity| entity.name == name)
         .or_else(|| {
             model
                 .entities
                 .iter()
+                .filter(|entity| app_owned(entity))
                 .find(|entity| entity.name.eq_ignore_ascii_case(name))
         })
         .ok_or_else(|| AdminError::UnknownEntity(name.to_owned()))
+}
+
+fn app_owned(entity: &Entity) -> bool {
+    !entity.table.eq_ignore_ascii_case("Users")
 }
 
 fn find_field<'a>(entity: &'a Entity, field: &str) -> Result<&'a Column, AdminError> {

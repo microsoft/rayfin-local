@@ -14,14 +14,20 @@ pub mod connector;
 mod convert;
 mod model;
 mod policy;
+mod storage_policy;
+mod system;
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-pub use caller::{Caller, CallerError, CallerResolver, Session, bearer_token};
+pub use caller::{
+    Caller, CallerError, CallerResolver, FABRIC_USER_HINT_PARAM, Session, bearer_token,
+    fabric_user_hint,
+};
 pub use model::*;
 pub use policy::{CompareOp, Literal, Operand, PolicyAstError, PolicyExpr};
+pub use system::system_user;
 
 /// The schema-analysis helper (`js/analyze.mjs`), run with the project's Node.js and packages.
 pub const ANALYZE_JS: &str = include_str!("../../../js/analyze.mjs");

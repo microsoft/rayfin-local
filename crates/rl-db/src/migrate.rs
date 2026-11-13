@@ -291,7 +291,7 @@ fn plan_between(current: Option<&StoredSchema>, target: &StoredSchema) -> Migrat
         .map(|current| current.tables.as_slice())
         .unwrap_or_default()
     {
-        if target.table(&old.name).is_none() {
+        if !old.name.eq_ignore_ascii_case("Users") && target.table(&old.name).is_none() {
             steps.push(MigrationStep::DropTable(old.clone()));
         }
     }

@@ -8,6 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Every job runs scripts/check.mjs, the same command contributors run locally (docs/development.md).
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -18,10 +19,11 @@ jobs:
           toolchain: "1.96.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: node scripts/check.mjs lint
 
   test:
+    # Rust and JS tests in strict mode: a test that needs Node, the fixtures' packages or the
+    # SDK fails instead of skipping.
     strategy:
       fail-fast: false
       matrix:
@@ -35,9 +37,33 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: node scripts/check.mjs rust js
 
+  e2e:
+    # The browser suites (tests/e2e) against a real `rayfin-local serve`, and the portal test.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - uses: Swatinem/rust-cache@v2
+      - run: node scripts/check.mjs e2e
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results
+          path: |
+            tests/e2e/test-results
+          if-no-files-found: ignore
   sql-connectors:
     # Category A (SQL) connectors against a real SQL Server: crates/rl-connectors/tests/sql_server.rs
     # and sql_sdk.rs (the real SDK, from the connectors fixture's packages). The password only

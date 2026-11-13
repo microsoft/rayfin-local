@@ -5,9 +5,13 @@ Playwright drives real apps against `rayfin-local serve` in Chromium:
 | Suite | Spec | App | Runs |
 | --- | --- | --- | --- |
 | `fixture` | `fixture.spec.ts` | `tests/fixtures/apps/basic` | Always. |
+| `static` | `static.spec.ts` | a copy of `tests/fixtures/apps/basic`, served `--static` with `assetAccess: protected` | Always. |
 | `explorer` | `explorer.spec.ts` | the reference app, `fabric-apps/apps/explorer` | Only with `RAYFIN_LOCAL_E2E_EXPLORER=1`. |
 
 `portal/` is a separate test of the sign-in popup alone, run by `cargo test -p rl-auth` (see its README).
+
+`node scripts/check.mjs e2e` (from the repository root) installs everything, then runs the
+`fixture` and `static` suites and the portal test, as CI's `e2e` job does.
 
 ## Run
 
@@ -16,9 +20,12 @@ cd tests/e2e
 npm install
 npx playwright install chromium   # or set PLAYWRIGHT_CHANNEL=msedge to use the installed Edge
 npm run test:fixture              # the fixture suite
+npm run test:static               # the static suite
 npm run test:explorer             # the explorer suite (sets RAYFIN_LOCAL_E2E_EXPLORER=1)
-npm test                          # both; explorer is skipped unless RAYFIN_LOCAL_E2E_EXPLORER=1
+npm test                          # all; explorer is skipped unless RAYFIN_LOCAL_E2E_EXPLORER=1
 ```
+
+Run one Playwright run at a time: a run kills the `serve` processes an earlier one left over.
 
 The global setup runs `cargo build -p rayfin-local` first. The fixture suite runs `npm ci` in the
 fixture and its `rayfin/functions` when they have no `node_modules`; the explorer suite expects
@@ -49,7 +56,8 @@ random one, for the control API. The explorer suite uses your real tokens
 - **One `serve` per suite** (`support/serve.ts`), started on free ports with `--reset`, so every
   run starts from an empty database. It is ready once `GET <api>/.rayfin-local/health` and the
   frontend URL from the startup banner answer. Stopping kills the process tree
-  (`taskkill /T /F` on Windows) and checks that both ports are free again.
+  (`taskkill /T /F` on Windows; elsewhere SIGTERM, which serve answers by stopping Vite and the
+  function host, then SIGKILL to every descendant) and checks that both ports are free again.
 - **Suites start in the Playwright runner** (`support/suites.ts`), on the first test that needs
   them, and stop in the global teardown. So they survive Playwright replacing its worker after a
   failed test, and die with the runner if it is killed (Windows ends `serve` with the runner's job
@@ -59,8 +67,13 @@ random one, for the control API. The explorer suite uses your real tokens
 - **One browser page per worker** (`support/fixtures.ts`), so the app stays signed in from one
   scenario to the next; a new worker signs in again. Every test checks that it caused no console
   errors, uncaught exceptions, failed requests or HTTP errors beyond the ones it expects.
-- **Sign-in** (`support/portal.ts`) clicks through the emulated Fabric popup: the run's first
-  sign-in signs up `e2e-<random>@example.com`, later ones sign in.
+- **Sign-in** (`support/portal.ts`) clicks through the emulated Fabric popup, or the embed page's
+  inline form (`signInOnHostPage`): the run's first sign-in signs up `e2e-<random>@example.com`,
+  later ones sign in.
+- **The developer identity** (`support/control.ts`). The fixture suite's `rayfin-local.toml` sets
+  `[auth] sign_in_as = "none"`, so the app starts signed out and the popup tests are real. Tests
+  of automatic sign-in switch it with `signInAs(info, 'developer')`, the control API's
+  `PUT /identity`, which also signs out every session.
 
 ## The fixture suite
 
@@ -77,7 +90,9 @@ Clicks each scenario button of the fixture app (see its README) and checks the r
 | `connector-query` | `salesmodel.executeQuery` returns the mock's answer (`support/mock-powerbi.ts`), and every request the mock got was for the connector's dataset, with the query and `RAYFIN_LOCAL_TOKEN_POWERBI` as its bearer token. |
 | `storage-roundtrip` | Upload with fields, list, download, delete. |
 | `sign-out` | The session ends. |
-| `auto-sign-in` | The app signs itself in as Rayfin's templates do (`fetchRayfinLocalSessionToken()`, then `signInWithBrokeredToken`): the dev server answers for the developer (`developer@example.com`, since the suite's Power BI token is fake), no popup opens, and the session works for data. |
+| `fn-ping signed out` | A function called without a session gets 403 (`Anonymous access is not allowed for function invocation.`), as in Fabric. |
+| `embedded-auth standalone` | `initEmbeddedAuth()` outside a Fabric frame returns null and signs nobody in. |
+| `auto-sign-in` | With the identity set to the developer, the app signs itself in as Rayfin's templates do (`fetchRayfinLocalSessionToken()`, then `signInWithBrokeredToken`): the dev server answers for the developer (`developer@example.com`, since the suite's Power BI token is fake), no popup opens, and the session works for data. |
 | `stale sessions` › after a data reset | After the control API's `POST /data/reset` and a reload, the page has no session (rayfin-local's dev server made it forget the one the reset signed out), and the app signs itself in again with no 401. It deletes the local users, so it runs last. |
 | `stale sessions` › another app on the same port | Two copies of the fixture (`FixtureCopy` in `support/project.ts`, in `test-results`) served one after the other on one frontend port, in a browser context of their own: the second app's page has no session from the first, and signs itself in. |
 
@@ -85,6 +100,22 @@ The mock Power BI answers `executeDaxQueries` with the Arrow stream rl-connector
 `EVALUATE ROW("x", 1)` (`crates/rl-connectors/tests/fixtures/row.arrows`) and `executeQueries`
 with Power BI's JSON for the same result. The suite points the connector at it with a
 `rayfin-local.toml` in the fixture (git-ignored), which the teardown deletes again.
+
+## The static suite
+
+`support/static-suite.ts` copies the fixture app to `test-results/static-app`, sets its
+`assetAccess` to `protected`, and serves its static build (`--static --no-functions`), as
+`rayfin dev --static` hosts a published app. The tests, in order:
+
+| Test | Checks |
+| --- | --- |
+| anonymous gating | A signed-out document request gets the sign-in interstitial (200, `X-Frame-Options: DENY`); config, assets and other files get 401. |
+| standalone sign-in | The interstitial's popup signs in; the app loads, `initEmbeddedAuth()` is null, and data works. |
+| SPA fallback | Signed in, unknown paths and missing assets answer `index.html`; `rayfin.config.json` points at the backend. |
+| embedded, same user | In the emulated Fabric frame (`/.rayfin-local/portal/embed`), the app gets `fabricEmbedded=true` and the `_fu` hint, `initEmbeddedAuth()` signs in the frame's user, and data works with no 401. |
+| embedded, another user | Switching the host's user signs the frame in as the new user. |
+| embedded, fresh context | In a new browser context the embedded app signs in with no popup and no console or CSP errors. |
+| sign-out | Signing out ends the hosting session too: a reload shows the interstitial. |
 
 ## The explorer suite
 

@@ -1,0 +1,11 @@
+[package]
+name = "rl-test-support"
+description = "Shared by the tests: skipping a test whose prerequisites are missing, unless strict mode makes that a failure."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

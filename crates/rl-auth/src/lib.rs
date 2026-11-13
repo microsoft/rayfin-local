@@ -3,6 +3,8 @@
 //! local Fabric host for embedded apps (`initEmbeddedAuth`), the Entra token exchange, and
 //! automatic sign-in for rayfin-local's dev server (the [`SignInAs`] identity).
 //! Implements [`rl_model::CallerResolver`] for the other routes.
+//! Auth-user insert/update triggers atomically maintain the data API's `Users(Id, Email)` mirror.
+//! [`prepare_database`] backfills older accounts before app foreign-key migrations.
 //!
 //! The wire contract is the real Rayfin auth service's, as the SDK 1.36.2 sees it: see
 //! [`AuthService::router`] for the routes.
@@ -47,6 +49,16 @@ pub use users::User;
 /// Routes the real service serves without checking `X-Publishable-Key`.
 pub const PUBLISHABLE_KEY_EXEMPT_PATHS: &[&str] = &[JWKS_PATH, RUNTIME_SETTINGS_PATH];
 
+/// Migrates auth storage and backfills the system `Users` table before app FK migrations.
+/// No signing keys, token providers or running service are needed.
+pub async fn prepare_database(db: &Db) -> Result<(), AuthError> {
+    db.migrate_component(schema::COMPONENT, schema::STEPS)
+        .await?;
+    db.call(|conn| conn.execute(schema::BACKFILL_USERS, []))
+        .await??;
+    Ok(())
+}
+
 /// The app's auth service: users, sessions and tokens over the project database.
 pub struct AuthService {
     pub(crate) db: Db,
@@ -72,8 +84,7 @@ impl AuthService {
     pub async fn new(db: Db, keys_dir: PathBuf, settings: AuthSettings) -> Result<Self, AuthError> {
         let settings = settings.normalized()?;
         warn_about_email(&settings, None);
-        db.migrate_component(schema::COMPONENT, schema::STEPS)
-            .await?;
+        prepare_database(&db).await?;
         let key = tokio::task::spawn_blocking(move || keys::SigningKey::load_or_create(&keys_dir))
             .await??;
         let jwt = Arc::new(jwt::Jwt::new(key, &settings));

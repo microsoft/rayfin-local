@@ -24,14 +24,14 @@ fn fixture() -> Option<PathBuf> {
         manifest.is_file()
     });
     if !installed {
-        eprintln!(
-            "skipped: the fixture's packages are not installed (run `npm ci` in {})",
+        rl_test_support::skip(format_args!(
+            "the fixture's packages are not installed (run `npm ci` in {})",
             dir.display()
-        );
+        ));
         return None;
     }
     if Command::new("node").arg("--version").output().is_err() {
-        eprintln!("skipped: Node.js is not on PATH");
+        rl_test_support::skip("Node.js is not on PATH");
         return None;
     }
     Some(dir)

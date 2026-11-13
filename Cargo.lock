@@ -1445,6 +1445,7 @@ dependencies = [
  "rl-project",
  "rl-server",
  "rl-storage",
+ "rl-test-support",
  "rl-tokens",
  "rusqlite",
  "rustls 0.23.46",
@@ -1469,6 +1470,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "regex"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -1556,6 +1569,7 @@ dependencies = [
  "rl-db",
  "rl-model",
  "rl-server",
+ "rl-test-support",
  "rl-tokens",
  "rusqlite",
  "rustls 0.23.46",
@@ -1584,6 +1598,7 @@ dependencies = [
  "reqwest",
  "rl-graphql",
  "rl-model",
+ "rl-test-support",
  "rl-tokens",
  "rustls 0.23.46",
  "serde",
@@ -1625,6 +1640,7 @@ dependencies = [
  "reqwest",
  "rl-node",
  "rl-server",
+ "rl-test-support",
  "rustls 0.23.46",
  "serde",
  "serde_json",
@@ -1646,6 +1662,7 @@ dependencies = [
  "reqwest",
  "rl-model",
  "rl-node",
+ "rl-test-support",
  "rl-tokens",
  "serde",
  "serde_json",
@@ -1672,6 +1689,7 @@ dependencies = [
  "rl-db",
  "rl-model",
  "rl-server",
+ "rl-test-support",
  "rusqlite",
  "rustls 0.23.46",
  "serde",
@@ -1688,10 +1706,14 @@ dependencies = [
 name = "rl-model"
 version = "0.2.8"
 dependencies = [
+ "base64 0.23.1",
  "indexmap",
+ "ring",
+ "rl-test-support",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -1733,6 +1755,8 @@ version = "0.2.8"
 dependencies = [
  "axum",
  "http-body-util",
+ "percent-encoding",
+ "rl-model",
  "serde",
  "serde_json",
  "tempfile",
@@ -1757,6 +1781,7 @@ dependencies = [
  "rl-db",
  "rl-model",
  "rl-server",
+ "rl-test-support",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1771,10 +1796,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl-test-support"
+version = "0.2.8"
+
+[[package]]
 name = "rl-tokens"
 version = "0.2.8"
 dependencies = [
  "base64 0.23.1",
+ "regex",
  "rl-node",
  "serde",
  "serde_json",

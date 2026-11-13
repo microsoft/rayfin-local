@@ -75,9 +75,9 @@ fn ddl_of_the_fixture_apps() {
     // No range CHECK without `cli-minor-fixes` (the IR has none).
     assert!(!todo.contains("_range"), "{todo}");
 
-    // The system `User` has no table: the column stays, indexed, without a foreign key.
+    // The system `User` participates in real, indexed foreign keys.
     let people = create_table_sql(model.entity("Person").unwrap()).unwrap();
-    assert!(!people.contains("REFERENCES"), "{people}");
+    assert!(people.contains("REFERENCES \"Users\" (\"Id\")"), "{people}");
     assert!(
         people.contains("CREATE INDEX \"IX_People_account_id\""),
         "{people}"
@@ -102,10 +102,12 @@ fn ddl_of_the_fixture_apps() {
         let tables = db.call_blocking(|conn| {
             strings(
                 conn,
-                "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
+                "SELECT name FROM sqlite_schema WHERE type = 'table' \
+                 AND name NOT LIKE '_rl_%' ORDER BY name",
             )
         });
         let mut expected: Vec<String> = model.entities.iter().map(|e| e.table.clone()).collect();
+        expected.push("Users".into());
         expected.sort();
         assert_eq!(tables, expected);
     }
@@ -248,11 +250,28 @@ fn constraints_behave_like_fabric() {
             ConstraintKind::ForeignKey
         );
 
-        // `People.account_id` references the system User, which has no table here.
+        // The relationship must name a real system User, and deletion does not cascade.
+        assert_eq!(
+            violation(
+                conn,
+                "INSERT INTO People (account_id) VALUES \
+                ('5b0c6f1e-1111-4222-8333-444455556666')"
+            ),
+            ConstraintKind::ForeignKey
+        );
+        conn.execute_batch(
+            "INSERT INTO Users (Id, Email) VALUES \
+                ('5b0c6f1e-1111-4222-8333-444455556666', 'ada@example.test')",
+        )
+        .unwrap();
         conn.execute_batch(
             "INSERT INTO People (account_id) VALUES ('5b0c6f1e-1111-4222-8333-444455556666')",
         )
         .unwrap();
+        assert_eq!(
+            violation(conn, "DELETE FROM Users"),
+            ConstraintKind::ForeignKey
+        );
         let person: (String, i64, f64, i64, String) = conn
             .query_row(
                 "SELECT nickname, level, rate, active, memberSince FROM People",

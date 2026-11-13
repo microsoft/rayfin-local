@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 rl-node.workspace = true
+regex.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true

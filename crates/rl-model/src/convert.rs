@@ -153,7 +153,15 @@ struct PolicyRecord {
 
 #[derive(Deserialize)]
 struct StorageOutput {
-    config: StorageConfig,
+    config: Option<StorageConfig>,
+    /// The SDK analyzer rejected the storage folders.
+    error: Option<StorageErrorJson>,
+}
+
+#[derive(Deserialize)]
+struct StorageErrorJson {
+    folder: Option<String>,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -194,7 +202,7 @@ struct RuleJson {
     check: Option<Value>,
 }
 
-/// The system entity every app may reference but no app database contains.
+/// The built-in entity every app may reference but may not redefine.
 const SYSTEM_USER: &str = "User";
 
 /// What the entity conversion reads: the analyzer's entities, the DAB config and the policy
@@ -228,6 +236,17 @@ impl AppModel {
         let dialect = Dialect::parse(&output.dialect).ok_or_else(|| {
             ModelError::Malformed(format!("unknown dialect `{}`", output.dialect))
         })?;
+        for (name, entity) in &output.config.entities {
+            if name.eq_ignore_ascii_case(SYSTEM_USER) || entity.source.eq_ignore_ascii_case("Users")
+            {
+                return Err(ModelError::Entity {
+                    entity: name.clone(),
+                    message:
+                        "User and its Users table are reserved system names; rename the app entity"
+                            .into(),
+                });
+            }
+        }
         let view = Analysis {
             entities: &output.entities,
             config: &output.config,
@@ -690,14 +709,28 @@ fn entity_policy(
 }
 
 fn storage(output: &StorageOutput) -> Result<Storage, ModelError> {
-    let folders = output
-        .config
+    let config = match (&output.config, &output.error) {
+        (_, Some(error)) => {
+            return Err(ModelError::Storage {
+                folder: error.folder.clone().unwrap_or_else(|| "(unknown)".into()),
+                message: error.message.clone(),
+            });
+        }
+        (Some(config), None) => config,
+        (None, None) => {
+            return Err(ModelError::Storage {
+                folder: "(unknown)".into(),
+                message: "the analysis has no storage configuration".into(),
+            });
+        }
+    };
+    let folders = config
         .folders
         .iter()
         .map(folder)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Storage {
-        schema_version: output.config.schema_version,
+        schema_version: config.schema_version,
         folders,
     })
 }
@@ -733,18 +766,25 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
     let rules = folder
         .rules
         .iter()
-        .map(|rule| {
+        .enumerate()
+        .map(|(index, rule)| {
+            let rule_error = |reason| {
+                crate::storage_policy::storage_rule_error(&folder.name, index, &rule.role, reason)
+            };
             let actions = rule
                 .actions
                 .iter()
-                .map(|a| parse_action(a).map_err(&error))
+                .map(|a| {
+                    Action::parse(a)
+                        .ok_or_else(|| rule_error(format!("unknown storage action `{a}`")))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let check = rule
                 .check
                 .as_ref()
-                .map(PolicyExpr::from_check)
+                .map(PolicyExpr::from_storage_check)
                 .transpose()
-                .map_err(|e| error(format!("rule for `{}`: {}", rule.role, e.reason)))?;
+                .map_err(|e| rule_error(e.reason))?;
             Ok(StorageRule {
                 path_pattern: rule.path_pattern.clone(),
                 role: rule.role.clone(),
@@ -753,7 +793,7 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(StorageFolder {
+    let folder = StorageFolder {
         name: folder.name.clone(),
         display_name: folder.display_name.clone(),
         on_conflict,
@@ -761,5 +801,7 @@ fn folder(folder: &FolderJson) -> Result<StorageFolder, ModelError> {
         allowed_content_types: folder.allowed_content_types.clone(),
         fields,
         rules,
-    })
+    };
+    folder.validate_rules()?;
+    Ok(folder)
 }

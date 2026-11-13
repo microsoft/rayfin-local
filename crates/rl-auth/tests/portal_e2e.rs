@@ -70,7 +70,7 @@ fn sdk_node_modules() -> PathBuf {
         .unwrap_or_else(|| repo_root().join("../fabric-apps/apps/explorer/node_modules"))
 }
 
-/// Where `run.mjs` and the SDK are, or `None` (with a SKIPPED line) when one is missing.
+/// Where `run.mjs` and the SDK are, or `None` (the test skipped) when one is missing.
 fn prerequisites() -> Option<(PathBuf, PathBuf)> {
     let harness = repo_root().join("tests/e2e/portal");
     let sdk = sdk_node_modules();
@@ -85,7 +85,7 @@ fn prerequisites() -> Option<(PathBuf, PathBuf)> {
         ),
     ] {
         if !needed.exists() {
-            println!("SKIPPED: {} is missing: {what}", needed.display());
+            rl_test_support::skip(format_args!("{} is missing: {what}", needed.display()));
             return None;
         }
     }

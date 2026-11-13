@@ -156,22 +156,27 @@ async fn queries_read_the_source_with_roles_and_policies() {
         ])
     );
 
-    // Anonymous callers may not read the excluded field; signed-in-only entities need a token.
+    // Anonymous callers may not read the excluded field, and an entity without an anonymous
+    // grant is a GraphQL authorization error, not a transport 401.
     let body = graphql(&app, None, "{ products { items { name ownerEmail } } }").await;
     assert_eq!(
         body["errors"][0]["extensions"]["code"],
         "AUTH_NOT_AUTHORIZED"
     );
-    let (status, ..) = post(
+    let (status, _, body) = post(
         &app,
         "/connectors/inventory/graphql",
         None,
         json!({ "query": "{ auditEntries { items { action } } }" }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["errors"][0]["extensions"]["code"],
+        "AUTH_NOT_AUTHORIZED"
+    );
 
-    // An entity out of step with its table: DAB's error, the server's message as its detail.
+    // Fabric exposes the curated schema mismatch, never SQL object names or raw detail.
     admin(
         &server,
         &database.name,
@@ -185,21 +190,12 @@ async fn queries_read_the_source_with_roles_and_policies() {
     )
     .await;
     let error = &body["errors"][0];
-    assert_eq!(
-        error["extensions"]["code"], "DatabaseOperationFailed",
-        "{body}"
-    );
+    assert_eq!(error["extensions"]["code"], "BadRequest", "{body}");
     assert_eq!(
         error["message"],
-        "While processing your request the database ran into an error."
+        "The destination, destination table, column, or view could not be found. Please contact the API owner to verify the data source."
     );
-    assert!(
-        error["extensions"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Invalid column name 'description'"),
-        "{body}"
-    );
+    assert!(error["extensions"].get("detail").is_none(), "{body}");
     assert_eq!(error["path"], json!(["categories"]));
 
     database.drop().await;
@@ -239,7 +235,7 @@ async fn mutations_on_a_sql_database_return_the_row() {
     let body = graphql(&app, Some("alice"), &update(HAMMER)).await;
     assert_eq!(body, json!({"data": {"updateProduct": {"price": 13.0}}}));
     let body = graphql(&app, Some("bob"), &update(HAMMER)).await;
-    assert_eq!(body["errors"][0]["extensions"]["code"], "ItemNotFound");
+    assert_eq!(body["errors"][0]["extensions"]["code"], "BadRequest");
     assert_eq!(
         body["errors"][0]["message"],
         format!("Could not find item with <productId: {HAMMER}>")
@@ -270,15 +266,13 @@ async fn mutations_on_a_sql_database_return_the_row() {
         json!({"data": {"createStockLevel": {"warehouseCode": "NYC", "quantity": 3}}})
     );
     let body = graphql(&app, Some("alice"), &create).await;
+    assert_eq!(body["errors"][0]["extensions"]["code"], "BadRequest");
     assert_eq!(
-        body["errors"][0]["extensions"]["code"],
-        "DatabaseOperationFailed"
+        body["errors"][0]["message"],
+        "The request failed in data source. Cannot insert duplicate key in object."
     );
     assert!(
-        body["errors"][0]["extensions"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("PRIMARY KEY"),
+        body["errors"][0]["extensions"].get("detail").is_none(),
         "{body}"
     );
     let body = graphql(
@@ -368,7 +362,7 @@ async fn warehouses_answer_a_status_and_analytics_endpoints_only_read() {
 }
 
 #[tokio::test]
-async fn an_unreachable_database_says_what_to_check() {
+async fn an_unreachable_database_is_masked_like_fabric() {
     let Some(server) = server() else {
         return;
     };
@@ -378,11 +372,16 @@ async fn an_unreachable_database_says_what_to_check() {
         .unwrap()
         .port();
     let app = app(&server, "nowhere", "fabric-sqldatabase", Some(closed));
+    // Fabric masks it; the server's log says what to check.
     let body = graphql(&app, Some("alice"), "{ categories { items { name } } }").await;
-    let message = body["errors"][0]["message"].as_str().unwrap();
-    assert!(
-        message.contains("Couldn't connect to the database of connector 'inventory'"),
-        "{message}"
+    assert_eq!(
+        body["errors"][0]["message"],
+        "An internal execution error occured"
     );
+    assert_eq!(
+        body["errors"][0]["extensions"],
+        json!({"code": "InternalServerError"})
+    );
+    assert!(!body.to_string().contains("nowhere"), "{body}");
     assert_eq!(body["data"], Value::Null);
 }

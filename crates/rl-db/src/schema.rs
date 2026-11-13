@@ -5,7 +5,7 @@
 //! `x-schema` in order, stored as [`crate::codec`] describes, and the constraints Fabric's
 //! database has: `NOT NULL`, the decorator defaults (the `id` key gets a random uuid, as
 //! `NEWID()` gives it), the primary key, unique indexes, non-cascading foreign keys (`ON DELETE
-//! NO ACTION ON UPDATE NO ACTION`; none for the system `User`, which has no table here) with an
+//! NO ACTION ON UPDATE NO ACTION`, including the system `Users` table) with an
 //! index per foreign key (as EF Core adds), the `@set`, minimum-length, email and (under
 //! `cli-minor-fixes`) range CHECKs of the IR, translated from their typed form, plus local
 //! CHECKs that stand in for the SQL Server types (lengths, 32-bit ints, decimal precision, the
@@ -326,7 +326,6 @@ pub fn table_schema(entity: &Entity) -> Result<TableSchema, SchemaError> {
     let foreign_keys: Vec<ForeignKeySchema> = entity
         .foreign_keys
         .iter()
-        .filter(|fk| fk.referenced_entity.is_some())
         .map(|fk| ForeignKeySchema {
             name: fk.name.clone(),
             columns: fk.columns.clone(),
@@ -651,7 +650,7 @@ fn check_names(tables: &[TableSchema]) -> Result<(), SchemaError> {
     let mut seen: Vec<(String, &str)> = Vec::new();
     for table in tables {
         let lower = table.name.to_ascii_lowercase();
-        if lower.starts_with("_rl_") || lower.starts_with("sqlite_") {
+        if lower.starts_with("_rl_") || lower.starts_with("sqlite_") || lower == "users" {
             return Err(SchemaError::ReservedName {
                 entity: table.entity.clone(),
                 table: table.name.clone(),

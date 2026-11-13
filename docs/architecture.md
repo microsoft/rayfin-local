@@ -282,7 +282,7 @@ The SDK doesn't notice a popup closed by the user, so the page sends `access_den
 
 Apps that call `initEmbeddedAuth` sign in only inside a Fabric frame: Fabric loads them with `?fabricEmbedded=true` and answers their `fabric-auth` bridge requests.
 `/.rayfin-local/portal/embed` plays that host.
-The developer signs in on the host page first; the server then keeps a host session (a random token, stored hashed, in memory, for 12 hours), and the page frames the app.
+The developer signs in on the host page first; the server then keeps a host session (a random token, stored hashed, in memory, for 12 hours), and the page frames the app with Fabric's `_fu` user hint (derived from the item id and the user id as BaaS does), which tells the SDK to keep a session for the same user.
 Each `auth.requestHandoff` from the frame (a PKCE challenge, the app's origin and a state) is answered at once with a one-time handoff code for the host's user, which the app redeems at `/api/auth/v1/token` as in the popup flow.
 Answering at once matters: the SDK gives the host 30 seconds, too little to wait for someone to type a password.
 The page accepts messages only from the framed app's window and origin, the app's origin must pass the same check as a return origin, and its CSP allows only that origin in frames.
@@ -297,7 +297,9 @@ The page accepts messages only from the framed app's window and origin, the app'
 4. `rl-graphql` builds the schema DAB would generate, validates documents with Hot Chocolate's rules and messages, and compiles each root field into one parameterized SQL statement that builds its JSON.
    `@role` policies become SQL predicates with the caller's claims bound as parameters.
 
-SQLite stores values the way the SDK observes them from Fabric SQL: case-insensitive text comparison (ASCII), lowercase UUID text with v4 defaults, fixed-width UTC timestamps, JSON booleans, and `@set` enums as `CHECK` constraints.
+SQLite uses the local model's column collations: ASCII-only `NOCASE` for the MSSQL profile, case-sensitive text for PostgreSQL.
+Policy comparisons use those collations rather than universally lowercasing operands; a deployed database's collation may differ.
+Values use lowercase UUID text with v4 defaults, fixed-width UTC timestamps, JSON booleans, and `@set` enums as `CHECK` constraints.
 Decimals are stored as `REAL`, so they lose precision beyond about 15 significant digits.
 
 ## Frontend
@@ -310,10 +312,11 @@ Decimals are stored as `REAL`, so they lose precision beyond about 15 significan
 node vite-dev.mjs --root <frontend dir> --host <host> --port <port> --backend <backend origin>
 ```
 
-The helper starts the app's own `vite` package with its config and plugins, on exactly the chosen port, and adds one plugin, `rayfin-local:shim` (and, for [automatic sign-in](#automatic-sign-in), `rayfin-local:sign-in`):
+The helper starts the app's own `vite` package with its config and plugins, on exactly the chosen port, and adds `rayfin-local:shim`, `rayfin-local:runtime-config` (and, for [automatic sign-in](#automatic-sign-in), `rayfin-local:sign-in`):
 
 - It always proxies `/.well-known/*` and `/.rayfin-local/*` to the backend.
-- When the app's Vite config doesn't use `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`), it also does what that plugin does: it serves `/rayfin.config.json` with the dev server's origin as `apiUrl`, and proxies `/api`, `/graphql`, `/connector-invoke`, `/connectors` and `/functions` to the backend.
+- Before the app's plugins run, it forwards the backend's `/rayfin.config.json`, including telemetry, changing only `apiUrl` to the dev server's origin.
+- When the app's Vite config doesn't use `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`), it also proxies `/api`, `/graphql`, `/connector-invoke`, `/connectors` and `/functions` to the backend.
 
 The local values reach the app through Vite's process environment, which beats the app's `.env` files in Vite's `loadEnv`; no file is written.
 Each value is set under its `RAYFIN_PUBLIC_*` name, which `rayfinLocalDev()` reads, and its `VITE_*` name, which the app reads:
@@ -338,6 +341,11 @@ Each value is set under its `RAYFIN_PUBLIC_*` name, which `rayfinLocalDev()` rea
 The output folder (`services.staticHosting.folder`) must then hold the index document (`indexDocument`, default `index.html`).
 With `--reuse-build`, an output folder that already holds it is served as it is, without running the build command, so it keeps the values it was built with.
 `rl-server` serves it from the backend origin with an SPA fallback, and `/rayfin.config.json` gives the backend origin as `apiUrl`, so the app and the API share one origin.
+
+`assetAccess: protected` gates all static content and runtime config with a verified local
+session cookie. Without one, document navigations get a sign-in interstitial and asset fetches
+get Fabric's JSON 401. Public and absent access settings retain public serving. Vite is not
+gated. [hosting.md](hosting.md) covers the bootstrap, telemetry configuration, and local gaps.
 
 ## Functions
 
@@ -405,6 +413,12 @@ Other connector types answer 501.
 `rl-storage` serves the routes of the 1.36.2 `StorageFolderClient` on files under `.rayfin-local/storage`, with the app's `@blob` folder rules.
 Files are stored under random ids; their paths and metadata live in SQLite tables.
 Uploads and downloads go through signed URLs under `/.rayfin-local/storage/`, whose HMAC token is the credential.
+`rl-model` validates every storage check before the model can be served or reloaded, using BaaS's storage-specific whitelist and operand types rather than data-policy semantics.
+Invalid checks and anonymous grants are `config-invalid`; a rejected reload keeps the previous model.
+Rules form a permissive union; create checks prospective metadata and overwrite checks the stored object only.
+Missing allowed claims and metadata bind null: equality never matches null, while inequality matches exactly one null.
+Policy denial is HTTP 403 `PERMISSION_DENIED`; lists filter denied objects.
+String comparisons are exact locally, not lowercased (BaaS delegates text comparison to its database/collation).
 
 ## Token broker
 

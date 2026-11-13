@@ -6,6 +6,7 @@
   "scripts": {
     "test": "playwright test",
     "test:fixture": "playwright test --project=fixture",
+    "test:static": "playwright test --project=static",
     "test:explorer": "cross-env RAYFIN_LOCAL_E2E_EXPLORER=1 playwright test --project=explorer",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

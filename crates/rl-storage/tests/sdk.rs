@@ -10,7 +10,10 @@ use std::{
 };
 
 use rl_db::Db;
-use rl_model::{AppModel, Caller, CallerError, CallerResolver, Session};
+use rl_model::{
+    Action, AppModel, Caller, CallerError, CallerResolver, CompareOp, Literal, Operand, PolicyExpr,
+    Session, StorageRule,
+};
 use rl_server::ServerConfig;
 use rl_storage::StorageConfig;
 use serde_json::{Map, Value};
@@ -54,12 +57,12 @@ fn sdk_dir() -> PathBuf {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_rayfin_storage_client_uploads_lists_downloads_and_deletes() {
     let Some(node) = node() else {
-        eprintln!("skipped: Node.js was not found (set RAYFIN_LOCAL_NODE)");
+        rl_test_support::skip("Node.js was not found (set RAYFIN_LOCAL_NODE)");
         return;
     };
     let sdk = sdk_dir();
     if !sdk.join("node_modules/@microsoft/rayfin-storage").is_dir() {
-        eprintln!("skipped: run `npm install` in {}", sdk.display());
+        rl_test_support::skip(format_args!("run `npm install` in {}", sdk.display()));
         return;
     }
 
@@ -67,7 +70,28 @@ async fn the_rayfin_storage_client_uploads_lists_downloads_and_deletes() {
         "../../rl-model/tests/fixtures/basic.analysis.json"
     ))
     .unwrap();
-    let model = AppModel::from_analysis(&analysis).unwrap();
+    let mut model = AppModel::from_analysis(&analysis).unwrap();
+    let folder = &mut model.storage.as_mut().unwrap().folders[0];
+    let update = folder
+        .rules
+        .iter_mut()
+        .find(|rule| rule.actions.contains(&Action::Update))
+        .unwrap();
+    update.actions.retain(|action| *action != Action::Update);
+    let owner = update.check.clone().unwrap();
+    folder.rules.push(StorageRule {
+        path_pattern: "**".into(),
+        role: "authenticated".into(),
+        actions: vec![Action::Update],
+        check: Some(PolicyExpr::And(vec![
+            owner,
+            PolicyExpr::Compare {
+                op: CompareOp::Eq,
+                left: Operand::Field("team_id".into()),
+                right: Operand::Literal(Literal::String("t1".into())),
+            },
+        ])),
+    });
     let listeners = rl_server::bind("localhost", 0).await.unwrap();
     let origin = format!(
         "http://localhost:{}",

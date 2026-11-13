@@ -222,6 +222,12 @@ rayfin-local serve --json                  # for programs: JSON events on stdout
 
 Programs that run rayfin-local for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator), use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
 
+`--static` enforces `services.staticHosting.assetAccess: protected` on all app assets and
+runtime config. Vite remains an unprotected development surface and warns when protection is
+requested. Telemetry uses `[telemetry] application_insights_connection_string` in
+`rayfin-local.toml`, delivered only when `services.telemetry.enabled` is true.
+[Hosting and runtime config](docs/hosting.md) describes sign-in, defaults, and local differences.
+
 ### The backend's routes
 
 The backend has one origin, `http://localhost:7171` by default.
@@ -229,7 +235,7 @@ Its port is remembered per project; when it is busy, rayfin-local takes the next
 
 | Path | What it serves |
 | --- | --- |
-| `/rayfin.config.json` | The app's config: `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`. |
+| `/rayfin.config.json` | The app's config: `serviceMode: "fabric"`, `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`, and optional `applicationInsightsConnectionString`. |
 | `/api/auth/v1/*` | Auth: sign-up, sign-in, refresh tokens, sign-out. |
 | `/.well-known/jwks.json` | The public keys that verify access tokens. |
 | `/api/projectRuntimeSettings` | The auth settings from `rayfin.yml`. |
@@ -252,6 +258,14 @@ rayfin-local starts Vite itself, never `npm run dev`, which may call `rayfin up`
 ## Signing in
 
 Users are local: they live in `.rayfin-local/db.sqlite`, not in Entra ID.
+
+The data API exposes the built-in, read-only `User` entity: `users { items { Id Email } }` and `user_by_pk(Id: "...")`.
+Every authenticated user can read every row; anonymous access and mutations are not granted.
+Relationships to `User` navigate normally and enforce real foreign keys to `Users.Id`.
+Locally, account creation and email changes update this system table atomically, and startup backfills existing accounts before app schema migrations.
+This population is a local convenience, not a promise about Fabric sign-in populating its mirrored table.
+`Email` uses the account email, or the username when absent, bounded to 255 characters.
+Deleting an auth account retains its mirrored row so existing app references remain valid.
 
 - **Automatic sign-in.** Apps from Rayfin's templates sign themselves in during development (`rayfinLocalDev({ autoLogin: true })` in their Vite config).
   rayfin-local's dev server answers them itself, without opening any Entra sign-in, as the **sign-in identity** that `--sign-in-as` (or `[auth] sign_in_as` in `rayfin-local.toml`) sets:
@@ -424,6 +438,10 @@ Rebuilding the package yourself also counts as a change.
   Restart with `serve --force-schema` to apply them anyway (a `serve` started with it also applies them as you edit), or `serve --reset` to start over.
 
 `rayfin-local schema` prints the app model and the SQLite schema derived from `rayfin/data`.
+
+The system `Users` table is separate from app schema migrations; app entities cannot redefine it.
+With `services.data.allowIntrospection: true`, standard GraphQL `__schema` and `__type(name:)` introspection reflects the served schema, including `User`.
+Introspection remains disabled by default (`HC0046`); `__typename` always works.
 
 ## Live reload
 

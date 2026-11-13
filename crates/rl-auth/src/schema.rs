@@ -64,4 +64,17 @@ pub(crate) const STEPS: &[&str] = &[
         epoch TEXT NOT NULL
     ) STRICT;
     INSERT INTO _rl_auth_session_epoch (id, epoch) VALUES (1, lower(hex(randomblob(8))));",
+    // 4: mirror identities atomically, including accounts created by another CLI process.
+    "CREATE TRIGGER _rl_auth_users_mirror_insert AFTER INSERT ON _rl_auth_users BEGIN
+        INSERT INTO Users (Id, Email) VALUES (NEW.id, substr(coalesce(NEW.email, NEW.username), 1, 255))
+        ON CONFLICT (Id) DO UPDATE SET Email = excluded.Email;
+    END;
+    CREATE TRIGGER _rl_auth_users_mirror_update AFTER UPDATE OF email, username ON _rl_auth_users BEGIN
+        INSERT INTO Users (Id, Email) VALUES (NEW.id, substr(coalesce(NEW.email, NEW.username), 1, 255))
+        ON CONFLICT (Id) DO UPDATE SET Email = excluded.Email;
+    END;",
 ];
+
+pub(crate) const BACKFILL_USERS: &str = "INSERT INTO Users (Id, Email)
+     SELECT id, substr(coalesce(email, username), 1, 255) FROM _rl_auth_users WHERE true
+     ON CONFLICT (Id) DO UPDATE SET Email = excluded.Email";

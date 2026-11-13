@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { BrowserLog, describe } from './support/browser-log.ts';
+import { control, signInAs } from './support/control.ts';
 import {
   ensureSignedIn,
   expectOk,
@@ -20,9 +21,10 @@ import { ServeProcess } from './support/serve.ts';
 
 /*
  * The fixture app (tests/fixtures/apps/basic) against `rayfin-local serve`, scenario by scenario,
- * in this order: config, sign-in, session, data, functions, connector, storage, sign-out,
- * auto-sign-in, then stale sessions (which deletes the local users). Expected values are in the
- * fixture's README.
+ * in this order: config, sign-in, session, data, functions, connector, storage, sign-out, the
+ * signed-out checks, auto-sign-in, then stale sessions (which deletes the local users). Expected
+ * values are in the fixture's README. The suite starts with nobody signed in (sign_in_as = "none");
+ * the auto-sign-in tests switch the dev server's identity to the developer.
  */
 
 const DAX_QUERY = 'EVALUATE ROW("answer", 42)';
@@ -40,12 +42,14 @@ test('config: the app talks to the local backend', async ({ app }, testInfo) => 
     returnOrigin: string;
   }>(app.page, 'config');
   // The backend directly, or the dev server, which proxies the backend's routes (rayfinLocalDev()).
-  const apiOrigin = new URL(config.apiUrl).origin;
-  const backendOrigin = new URL(app.info.serve.apiUrl).origin;
-  expect([origin, backendOrigin], 'VITE_RAYFIN_API_URL is the dev server or the backend').toContain(apiOrigin);
+  // By port: serve prints localhost, which the harness may reach as 127.0.0.1.
+  const api = new URL(config.apiUrl);
+  const viaVite = api.port === new URL(origin).port;
+  expect([new URL(origin).port, String(app.info.serve.apiPort)], 'VITE_RAYFIN_API_URL is the dev server or the backend').toContain(api.port);
+  expect(api.hostname).toMatch(/^(localhost|127\.0\.0\.1)$/);
   testInfo.annotations.push({
     type: 'apiUrl',
-    description: `${config.apiUrl} (${apiOrigin === origin ? 'the Vite origin' : 'the backend origin'})`,
+    description: `${config.apiUrl} (${viaVite ? 'the Vite origin' : 'the backend origin'})`,
   });
   expect(config.returnOrigin).toBe(origin);
   expect(config.workspaceId).toBeTruthy();
@@ -230,7 +234,24 @@ test('sign-out: the session ends', async ({ app }) => {
   expect(await expectOk<SessionInfo>(app.page, 'session')).toEqual({ isAuthenticated: false, user: null });
 });
 
+test('fn-ping signed out: functions refuse anonymous callers (403)', async ({ app, allowLog }) => {
+  await openFixtureApp(app);
+  expect(await expectOk<SessionInfo>(app.page, 'session')).toEqual({ isAuthenticated: false, user: null });
+  allowLog(/\/ping(\/invoke)?([\s?]|$)/);
+  const outcome = await runScenario(app.page, 'fn-ping');
+  expect(outcome.ok, 'the anonymous call succeeded').toBe(false);
+  if (!outcome.ok) expect(outcome.error).toMatchObject({ status: 403, message: expect.stringMatching(/anonymous/i) });
+});
+
+test('embedded-auth standalone: initEmbeddedAuth is a no-op outside a Fabric host', async ({ app }) => {
+  await openFixtureApp(app);
+  // It also ran when the page loaded.
+  expect(await expectOk(app.page, 'embedded-auth')).toBeNull();
+  expect(await expectOk<SessionInfo>(app.page, 'session')).toEqual({ isAuthenticated: false, user: null });
+});
+
 test('auto-sign-in: the app signs itself in as the developer, with no popup', async ({ app }) => {
+  await signInAs(app.info, 'developer');
   await openFixtureApp(app);
   const { page } = app;
   let popups = 0;
@@ -262,14 +283,11 @@ test.describe('stale sessions', () => {
   const signedOut = { isAuthenticated: false, user: null };
 
   test('after a data reset, a reload signs the app in again', async ({ app }) => {
+    await signInAs(app.info, 'developer');
     await openFixtureApp(app);
-    const { page, info } = app;
+    const { page } = app;
     expect(await expectOk<SessionInfo>(page, 'auto-sign-in')).toMatchObject({ isAuthenticated: true });
-    const reset = await fetch(`${info.serve.apiUrl}/.rayfin-local/control/data/reset`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${info.controlToken}` },
-    });
-    expect(reset.status, await reset.text()).toBe(200);
+    await control(app.info, 'POST', 'data/reset');
 
     await page.reload();
     await expect(page.getByTestId('app-status')).toHaveText('ready');

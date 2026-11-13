@@ -26,6 +26,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+rl-test-support.workspace = true
 rl-auth.workspace = true
 rl-server.workspace = true
 reqwest.workspace = true

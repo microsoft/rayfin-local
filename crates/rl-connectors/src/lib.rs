@@ -27,6 +27,7 @@
 //!   user, a bad token) answer with the deployed route's status, which the SDK throws as a
 //!   `NetworkError`.
 
+mod errors;
 mod invoke;
 mod semantic_model;
 pub mod sql;
