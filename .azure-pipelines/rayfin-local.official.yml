@@ -1,0 +1,147 @@
+name: rayfin-local-validation-$(Date:yyyyMMdd).$(Rev:r)
+
+trigger: none
+pr: none
+
+variables:
+  RustVersion: '1.96.0'
+  NodeVersion: '22.x'
+  Target: x86_64-pc-windows-msvc
+  CARGO_TERM_COLOR: always
+
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    settings:
+      networkIsolationPolicy: Permissive
+
+    pool:
+      name: 1ES-AppDev
+      image: windows-2022
+      os: windows
+
+    sdl:
+      sourceAnalysisPool:
+        name: 1ES-AppDev
+        image: windows-2022
+        os: windows
+      policheck:
+        enabled: true
+
+    stages:
+      - stage: ValidateWindows
+        displayName: Validate Windows binary (no signing or distribution)
+        jobs:
+          - job: BuildWindows
+            displayName: Build and test Windows x64
+            timeoutInMinutes: 120
+            templateContext:
+              outputs:
+                # Unsigned executables stay on the agent during the approval pilot.
+                - output: pipelineArtifact
+                  displayName: Publish source and binary validation metadata
+                  targetPath: $(Build.ArtifactStagingDirectory)/validation
+                  artifactName: windows-validation
+            steps:
+              - checkout: self
+                clean: true
+                persistCredentials: false
+
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  if ($env:AGENT_OS -ne 'Windows_NT' -or $env:AGENT_OSARCHITECTURE -ne 'X64') {
+                    throw 'This validation job requires a Windows x64 agent.'
+                  }
+                  if ($env:BUILD_REASON -eq 'PullRequest') {
+                    throw 'The official pipeline must be queued manually, not from a pull request.'
+                  }
+                  $commit = & git rev-parse HEAD
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot determine the checked-out source commit.' }
+                  if ($env:BUILD_SOURCEVERSION -notmatch '^[0-9a-fA-F]{40}$' -or
+                      $commit -ne $env:BUILD_SOURCEVERSION) {
+                    throw 'Checkout does not match Build.SourceVersion; queue the intended commit again.'
+                  }
+                displayName: Verify agent and exact source commit
+
+              - task: UseNode@1
+                displayName: Install Node.js for workspace tests
+                inputs:
+                  version: $(NodeVersion)
+
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $cargoBin = Join-Path $env:USERPROFILE '.cargo/bin'
+                  $rustup = Join-Path $cargoBin 'rustup.exe'
+                  if (-not (Test-Path $rustup)) {
+                    $installer = Join-Path $env:AGENT_TEMPDIRECTORY 'rustup-init.exe'
+                    Invoke-WebRequest 'https://win.rustup.rs/x86_64' -OutFile $installer
+                    & $installer -y --profile minimal --default-toolchain $env:RUST_VERSION
+                    if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed.' }
+                  }
+                  & $rustup toolchain install $env:RUST_VERSION --profile minimal
+                  if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed.' }
+                  & $rustup target add --toolchain $env:RUST_VERSION $env:RUST_TARGET
+                  if ($LASTEXITCODE -ne 0) { throw 'Rust target installation failed.' }
+                  Write-Host "##vso[task.prependpath]$cargoBin"
+                displayName: Install pinned Rust toolchain
+                env:
+                  RUST_VERSION: $(RustVersion)
+                  RUST_TARGET: $(Target)
+
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  & cargo test --workspace --locked --target $env:RUST_TARGET
+                  if ($LASTEXITCODE -ne 0) { throw 'Workspace tests failed.' }
+                  & cargo build --release --locked -p rayfin-local --target $env:RUST_TARGET
+                  if ($LASTEXITCODE -ne 0) { throw 'Release binary build failed.' }
+                displayName: Test workspace and build release binary
+                env:
+                  RUSTUP_TOOLCHAIN: $(RustVersion)
+                  RUST_TARGET: $(Target)
+                  RUSTFLAGS: -C target-feature=+crt-static
+
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $metadata = & cargo metadata --no-deps --format-version 1 --locked
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot read Cargo package metadata.' }
+                  $packages = @(
+                    ($metadata | ConvertFrom-Json).packages |
+                      Where-Object { $_.name -eq 'rayfin-local' }
+                  )
+                  if ($packages.Count -ne 1) { throw 'Expected exactly one rayfin-local package.' }
+                  $version = $packages[0].version
+                  if ($env:BUILD_SOURCEBRANCH.StartsWith('refs/tags/') -and
+                      $env:BUILD_SOURCEBRANCH -cne "refs/tags/v$version") {
+                    throw "Release tag must be v$version to match Cargo.toml."
+                  }
+                  $binary = Join-Path $env:BUILD_SOURCESDIRECTORY "target/$env:RUST_TARGET/release/rayfin-local.exe"
+                  $reportedVersion = & $binary --version
+                  if ($LASTEXITCODE -ne 0 -or $reportedVersion -cne "rayfin-local $version") {
+                    throw "Built binary must report 'rayfin-local $version'."
+                  }
+                  $output = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'validation'
+                  New-Item -ItemType Directory -Force -Path $output | Out-Null
+                  [ordered]@{
+                    repository = $env:BUILD_REPOSITORY_URI
+                    commit = $env:BUILD_SOURCEVERSION
+                    ref = $env:BUILD_SOURCEBRANCH
+                    buildId = $env:BUILD_BUILDID
+                    package = 'rayfin-local'
+                    version = $version
+                    target = $env:RUST_TARGET
+                    rustToolchain = $env:RUSTUP_TOOLCHAIN
+                    binarySha256 = (Get-FileHash -Algorithm SHA256 $binary).Hash.ToLowerInvariant()
+                    signed = $false
+                    distribution = 'none'
+                  } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $output 'source.json')
+                displayName: Verify binary version and record validation metadata
+                env:
+                  RUSTUP_TOOLCHAIN: $(RustVersion)
+                  RUST_TARGET: $(Target)
