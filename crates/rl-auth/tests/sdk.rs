@@ -1,9 +1,9 @@
-//! The real Rayfin SDK (`@microsoft/rayfin-client` 1.36.2, run by Node) against the auth routes:
+//! The real Rayfin SDK (`@microsoft/rayfin-client` 2.0.0, run by Node) against the auth routes:
 //! sign-up, sign-in, refresh, JWKS validation, auth settings, sign-out and 401 → refresh → retry.
 //!
 //! Ignored by default: it needs Node and the SDK's `node_modules`. Point
-//! `RAYFIN_SDK_NODE_MODULES` at a `node_modules` with the SDK; the default is the explorer app
-//! checked out next to this repository (`../fabric-apps/apps/explorer/node_modules`). Run with
+//! `RAYFIN_SDK_NODE_MODULES` at a `node_modules` with the SDK; the default is the basic fixture's
+//! `node_modules`. Run with
 //! `cargo test -p rl-auth --test sdk -- --ignored`.
 
 use std::{path::PathBuf, sync::Arc};
@@ -16,8 +16,13 @@ const APP_ID: &str = "6c6f6361-6c00-4000-8000-0000000000a1";
 
 const SCRIPT: &str = r#"
 const { RayfinClient } = await import(process.env.RL_SDK_ENTRY);
+const { browserSession } = await import(process.env.RL_AUTH_ENTRY);
 const apiUrl = process.env.RL_API_URL;
-const newClient = () => new RayfinClient({ baseUrl: apiUrl, publishableKey: 'pk-local-test' });
+const newClient = () => RayfinClient.create({
+  baseUrl: apiUrl,
+  publishableKey: 'pk-local-test',
+  auth: browserSession(),
+});
 const describe = (e) => ({ name: e?.name, code: e?.code, status: e?.status, message: e?.message });
 const attempt = async (run) => {
   try { return { ok: await run() }; } catch (e) { return { error: describe(e) }; }
@@ -65,37 +70,44 @@ out.authenticatedAfterSignOutAll = auth.getSession().isAuthenticated;
 out.thirdRefresh = await attempt(() => third.auth.refreshSession());
 out.thirdAuthenticated = third.auth.getSession().isAuthenticated;
 
-for (const c of [client, other, third]) c.auth.destroy();
+for (const c of [client, other, third]) c.dispose();
 console.log('RESULT ' + JSON.stringify(out));
 process.exit(0);
 "#;
 
-fn sdk_entry() -> PathBuf {
+fn sdk_entries() -> (PathBuf, PathBuf) {
     let node_modules = std::env::var_os("RAYFIN_SDK_NODE_MODULES")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../fabric-apps/apps/explorer/node_modules")
+                .join("../../tests/fixtures/apps/basic/node_modules")
         });
-    let entry = node_modules
+    let client = node_modules
         .join("@microsoft")
         .join("rayfin-client")
         .join("dist")
         .join("index.js");
+    let auth = node_modules
+        .join("@microsoft")
+        .join("rayfin-auth")
+        .join("dist")
+        .join("index.js");
     assert!(
-        entry.is_file(),
-        "{} is missing: set RAYFIN_SDK_NODE_MODULES to a node_modules with \
-         @microsoft/rayfin-client 1.36.2",
-        entry.display()
+        client.is_file() && auth.is_file(),
+        "{} or {} is missing: set RAYFIN_SDK_NODE_MODULES to node_modules with the Rayfin 2.0.0 \
+         client and auth packages",
+        client.display(),
+        auth.display()
     );
-    entry
+    (client, auth)
 }
 
 #[tokio::test]
-#[ignore = "needs Node and @microsoft/rayfin-client 1.36.2 (see the module docs)"]
+#[ignore = "needs Node and @microsoft/rayfin-client 2.0.0 (see the module docs)"]
 async fn the_rayfin_sdk_signs_up_in_and_out() {
-    let entry = sdk_entry();
-    let entry_url = url::Url::from_file_path(entry.canonicalize().unwrap()).unwrap();
+    let (client, auth) = sdk_entries();
+    let client_url = url::Url::from_file_path(client.canonicalize().unwrap()).unwrap();
+    let auth_url = url::Url::from_file_path(auth.canonicalize().unwrap()).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     let mut settings = AuthSettings::new(APP_ID);
@@ -119,7 +131,8 @@ async fn the_rayfin_sdk_signs_up_in_and_out() {
     std::fs::write(&script, SCRIPT).unwrap();
     let output = tokio::process::Command::new("node")
         .arg(&script)
-        .env("RL_SDK_ENTRY", entry_url.as_str())
+        .env("RL_SDK_ENTRY", client_url.as_str())
+        .env("RL_AUTH_ENTRY", auth_url.as_str())
         .env("RL_API_URL", format!("http://{address}"))
         .output()
         .await

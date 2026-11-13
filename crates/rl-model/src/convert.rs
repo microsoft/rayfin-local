@@ -595,7 +595,7 @@ fn role_permission(
                 let action = parse_action(action).map_err(&malformed)?;
                 let fields = object
                     .get("fields")
-                    .map(field_access)
+                    .map(|fields| field_access(fields, output.connector.then_some(columns)))
                     .transpose()
                     .map_err(&malformed)?;
                 let policy = match object.get("policy") {
@@ -631,16 +631,23 @@ fn expect_keys(object: &Map<String, Value>, keys: &[&str]) -> Result<(), String>
     }
 }
 
-fn field_access(value: &Value) -> Result<FieldAccess, String> {
+/// `columns` is set for connector entities: since rayfin-core 2.0 their field lists name
+/// columns, and the model checks exposed names.
+fn field_access(value: &Value, columns: Option<&[Column]>) -> Result<FieldAccess, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("`fields` is not an object: {value}"))?;
     expect_keys(object, &["include", "exclude"])?;
+    let exposed = |name: String| match columns.and_then(|c| c.iter().find(|c| c.name == name)) {
+        Some(column) => column.field.clone(),
+        None => name,
+    };
     let list = |key: &str| -> Result<Option<Vec<String>>, String> {
         object
             .get(key)
             .map(|v| Vec::<String>::deserialize(v).map_err(|e| format!("`fields.{key}`: {e}")))
             .transpose()
+            .map(|names| names.map(|names| names.into_iter().map(exposed).collect()))
     };
     Ok(FieldAccess {
         include: list("include")?.unwrap_or_else(|| vec!["*".to_owned()]),

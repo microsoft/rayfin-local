@@ -1,4 +1,4 @@
-// Runs the real Rayfin SDK 1.36.2 aggregation chain (`where`/`groupBy`/`aggregate`/`execute`)
+// Runs the real Rayfin SDK 2.0.0 aggregation chain (`where`/`groupBy`/`aggregate`/`execute`)
 // against rayfin-local's /graphql, on the basic model's todos (the explorer app has no numeric
 // fields). Started by tests/sdk.rs, which seeds the database and passes the settings in
 // RL_SDK_TEST (JSON).
@@ -8,12 +8,20 @@ import { pathToFileURL } from 'node:url';
 const cfg = JSON.parse(process.env.RL_SDK_TEST ?? '{}');
 const load = (path) => import(pathToFileURL(`${cfg.nodeModules}/${path}`).href);
 const { RayfinClient } = await load('@microsoft/rayfin-client/dist/index.js');
+const { browserSession } = await load('@microsoft/rayfin-auth/dist/index.js');
+const { dataService } = await load('@microsoft/rayfin-data/dist/index.js');
 
 // ApiClient logs every POST; keep the output to the results.
 console.log = () => {};
 const print = (line) => process.stdout.write(`${line}\n`);
 
-const client = () => new RayfinClient({ baseUrl: cfg.api, publishableKey: cfg.publishableKey });
+const client = () =>
+  RayfinClient.create({
+    baseUrl: cfg.api,
+    publishableKey: cfg.publishableKey,
+    auth: browserSession(),
+    services: { data: dataService() },
+  });
 const alice = client();
 await alice.auth.signIn({ email: cfg.alice.email, password: cfg.password });
 const todos = alice.data.Todo;
@@ -69,8 +77,7 @@ const byDay = await todos
   .aggregate({ n: { count: 'estimate' } })
   .execute();
 assert.equal(byDay.length, 2);
-assert.ok(byDay[0].fields.createdAt instanceof Date);
-out.byDay = byDay.map((g) => [g.fields.createdAt.toISOString(), g.aggregations.n]);
+out.byDay = byDay.map((g) => [g.fields.createdAt, g.aggregations.n]);
 assert.deepEqual(out.byDay, [
   ['2026-01-02T00:00:00.000Z', 0],
   ['2026-01-06T00:00:00.000Z', 1],
@@ -100,6 +107,6 @@ assert.equal(
   "GraphQL errors: Access forbidden to field 'estimate' referenced in the aggregation function 'sum'.",
 );
 
-for (const c of [alice, anonymous]) c.auth.destroy();
+for (const c of [alice, anonymous]) c.dispose();
 print('RESULT ' + JSON.stringify(out));
 process.exit(0);

@@ -14,8 +14,8 @@ use rl_tokens::{
 };
 use serde_json::{Value, json};
 
-/// A fake `@microsoft/rayfin-cli/auth` without a cached sign-in: silent acquisition fails, and
-/// the "interactive" one succeeds. Calls are recorded in `<project>/rayfin-calls.jsonl`.
+/// A fake `@microsoft/rayfin-cli/_internal/auth` without a cached sign-in: silent acquisition
+/// fails, and the "interactive" one succeeds. Calls are recorded in `<project>/rayfin-calls.jsonl`.
 const AUTH_MODULE: &str = r#"
 import { appendFileSync } from 'node:fs';
 
@@ -42,7 +42,8 @@ struct Project {
 }
 
 impl Project {
-    /// A project; with `auth_module`, it has `@microsoft/rayfin-cli` with that `./auth` export.
+    /// A project; with `auth_module`, it has `@microsoft/rayfin-cli` with that `./_internal/auth`
+    /// export.
     fn new(auth_module: Option<&str>) -> Self {
         let dir = common::scratch_dir();
         write(
@@ -53,11 +54,11 @@ impl Project {
             let package = dir.path().join("node_modules/@microsoft/rayfin-cli");
             let manifest = json!({
                 "name": "@microsoft/rayfin-cli",
-                "version": "1.36.2",
+                "version": "2.0.0",
                 "type": "module",
                 "exports": {
                     ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
-                    "./auth": { "import": "./dist/auth/index.js", "types": "./dist/auth/index.d.ts" },
+                    "./_internal/auth": { "import": "./dist/auth/index.js", "types": "./dist/auth/index.d.ts" },
                     "./package.json": "./package.json"
                 }
             });

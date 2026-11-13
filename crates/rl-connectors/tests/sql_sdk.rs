@@ -1,4 +1,4 @@
-//! The real Rayfin SDK 1.36.2 Category A client against rayfin-local's
+//! The real Rayfin SDK 2.0.0 Category A client against rayfin-local's
 //! `/connectors/<name>/graphql` over a real SQL Server (`tests/sdk/category-a.mjs`), with the
 //! `connectors` fixture app's entity classes compiled by `js/analyze.mjs`.
 //!

@@ -1,5 +1,5 @@
 //! The Rayfin CLI provider: the developer's `rayfin login`, through the project's own
-//! `@microsoft/rayfin-cli/auth` (`getAuthenticatedToken`), run by `js/rayfin-token.mjs`.
+//! `@microsoft/rayfin-cli/_internal/auth` (`getAuthenticatedToken`), run by `js/rayfin-token.mjs`.
 
 use std::time::{Duration, SystemTime};
 

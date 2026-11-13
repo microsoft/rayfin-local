@@ -331,7 +331,7 @@ fn display_path(project: &Project, path: &Path) -> String {
     }
 }
 
-/// What to do when the installed `@microsoft/rayfin-core` is not the 1.36 line rayfin-local
+/// What to do when the installed `@microsoft/rayfin-core` is not the 2.0 line rayfin-local
 /// implements (`None` when it is, or when its version is unknown).
 fn sdk_upgrade_note(project: &Project) -> Option<String> {
     let version = project.rayfin_package(CORE_PACKAGE)?.installed.as_deref()?;
@@ -868,16 +868,16 @@ mod tests {
 
     #[test]
     fn older_sdks_are_told_to_upgrade() {
-        assert_eq!(sdk_note("1.36.2"), None);
-        assert_eq!(sdk_note("1.36.0-alpha.1917"), None);
+        assert_eq!(sdk_note("2.0.0"), None);
+        assert_eq!(sdk_note("2.0.0-alpha.1917"), None);
         assert_eq!(
             sdk_note("1.34.0").as_deref(),
             Some(
-                "This app uses @microsoft/rayfin-core 1.34.0; rayfin-local implements 1.36.x. \
-                 Upgrade the app's @microsoft/rayfin-* packages to 1.36."
+                "This app uses @microsoft/rayfin-core 1.34.0; rayfin-local implements 2.0.x. \
+                 Upgrade the app's @microsoft/rayfin-* packages to 2.0."
             )
         );
-        assert!(!sdk_note("1.37.1").unwrap().contains("Upgrade"));
+        assert!(!sdk_note("2.1.1").unwrap().contains("Upgrade"));
     }
 
     /// A project with `rayfin.yml` and the files given (path, contents).

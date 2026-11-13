@@ -157,7 +157,7 @@
             "action": "read",
             "fields": {
               "include": [
-                "categoryId",
+                "category_id",
                 "name"
               ]
             }
@@ -370,7 +370,7 @@
             "action": "read",
             "fields": {
               "exclude": [
-                "ownerEmail"
+                "owner_email"
               ],
               "include": [
                 "*"
@@ -550,7 +550,7 @@
                 "action": "read",
                 "fields": {
                   "include": [
-                    "categoryId",
+                    "category_id",
                     "name"
                   ]
                 }
@@ -617,7 +617,7 @@
                 "action": "read",
                 "fields": {
                   "exclude": [
-                    "ownerEmail"
+                    "owner_email"
                   ],
                   "include": [
                     "*"

@@ -167,7 +167,7 @@ export class ServeProcess {
     return this.#output.replace(ANSI, '');
   }
 
-  /** Kills the process tree and checks that its ports are free again. */
+  /** Stops the server and checks that its ports are free again. */
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;

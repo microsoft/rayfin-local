@@ -3,7 +3,7 @@
 //!
 //! [`PORTAL_PATH`] is the app's `fabricPortalUrl` (`VITE_FABRIC_PORTAL_URL`). The SDK opens
 //! `<fabricPortalUrl>/secureItemEmbed?workspaceId=…&itemType=AppBackend&itemId=…&extensionPath=/brokeredauth`
-//! (`buildBrokerUrl` in `@microsoft/rayfin-auth-provider-fabric` 1.36.2 `brokerUrl.js`) and runs
+//! (`buildBrokerUrl` in `@microsoft/rayfin-auth-provider-fabric` 2.0.0 `brokerUrl.js`) and runs
 //! this handshake with the page (`initiateFabricLogin.js`):
 //!
 //! 1. page → `window.opener`, target `*` (it carries nothing): `{type: 'brokeredAuth.ready'}`.

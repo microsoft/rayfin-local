@@ -302,7 +302,7 @@ impl Project {
             .find(|package| package.version().is_some())
     }
 
-    /// A warning when the SDK is not 1.36.x, the contract rayfin-local implements.
+    /// A warning when the SDK is not 2.0.x, the contract rayfin-local implements.
     pub fn sdk_version_warning(&self) -> Option<String> {
         let package = self.sdk_package()?;
         let version = package.version()?;

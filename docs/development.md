@@ -8,7 +8,7 @@ This page covers building, testing and releasing rayfin-local.
 - Rust 1.96 (`rustup toolchain install 1.96.0`), with `rustfmt` and `clippy`.
 - Node.js 20 or later (CI uses 22) and npm.
 - Optional, for the tests that use them:
-  - the reference app, `fabric-apps/apps/explorer`, checked out next to this repository with its packages installed (`npm ci`): it provides the Rayfin SDK 1.36.2;
+  - the reference app, `fabric-apps/apps/explorer`, checked out next to this repository with its packages installed (`npm ci`);
   - Playwright's Chromium (`npx playwright install chromium`), or an installed Microsoft Edge or Chrome;
   - a signed-in Azure CLI (`az login`).
 
@@ -73,13 +73,13 @@ Skips go through `rl_test_support::skip` (`crates/rl-test-support`); a new test 
 
 ### Tests that use Node.js and the real SDK
 
-Several integration tests drive the real Rayfin SDK 1.36.2, or the project's own packages, with Node.js against rayfin-local's routes.
+Several integration tests drive the real Rayfin SDK 2.0.0, or the project's own packages, with Node.js against rayfin-local's routes.
 Outside strict mode they print a `skipped: …` note and pass when Node.js or the packages they need are missing, so a plain `cargo test --workspace` works on any machine.
 
 | Test | What it checks | Needs |
 | --- | --- | --- |
-| `rl-graphql` `tests/sdk.rs` | The SDK's data client against the GraphQL API, signed in through `rl-auth`, on the reference app's model. | The SDK |
-| `rl-connectors` `tests/sdk_decode.rs` | The SDK's `fabricSemanticModel()` through rayfin-local, compared with its direct path to the same mock Power BI. | The SDK |
+| `rl-graphql` `tests/sdk.rs` | The SDK's data client against the GraphQL API, signed in through `rl-auth`, on the reference app's model. | `npm ci` in `tests/fixtures/apps/basic` |
+| `rl-connectors` `tests/sdk_decode.rs` | The SDK's `fabricSemanticModel()` through rayfin-local, compared with its direct path to the same mock Power BI. | `npm ci` in `tests/fixtures/apps/basic` |
 | `rl-storage` `tests/sdk.rs` | The SDK's `StorageFolderClient` against the storage routes. | `npm install` in `crates/rl-storage/tests/sdk` |
 | `rl-model` `tests/analyze_js.rs` | `js/analyze.mjs` on the fixture app, against the golden analysis; in connectors mode on the `connectors` fixture app. | `npm install` in `tests/fixtures/apps/basic` and `tests/fixtures/apps/connectors` |
 | `rl-connectors` `tests/sql_sdk.rs` | The SDK's Category A connector client (`createConnectorsApi` with the entity classes, for a SQL database, a Warehouse and a SQL analytics endpoint) through rayfin-local on a real SQL Server. | `npm install` in `tests/fixtures/apps/connectors`, and [SQL Server](#sql-server-tests) |
@@ -93,7 +93,7 @@ These variables point the tests at what they need:
 
 | Variable | Default |
 | --- | --- |
-| `RAYFIN_SDK_NODE_MODULES` | `../fabric-apps/apps/explorer/node_modules`: a `node_modules` with the Rayfin SDK 1.36.2. |
+| `RAYFIN_SDK_NODE_MODULES` | `tests/fixtures/apps/basic/node_modules`: a `node_modules` with the Rayfin SDK 2.0.0. |
 | `RAYFIN_LOCAL_EXPLORER` | `../fabric-apps/apps/explorer`: the reference app, for `rl-frontend`. |
 | `RAYFIN_LOCAL_EXPLORER_FUNCTIONS` | `../fabric-apps/apps/explorer/rayfin/functions`: the reference app's functions, for `rl-functions`. |
 | `RAYFIN_APPS_DIR` | `../fabric-apps/apps`: every app's `rayfin.yml`, for `rl-project`'s ignored test. |
@@ -198,7 +198,7 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 - **Errors are actionable:** say what failed and what to do.
 - **Privacy:** never log tokens, passwords, secrets or Entra tokens, and keep identity claims out of info-level logs.
 - **Local state:** everything rayfin-local writes goes under the state folder: `<project>/.rayfin-local/`, or `--state-dir`.
-- **Rayfin behavior:** check the SDK 1.36.2 dist, not memory; `AGENTS.md` lists the sources of truth.
+- **Rayfin behavior:** check the SDK 2.0.0 dist, not memory; `AGENTS.md` lists the sources of truth.
 - **Tests:** focused tests for the behavior you add; never test constants or framework behavior.
 - **JS helpers:** plain ESM with no dependencies of their own; see [`js/README.md`](../js/README.md).
 - **Docs:** one sentence per line.

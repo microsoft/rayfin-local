@@ -11,9 +11,9 @@ pub const CLIENT_PACKAGE: &str = "@microsoft/rayfin-client";
 /// Entities, analysis and the shared runtime; every Rayfin project depends on it.
 pub const CORE_PACKAGE: &str = "@microsoft/rayfin-core";
 /// The SDK minor version rayfin-local implements (`major`, `minor`).
-pub const SUPPORTED_SDK_VERSION: (u64, u64) = (1, 36);
+pub const SUPPORTED_SDK_VERSION: (u64, u64) = (2, 0);
 /// The SDK version the conformance tests and the fixture app use.
-pub const TESTED_SDK_VERSION: &str = "1.36.2";
+pub const TESTED_SDK_VERSION: &str = "2.0.0";
 
 const RAYFIN_PACKAGE_PREFIX: &str = "@microsoft/rayfin-";
 
@@ -186,18 +186,18 @@ fn installed_version(dir: &Path) -> Option<String> {
     manifest.version
 }
 
-/// Whether a version (or a range such as `^1.36.2`) is in the SDK line rayfin-local implements.
+/// Whether a version (or a range such as `^2.0.0`) is in the SDK line rayfin-local implements.
 pub fn is_supported_sdk_version(version: &str) -> bool {
     major_minor(version) == Some(SUPPORTED_SDK_VERSION)
 }
 
-/// The SDK line rayfin-local implements as a semver range, such as `>=1.36.0 <1.37.0`.
+/// The SDK line rayfin-local implements as a semver range, such as `>=2.0.0 <2.1.0`.
 pub fn supported_sdk_range() -> String {
     let (major, minor) = SUPPORTED_SDK_VERSION;
     format!(">={major}.{minor}.0 <{major}.{}.0", minor + 1)
 }
 
-/// The SDK line rayfin-local implements, such as `1.36`.
+/// The SDK line rayfin-local implements, such as `2.0`.
 pub fn supported_sdk_line() -> String {
     let (major, minor) = SUPPORTED_SDK_VERSION;
     format!("{major}.{minor}")
@@ -250,17 +250,17 @@ mod tests {
 
     #[test]
     fn checks_the_sdk_line() {
-        for version in ["1.36.2", "1.36.0-beta.1", "^1.36.2", "~1.36.0", ">=1.36.1"] {
+        for version in ["2.0.0", "2.0.0-beta.1", "^2.0.0", "~2.0.0", ">=2.0.1"] {
             assert!(is_supported_sdk_version(version), "{version}");
         }
-        for version in ["1.37.0", "1.3.6", "2.36.0", "latest", "workspace:*"] {
+        for version in ["2.1.0", "1.3.6", "2.36.0", "latest", "workspace:*"] {
             assert!(!is_supported_sdk_version(version), "{version}");
         }
     }
 
     #[test]
     fn the_supported_range_covers_the_sdk_line_and_the_tested_version() {
-        assert_eq!(supported_sdk_range(), ">=1.36.0 <1.37.0");
+        assert_eq!(supported_sdk_range(), ">=2.0.0 <2.1.0");
         assert!(is_supported_sdk_version(TESTED_SDK_VERSION));
     }
 }

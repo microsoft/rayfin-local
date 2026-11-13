@@ -1,17 +1,18 @@
 // Generates `runtimemetadata.json` for a Rayfin functions package, as `rayfin dev` (Rayfin CLI
-// 1.36.2) does in its type generation step.
+// 2.0.0) does in its type generation step.
 //
-// `@microsoft/fabric-user-data-functions` 1.36 never parses source at runtime: `new
-// UserDataFunctions()` reads `<cwd>/runtimemetadata.json` (schema 2.0), which lists every
-// `udf.func(...)` registration with its delegate parameters and the audiences declared on its
-// `RayfinContext<Schema, Audiences>` annotation. Type arguments are erased by the compiler, so the
-// audiences can only come from a build-time pass with the TypeScript type checker.
+// `@microsoft/fabric-user-data-functions` 2.0.0 never parses source at runtime: `new
+// UserDataFunctions()` reads `<cwd>/runtimemetadata.json` (schema 3.0), which lists every
+// `udf.func(...)` registration with its delegate parameters (a context parameter's type is just
+// `RayfinContext`), the audiences declared on its `RayfinContext<Schema, Audiences>` annotation
+// and the capabilities intersected with it (`& WithSql` is `sql`). Type arguments are erased by
+// the compiler, so these can only come from a build-time pass with the TypeScript type checker.
 //
 // The analysis follows the CLI's rules exactly, so the output is byte-for-byte what the CLI writes
 // for the same source:
 // - A TypeScript program from the package's `tsconfig.json`, created with the package's own
 //   `typescript`. Without a usable tsconfig, each `src/**/*.ts` file is parsed on its own and the
-//   audiences are read from the annotation syntax.
+//   audiences and capabilities are read from the annotation syntax.
 // - Files under `src/`, except declaration files, `types.ts` and `*.test.ts` / `*.spec.ts`, in
 //   order of their path relative to the package.
 // - Calls `<expr>.func('<name>', <arrow function or function expression>, ...)`.
@@ -27,8 +28,11 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-const SCHEMA_VERSION = '2.0';
+const SCHEMA_VERSION = '3.0';
 const CONTEXT_TYPE_NAME = 'RayfinContext';
+const UDF_PACKAGE_NAME = '@microsoft/fabric-user-data-functions';
+const WITH_SQL_MARKER_NAME = 'WithSql';
+const SQL_CAPABILITY = 'sql';
 const FABRIC_PARAMETER_TYPES = new Set([
   'FabricContext',
   'FabricSqlConnection',
@@ -147,12 +151,79 @@ function isContextTypeNode(ts, node) {
   return (ts.isQualifiedName(typeName) ? typeName.right.text : typeName.text) === CONTEXT_TYPE_NAME;
 }
 
-/** Same test as the worker's `isRayfinContextType`. */
-function isContextTypeText(typeText) {
-  return (
-    typeof typeText === 'string' &&
-    (typeText === CONTEXT_TYPE_NAME || typeText.startsWith(`${CONTEXT_TYPE_NAME}<`))
-  );
+/**
+ * The worker's `rayfinContextMember`: the `RayfinContext` member of an annotation, checked per
+ * top-level `&` member so that `RayfinContext<S> & WithSql` counts.
+ */
+function contextMemberText(typeText) {
+  if (!typeText) return undefined;
+  const members = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < typeText.length; i += 1) {
+    const ch = typeText[i];
+    if (ch === '<' || ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if ((ch === '>' && typeText[i - 1] !== '=') || ch === ')' || ch === ']' || ch === '}')
+      depth -= 1;
+    else if (ch === '&' && depth === 0) {
+      members.push(typeText.slice(start, i));
+      start = i + 1;
+    }
+  }
+  members.push(typeText.slice(start));
+  return members
+    .map((member) => member.trim())
+    .find((member) => member === CONTEXT_TYPE_NAME || member.startsWith(`${CONTEXT_TYPE_NAME}<`));
+}
+
+/** Unwraps the `T | undefined` of an optional parameter; other unions are kept. */
+function nonOptionalType(ts, type) {
+  if (!type.isUnion()) return type;
+  const members = type.types.filter((member) => !(member.flags & ts.TypeFlags.Undefined));
+  return members.length === 1 ? members[0] : type;
+}
+
+const sdkContextOrigins = new WeakMap();
+
+/** Whether a type is the UDF package's `RayfinContext` class, by its declaring package. */
+function isSdkContextType(ts, type) {
+  if (
+    !(type.flags & ts.TypeFlags.Object) ||
+    !(type.objectFlags & (ts.ObjectFlags.Class | ts.ObjectFlags.Reference))
+  ) {
+    return false;
+  }
+  const symbol = type.getSymbol();
+  if (symbol?.getName() !== CONTEXT_TYPE_NAME) return false;
+  const cached = sdkContextOrigins.get(symbol);
+  if (cached !== undefined) return cached;
+  const isSdkContext =
+    symbol.declarations?.some((declaration) => {
+      if (!ts.isClassDeclaration(declaration)) return false;
+      let directory = path.dirname(declaration.getSourceFile().fileName);
+      for (;;) {
+        const manifestPath = path.join(directory, 'package.json');
+        if (fs.existsSync(manifestPath)) {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          return manifest?.name === UDF_PACKAGE_NAME;
+        }
+        const parent = path.dirname(directory);
+        if (parent === directory) return false;
+        directory = parent;
+      }
+    }) ?? false;
+  sdkContextOrigins.set(symbol, isSdkContext);
+  return isSdkContext;
+}
+
+/** The CLI's `isRayfinContextParameter`: by annotation text, else through aliases by type. */
+function isContextParameter(ts, parameter, sourceFile, checker) {
+  if (contextMemberText(parameter.type?.getText(sourceFile)) !== undefined) return true;
+  if (!checker || !parameter.type) return false;
+  const type = nonOptionalType(ts, checker.getTypeAtLocation(parameter));
+  if (type.isUnion()) return false;
+  const members = type.isIntersection() ? type.types : [type];
+  return members.some((member) => isSdkContextType(ts, member));
 }
 
 /** The `RayfinContext` instantiation behind a parameter type, looking through unions. */
@@ -214,7 +285,7 @@ function audienceNamesFromTypeNode(ts, node) {
 /** A parameter's declared audiences; null when it is not a `RayfinContext`. */
 function parameterAudiences(ts, parameter, checker) {
   if (checker) {
-    const contextType = findContextType(checker.getTypeAtLocation(parameter));
+    const contextType = findContextType(nonOptionalType(ts, checker.getTypeAtLocation(parameter)));
     if (contextType) {
       const typeArguments = checker.getTypeArguments(contextType);
       return typeArguments.length < 2 ? [] : audienceNamesFromType(ts, typeArguments[1]);
@@ -238,6 +309,49 @@ function handlerAudiences(ts, handler, checker) {
   return audiences.sort();
 }
 
+/** Marker names intersected with a parameter's context: by type, else as written. */
+function parameterMarkers(ts, parameter, checker) {
+  if (checker) {
+    const type = nonOptionalType(ts, checker.getTypeAtLocation(parameter));
+    if (type.isIntersection()) {
+      const names = [];
+      for (const member of type.types) {
+        const name = member.aliasSymbol?.getName() ?? member.getSymbol()?.getName();
+        if (name && !names.includes(name)) names.push(name);
+      }
+      if (names.length > 0) return names;
+    }
+  }
+  if (!parameter.type || !ts.isIntersectionTypeNode(parameter.type)) return [];
+  const names = [];
+  const visit = (current) => {
+    if (ts.isParenthesizedTypeNode(current)) {
+      visit(current.type);
+    } else if (ts.isIntersectionTypeNode(current)) {
+      current.types.forEach(visit);
+    } else if (ts.isTypeReferenceNode(current)) {
+      const { typeName } = current;
+      const name = ts.isQualifiedName(typeName) ? typeName.right.text : typeName.text;
+      if (name && !names.includes(name)) names.push(name);
+    }
+  };
+  visit(parameter.type);
+  return names;
+}
+
+/** Capabilities across all parameters, sorted: `WithSql` is `sql`; other markers are not. */
+function handlerCapabilities(ts, handler, checker) {
+  const capabilities = [];
+  for (const parameter of handler.parameters) {
+    for (const marker of parameterMarkers(ts, parameter, checker)) {
+      if (marker === WITH_SQL_MARKER_NAME && !capabilities.includes(SQL_CAPABILITY)) {
+        capabilities.push(SQL_CAPABILITY);
+      }
+    }
+  }
+  return capabilities.sort();
+}
+
 function isFabricParameter(typeText, name) {
   if (typeText && FABRIC_PARAMETER_TYPES.has(typeText)) return true;
   if (!name) return false;
@@ -245,7 +359,7 @@ function isFabricParameter(typeText, name) {
   return lower === 'context' || lower.includes('connection') || lower.includes('fabric');
 }
 
-function analyzeParameters(handler, sourceFile) {
+function analyzeParameters(ts, handler, sourceFile, checker) {
   return handler.parameters.map((parameter, position) => {
     const name = parameter.name.getText(sourceFile);
     const typeText = parameter.type?.getText(sourceFile);
@@ -253,6 +367,7 @@ function analyzeParameters(handler, sourceFile) {
     return {
       name,
       typeText,
+      isContext: isContextParameter(ts, parameter, sourceFile, checker),
       optional: parameter.questionToken !== undefined,
       hasDefault: parameter.initializer !== undefined,
       position,
@@ -271,25 +386,44 @@ function analyzeFuncCall(ts, node, sourceFile, scriptFile, checker, diagnostics)
   if (!ts.isArrowFunction(handler) && !ts.isFunctionExpression(handler)) return null;
 
   const functionName = nameArgument.text;
-  const contextAudiences = handlerAudiences(ts, handler, checker);
-  if (!checker && contextAudiences.length > 0) {
+  const warn = (code, message) => {
     const { line, character } = sourceFile.getLineAndCharacterOfPosition(
       handler.getStart(sourceFile),
     );
     diagnostics.push({
-      code: 'unverified-context-audience',
+      code,
       severity: 'warning',
-      message:
-        `Function '${functionName}': context audiences [${contextAudiences.join(', ')}] were read ` +
-        'from the annotation text because the functions package has no usable tsconfig.json. ' +
-        'Add a tsconfig.json, or declare audiences literally, e.g. RayfinContext<Schema, AudienceType.Sql>.',
+      message,
       filePath: scriptFile,
       line: line + 1,
       column: character + 1,
       functionName,
     });
+  };
+  const contextAudiences = handlerAudiences(ts, handler, checker);
+  if (!checker && contextAudiences.length > 0) {
+    warn(
+      'unverified-context-audience',
+      `Function '${functionName}': context audiences [${contextAudiences.join(', ')}] were read ` +
+        'from the annotation text because the functions package has no usable tsconfig.json. ' +
+        'Add a tsconfig.json, or declare audiences literally, e.g. RayfinContext<Schema, AudienceType.Sql>.',
+    );
   }
-  return { functionName, parameters: analyzeParameters(handler, sourceFile), contextAudiences };
+  const capabilities = handlerCapabilities(ts, handler, checker);
+  if (!checker && capabilities.length > 0) {
+    warn(
+      'unverified-context-capability',
+      `Function '${functionName}': capabilities [${capabilities.join(', ')}] were read from the ` +
+        'annotation text because the functions package has no usable tsconfig.json. ' +
+        'Add a tsconfig.json, or intersect the marker literally, e.g. RayfinContext<Schema> & WithSql.',
+    );
+  }
+  return {
+    functionName,
+    parameters: analyzeParameters(ts, handler, sourceFile, checker),
+    contextAudiences,
+    capabilities,
+  };
 }
 
 function analyzeSourceFile(ts, sourceFile, scriptFile, checker, diagnostics) {
@@ -305,56 +439,15 @@ function analyzeSourceFile(ts, sourceFile, scriptFile, checker, diagnostics) {
   return functions;
 }
 
-/**
- * Rewrites a context annotation so its audience argument is the resolved union spelled literally
- * (`RayfinContext<M, SqlAlias>` -> `RayfinContext<M, AudienceType.Sql>`); other type arguments
- * keep their source text.
- */
-function normalizeContextAnnotation(ts, typeText, audiences) {
-  const prefix = 'type __A = ';
-  let sourceFile;
-  try {
-    sourceFile = ts.createSourceFile(
-      '__annotation__.ts',
-      `${prefix}${typeText};`,
-      ts.ScriptTarget.ES2022,
-      true,
-    );
-  } catch {
-    return typeText;
-  }
-  const alias = sourceFile.statements.find((statement) => ts.isTypeAliasDeclaration(statement));
-  if (!alias || !isContextTypeNode(ts, alias.type)) return typeText;
-  const typeArguments = alias.type.typeArguments;
-  const union =
-    audiences.length === 0
-      ? 'never'
-      : audiences.map((audience) => `AudienceType.${audience}`).join(' | ');
-  if (!typeArguments || typeArguments.length === 0) {
-    return audiences.length === 0 ? typeText : `${CONTEXT_TYPE_NAME}<Record<string, any>, ${union}>`;
-  }
-  const local = (position) => position - prefix.length;
-  if (typeArguments.length === 1) {
-    if (audiences.length === 0) return typeText;
-    const schemaEnd = local(typeArguments[0].getEnd());
-    return `${typeText.slice(0, schemaEnd)}, ${union}${typeText.slice(schemaEnd)}`;
-  }
-  const start = local(typeArguments[1].getStart(sourceFile));
-  const end = local(typeArguments[1].getEnd());
-  return `${typeText.slice(0, start)}${union}${typeText.slice(end)}`;
-}
-
-function toRuntimeMetadata(ts, functions) {
+function toRuntimeMetadata(functions) {
   return {
     schemaVersion: SCHEMA_VERSION,
     functions: functions.map((fn) => ({
       functionName: fn.functionName,
       delegateParameters: fn.parameters.map((parameter) => {
-        const type = isContextTypeText(parameter.typeText)
-          ? normalizeContextAnnotation(ts, parameter.typeText, fn.contextAudiences)
-          : parameter.typeText;
+        const type = parameter.isContext ? CONTEXT_TYPE_NAME : parameter.typeText;
         // The worker rejects the whole file when `fabricParameterType` and `type` disagree, so a
-        // copy of the annotation is normalized with it.
+        // copy of the annotation is replaced with it.
         const fabricParameterType =
           parameter.fabricParameterType !== undefined &&
           parameter.fabricParameterType === parameter.typeText
@@ -371,6 +464,7 @@ function toRuntimeMetadata(ts, functions) {
         };
       }),
       contextAudiences: [...fn.contextAudiences],
+      capabilities: [...fn.capabilities],
     })),
   };
 }
@@ -424,7 +518,7 @@ function generate(input) {
     );
   }
 
-  const metadata = toRuntimeMetadata(ts, functions);
+  const metadata = toRuntimeMetadata(functions);
   const json = JSON.stringify(metadata, null, 2);
   const written =
     typeof input.outputPath === 'string' && input.outputPath.length > 0

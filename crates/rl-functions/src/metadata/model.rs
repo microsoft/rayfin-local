@@ -1,5 +1,5 @@
-//! The `runtimemetadata.json` document (schema 2.0), checked the way
-//! `@microsoft/fabric-user-data-functions` 1.36.2 checks it (`validateRuntimeMetadata`).
+//! The `runtimemetadata.json` document (schema 2.x or 3.x), checked the way
+//! `@microsoft/fabric-user-data-functions` 2.0.0 checks it (`validateRuntimeMetadata`).
 
 use std::{
     collections::{BTreeSet, HashSet},
@@ -36,8 +36,24 @@ pub struct FunctionMetadata {
     /// older than 1.36.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_audiences: Option<Vec<String>>,
+    /// The capabilities intersected with the handler's context (`& WithSql` is `sql`); written
+    /// by Rayfin CLI 2.0 and later (schema 3.0).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_capabilities",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub capabilities: Option<Vec<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+fn deserialize_capabilities<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Omission is allowed; an explicit null is rejected by the UDF runtime.
+    Vec::<String>::deserialize(deserializer).map(Some)
 }
 
 /// One handler parameter.
@@ -90,7 +106,7 @@ impl RuntimeMetadata {
         }
         if !is_supported_schema_version(&self.schema_version) {
             return Err(format!(
-                "schema version `{}` is not supported (the functions runtime reads 2.x)",
+                "schema version `{}` is not supported (the functions runtime reads 2.x and 3.x)",
                 self.schema_version
             ));
         }
@@ -125,6 +141,9 @@ impl RuntimeMetadata {
                     ));
                 }
                 _ => {}
+            }
+            if function.capabilities.iter().flatten().any(String::is_empty) {
+                return Err(format!("{at}.capabilities has an empty name"));
             }
             for (position, parameter) in function.delegate_parameters.iter().enumerate() {
                 parameter.validate(&format!("{at}.delegateParameters[{position}]"), position)?;
@@ -192,29 +211,55 @@ impl ParameterMetadata {
     }
 }
 
-/// `major.minor` with major 2: the UDF package rejects other majors and older files.
+/// `major.minor` with major 2 or 3: the UDF package rejects other majors and older files.
 fn is_supported_schema_version(version: &str) -> bool {
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
     version.split_once('.').is_some_and(|(major, minor)| {
-        digits(major) && digits(minor) && major.trim_start_matches('0') == "2"
+        digits(major) && digits(minor) && matches!(major.trim_start_matches('0'), "2" | "3")
     })
 }
 
 /// The UDF package's `isRayfinContextType`.
 fn is_context_type(ty: &str) -> bool {
-    ty == CONTEXT_TYPE_NAME
-        || ty
-            .strip_prefix(CONTEXT_TYPE_NAME)
-            .is_some_and(|rest| rest.starts_with('<'))
+    context_member(ty).is_some()
+}
+
+/// The UDF package's `rayfinContextMember`: the top-level `&` member that is `RayfinContext` or
+/// `RayfinContext<...>` (`RayfinContext<S> & WithSql` declares SQL access).
+fn context_member(ty: &str) -> Option<&str> {
+    let bytes = ty.as_bytes();
+    let mut members = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, &ch) in bytes.iter().enumerate() {
+        match ch {
+            b'<' | b'(' | b'[' | b'{' => depth += 1,
+            b'>' if i > 0 && bytes[i - 1] == b'=' => {}
+            b'>' | b')' | b']' | b'}' => depth -= 1,
+            b'&' if depth == 0 => {
+                members.push(&ty[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    members.push(&ty[start..]);
+    members.into_iter().map(str::trim).find(|member| {
+        *member == CONTEXT_TYPE_NAME
+            || member
+                .strip_prefix(CONTEXT_TYPE_NAME)
+                .is_some_and(|rest| rest.starts_with('<'))
+    })
 }
 
 /// Whether a context annotation names audiences (a second type argument other than `never`).
 fn declares_audiences(ty: &str) -> bool {
-    is_context_type(ty)
-        && split_type_arguments(ty)
+    context_member(ty).is_some_and(|context| {
+        split_type_arguments(context)
             .get(1)
             .map(|argument| argument.trim())
             .is_some_and(|argument| !argument.is_empty() && argument != "never")
+    })
 }
 
 /// The top-level arguments of `Name<A, B, ...>`, without a parser: nested brackets, `=>` and
@@ -298,6 +343,7 @@ mod tests {
             ],
             context_audiences: audiences
                 .map(|names| names.iter().map(|name| name.to_string()).collect()),
+            capabilities: None,
             extra: Map::new(),
         }
     }
@@ -332,7 +378,7 @@ mod tests {
         let parsed: RuntimeMetadata = serde_json::from_value(document.clone()).unwrap();
         assert_eq!(parsed.functions[0].delegate_parameters[0].ty, None);
         assert_eq!(serde_json::to_value(&parsed).unwrap(), document);
-        // The 1.36 runtime rejects fields it does not know.
+        // The 2.0 runtime rejects fields it does not know.
         assert_eq!(parsed.validate().unwrap_err(), "unknown field `generator`");
     }
 
@@ -354,7 +400,24 @@ mod tests {
         versioned.schema_version = "2.15".into();
         assert_eq!(versioned.validate(), Ok(()));
         versioned.schema_version = "3.0".into();
+        assert_eq!(versioned.validate(), Ok(()));
+        versioned.schema_version = "4.0".into();
         assert!(versioned.validate().is_err());
+
+        let mut capable = function("f", Some(&["ADO"]));
+        capable.capabilities = Some(vec!["sql".into()]);
+        assert_eq!(metadata(vec![capable.clone()]).validate(), Ok(()));
+        capable.capabilities = Some(vec![String::new()]);
+        assert!(
+            metadata(vec![capable])
+                .validate()
+                .unwrap_err()
+                .contains("capabilities has an empty name")
+        );
+        let mut null_capabilities =
+            serde_json::to_value(metadata(vec![function("f", Some(&[]))])).unwrap();
+        null_capabilities["functions"][0]["capabilities"] = Value::Null;
+        assert!(serde_json::from_value::<RuntimeMetadata>(null_capabilities).is_err());
 
         let duplicate = metadata(vec![function("f", Some(&[])), function("f", Some(&[]))]);
         assert!(duplicate.validate().unwrap_err().contains("duplicates `f`"));
@@ -413,6 +476,8 @@ mod tests {
     fn context_parameters_are_recognised_by_their_annotation() {
         assert!(parameter("ctx", Some("RayfinContext"), 0).is_context());
         assert!(parameter("c", Some("RayfinContext<{ a: 1 }, never>"), 0).is_context());
+        assert!(parameter("ctx", Some("RayfinContext<S> & WithSql"), 0).is_context());
+        assert!(!parameter("ctx", Some("Wrap<RayfinContext & WithSql>"), 0).is_context());
         assert!(!parameter("ctx", Some("udf.RayfinContext<S>"), 0).is_context());
         assert!(!parameter("ctx", Some("RayfinContextual"), 0).is_context());
         assert!(!parameter("ctx", None, 0).is_context());

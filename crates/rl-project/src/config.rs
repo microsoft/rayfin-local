@@ -1,4 +1,4 @@
-//! The typed model of `rayfin/rayfin.yml` (Rayfin CLI 1.36.2 / 1.37 `RayfinConfig`) and its
+//! The typed model of `rayfin/rayfin.yml` (Rayfin CLI 2.0.0 `RayfinConfig`) and its
 //! parser.
 //!
 //! Parsing follows the CLI's `parseRayfinYamlInterpolated`: `${VAR}` interpolation, then the

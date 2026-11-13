@@ -1,10 +1,11 @@
 {
-  "schemaVersion": "2.0",
+  "schemaVersion": "3.0",
   "functions": [
     {
       "functionName": "hello",
       "delegateParameters": [],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "echo",
@@ -73,14 +74,15 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "tokens",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext<Record<string, unknown>, AudienceType.ADO | AudienceType.Fabric>",
+          "type": "RayfinContext",
           "optional": false,
           "hasDefault": false,
           "position": 0,
@@ -90,40 +92,44 @@
       "contextAudiences": [
         "ADO",
         "Fabric"
-      ]
+      ],
+      "capabilities": []
     },
     {
       "functionName": "whoami",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext<Record<string, unknown>>",
+          "type": "RayfinContext",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "secret",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext<Record<string, unknown>>",
+          "type": "RayfinContext",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "fail",
       "delegateParameters": [],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "reject",
@@ -137,7 +143,8 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "logs",
@@ -151,12 +158,14 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "counter",
       "delegateParameters": [],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "slow",
@@ -170,17 +179,20 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "crash",
       "delegateParameters": [],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     },
     {
       "functionName": "bigint",
       "delegateParameters": [],
-      "contextAudiences": []
+      "contextAudiences": [],
+      "capabilities": []
     }
   ]
 }

@@ -2,7 +2,7 @@
 //! `POST /.rayfin-local/functions/api/<name>`, and [`FunctionsService`], which keeps the app's
 //! functions built, described (`runtimemetadata.json`) and running on a [`HostManager`].
 //!
-//! # The wire contract (1.36.2)
+//! # The wire contract (2.0.0)
 //!
 //! The SDK posts `params ?? {}` as JSON with a 250 s timeout (SDK: `FunctionClient.js`
 //! `invoke`). On a 2xx it reads the UDF envelope: a non-empty `errors` throws
@@ -37,8 +37,8 @@
 //!   `FUNCTION_NOT_FOUND`; host (re)starting, or its start failed for a reason that may pass
 //!   (it is tried again), 503 `FUNCTION_HOST_STARTING` with `Retry-After`;
 //!   functions not built or not loadable 503 `FUNCTIONS_UNAVAILABLE`; past the timeout (250 s,
-//!   the UDF ceiling) 408 `FUNCTION_INVOKE_TIMEOUT`; no response from the function (a crash, a
-//!   `BigInt` result) 500. Service-generated 5xx bodies use Fabric's masked
+//!   the UDF ceiling) 408 `FUNCTION_INVOKE_TIMEOUT`; no response from the function (a crash)
+//!   500. Service-generated 5xx bodies use Fabric's masked
 //!   `{"error":{"code":"InternalServerError","message":"An internal execution error occured"}}`;
 //!   the original code and redacted diagnostic are logged at error level. This is BaaS's
 //!   `BaaSCodeMarker` / `ExceptionConstants.InternalError` contract, not the OSS middleware's
@@ -64,7 +64,7 @@
 //! callers the token `rayfin dev` stored there), and `AZURE_FUNCTIONS_ENVIRONMENT=Development`
 //! unless `Values` sets it.
 //!
-//! Sources: SDK is the 1.36.2 dist of `@microsoft/rayfin-functions` and `@microsoft/rayfin-lib`,
+//! Sources: SDK is the 2.0.0 dist of `@microsoft/rayfin-functions` and `@microsoft/rayfin-lib`,
 //! UDF that of `@microsoft/fabric-user-data-functions`, Rayfin its `packages/host` source.
 //!
 //! [`HostManager`]: crate::host::HostManager
