@@ -111,9 +111,12 @@ test('a refused popup does not install a session or reload the protected app', a
   assert.equal(p.elements.signin.disabled, false);
 });
 
-const settle = async (p) => {
-  for (let i = 0; i < 20 && p.posted.length === 0; i += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
+// The embedded request waits on WebCrypto, which runs off the event loop: poll with a deadline,
+// not a tick count, so a loaded machine doesn't fail it.
+const settle = async (p, ms = 5_000) => {
+  const deadline = Date.now() + ms;
+  while (p.posted.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 };
 
@@ -170,7 +173,7 @@ test('in the Fabric frame, a state mismatch or a refusal installs nothing', asyn
 
 test('a frame without the Fabric mark signs in with the popup', async () => {
   const p = page({ embedded: true, href: 'http://localhost:7171/' });
-  await settle(p);
+  await settle(p, 250);
   assert.equal(p.posted.length, 0);
   await p.handlers.click();
   assert.match(p.popup.location.href, /secureItemEmbed/);
