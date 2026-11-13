@@ -2,14 +2,14 @@
 //! `@microsoft/fabric-user-data-functions` and `@azure/functions` packages without Azure Functions
 //! Core Tools ([`FunctionHost`], supervised by [`HostManager`]).
 //!
-//! # How the 1.36.2 packages work (sources: the installed dists)
+//! # How the 2.0.0 packages work (sources: the installed dists)
 //!
 //! - **Registration.** `new UserDataFunctions()` reads `runtimemetadata.json` from
 //!   `join(dirname(resolve('./src')), 'runtimemetadata.json')`, which is
 //!   `<cwd>/runtimemetadata.json`: the host's working directory must be the functions package.
-//!   The file must be schema `2.0` with only the keys `functionName`, `delegateParameters` and
-//!   `contextAudiences` per function (1.37's `capabilities` is rejected). When it is missing or
-//!   invalid nothing throws: every function still registers, and every call answers
+//!   The file must be schema `2.x` or `3.x` with only the keys `functionName`,
+//!   `delegateParameters`, `contextAudiences` and `capabilities` per function. When it is
+//!   missing or invalid nothing throws: every function still registers, and every call answers
 //!   `Failed`/`InternalError` "Unable to determine function metadata…" with `{reason}`.
 //! - `udf.func(name, fn)` calls `app.http(name, {methods: ['POST'], authLevel: 'anonymous',
 //!   extraInputs})`. `@azure/functions` then calls `registerFunction` on `@azure/functions-core`
@@ -27,8 +27,8 @@
 //!   takes each `delegateParameters[i]` by name from it: `string` also accepts numbers and
 //!   booleans, `number` numeric strings; booleans, arrays and `object` are strict; other types
 //!   pass through. A parameter absent from the body without a default is `MissingInput`.
-//! - **The context** (a parameter whose type text starts with `RayfinContext`) comes from
-//!   `RayfinContext.fromRequest`:
+//! - **The context** (a parameter whose type text has a top-level `RayfinContext` member, as in
+//!   `RayfinContext<S> & WithSql`) comes from `RayfinContext.fromRequest`:
 //!   - With `AZURE_FUNCTIONS_ENVIRONMENT=Development` (which `rayfin dev` writes into
 //!     `local.settings.json`), the endpoint is `RAYFIN_API_URL`, the key
 //!     `RAYFIN_PUBLISHABLE_KEY`, and the token the request's `Authorization: Bearer`, else
@@ -38,23 +38,25 @@
 //!     `{"rayFinEndpoint", "publishableKey", "rayfinToken"}` ([`rayfin_info_header`]). A trailing
 //!     `/graphql` is stripped from the endpoint.
 //!   - `ctx.Secrets.<NAME>` is the `x-ms-rayfin-secrets` header's JSON object of strings
-//!     ([`secrets_header`]), else `process.env.<NAME>`. (`x-ms-rayfin-secrets-available` is
-//!     1.37 only.) Header values must be byte strings: `new Request()` throws on code points above
-//!     0xFF, before any envelope exists.
+//!     ([`secrets_header`]), else `process.env.<NAME>`. (`x-ms-rayfin-secrets-available`, which
+//!     fetches them from the service, is never sent.) Header values must be byte strings:
+//!     `new Request()` throws on code points above 0xFF, before any envelope exists.
 //!   - `ctx.Tokens.<Audience>` reads the FabricItem input's value,
 //!     `{"Endpoints": {"<Audience>": {"AccessToken": "<token>"}}}`
 //!     ([`RegisteredFunction::token_bindings`]). A declared audience without one throws
 //!     "No token available for audience…" (`Failed`/`InvalidInput`) when read.
+//!   - `ctx.sql` (`& WithSql`, the `sql` capability) needs an `x-ms-rayfin-func-ticket`, which
+//!     rayfin-local doesn't issue, so its calls throw (`InvalidInput`).
 //! - **Response.** `{status, body: <envelope>, headers: {'Content-Type': 'application/json',
 //!   'x-fabric-udf-status': <status>}}`, which `@azure/functions` serializes with lowercase header
 //!   names. The envelope is `{functionName, invocationId, status, output, errors: [{errorCode,
 //!   message, properties}]}`, status `Succeeded`, `BadRequest`, `Failed` or `ResponseTooLarge`
 //!   (over 30 MiB). The HTTP status is 200 unless `IsLocal=true` (also written by `rayfin dev`):
 //!   then 400 for `BadRequest` (422 for `UserThrown`), 500 for `Failed`, 403 for
-//!   `ResponseTooLarge`. A return value `JSON.stringify` can't handle (a `BigInt`) throws outside
-//!   the UDF try/catch: there is no envelope, and the invocation fails ([`HostError::Failed`]).
+//!   `ResponseTooLarge`. A return value `JSON.stringify` can't handle (a `BigInt`) is caught by
+//!   the 2.0 runtime and returned as a `Failed` envelope with an internal error.
 //! - **Logs.** The UDF package replaces `console.*`; inside an invocation each call goes to the
-//!   invocation's `context.log`, prefixed `[UserDataFunctions]`.
+//!   invocation's `context.log` unchanged (the package's own messages say `[UserDataFunctions]`).
 //!
 //! # What callers supply
 //!
@@ -439,7 +441,7 @@ pub enum HostError {
     NotFound(String),
     #[error("function '{name}' has a {trigger} trigger; only HTTP functions can be invoked")]
     NotInvocable { name: String, trigger: String },
-    /// The invocation threw instead of producing a response (e.g. a `BigInt` result).
+    /// The invocation failed before producing an HTTP response.
     /// `error_type` is the JavaScript error's name.
     #[error("function '{function}' failed without a response: {error_type}: {message}")]
     Failed {

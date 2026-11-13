@@ -1,13 +1,18 @@
-// The test app: the real `ensureSignedInWithFabric` (SDK 1.36.2) behind a Sign in button, as an
+// The test app: the real `ensureSignedInWithFabric` (SDK 2.0.0) behind a Sign in button, as an
 // app would call it; or, when the local Fabric host frames it (`fabricEmbedded=true`), the real
 // `initEmbeddedAuth` on load. run.mjs bundles it with the SDK from an app's node_modules.
 import { sendBridgeRequest } from '@microsoft/fabric-embedded-host';
 import { ensureSignedInWithFabric, initEmbeddedAuth } from '@microsoft/rayfin-auth-provider-fabric';
+import { browserSession } from '@microsoft/rayfin-auth';
 import { RayfinClient } from '@microsoft/rayfin-client';
 
 const params = new URLSearchParams(location.search);
 const apiUrl = params.get('api');
-const client = new RayfinClient({ baseUrl: apiUrl, publishableKey: params.get('pk') });
+const client = RayfinClient.create({
+  baseUrl: apiUrl,
+  publishableKey: params.get('pk'),
+  auth: browserSession(),
+});
 const options = {
   workspaceId: params.get('ws'),
   projectId: params.get('item'),

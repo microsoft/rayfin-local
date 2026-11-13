@@ -190,7 +190,7 @@ fn warnings(result: &Value) -> Vec<String> {
 
 const FOLDER: &str = "\
 import { role } from '@microsoft/rayfin-core';
-import { blob, StorageObject } from '@microsoft/rayfin-core/experimental';
+import { blob, StorageObject } from '@microsoft/rayfin-core';
 
 @blob({ name: 'Files' })
 @role('authenticated', ['create', 'read'])
@@ -347,15 +347,15 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// SDK 1.37 moved `@microsoft/rayfin-core/schema` and `/analysis` to `/_internal/schema` and
-/// `/_internal/analysis`, with the same exports. The fixture's model analyzes the same with its
+/// Before SDK 1.37, `@microsoft/rayfin-core/_internal/schema` and `/_internal/analysis` were
+/// `/schema` and `/analysis`, with the same exports. The fixture's model analyzes the same with its
 /// rayfin-core exported that way.
 #[test]
-fn analyze_js_loads_the_analyzer_where_sdk_1_37_moved_it() {
+fn analyze_js_loads_the_analyzer_where_sdk_1_36_had_it() {
     let Some((node, fixture)) = prerequisites() else {
         return;
     };
-    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-1-37");
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-1-36");
     let project = scratch.join("project");
     let _ = fs::remove_dir_all(&project);
     for folder in ["rayfin/data", "rayfin/storage"] {
@@ -387,8 +387,8 @@ fn analyze_js_loads_the_analyzer_where_sdk_1_37_moved_it() {
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     let exports = manifest["exports"].as_object_mut().unwrap();
     for name in ["schema", "analysis"] {
-        let target = exports.remove(&format!("./{name}")).unwrap();
-        exports.insert(format!("./_internal/{name}"), target);
+        let target = exports.remove(&format!("./_internal/{name}")).unwrap();
+        exports.insert(format!("./{name}"), target);
     }
     fs::write(&manifest_path, manifest.to_string()).unwrap();
     // The helper imports TypeScript from the project: the fixture's.

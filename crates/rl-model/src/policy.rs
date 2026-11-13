@@ -1,6 +1,6 @@
 //! `@role` policies as a typed expression tree.
 //!
-//! The 1.36.2 policy DSL (`@microsoft/rayfin-core` `policy.js`) builds `ComparisonExpression`s
+//! The 2.0.0 policy DSL (`@microsoft/rayfin-core` `policy.js`) builds `ComparisonExpression`s
 //! (`eq`, and `ne` from `.neq()`) over `claims.sub|email|role`, `item.<field>` and literals
 //! (string, number, boolean, `Date`, `null`), combined by `LogicalExpression`s (`and`, `or`).
 //! There is no `not` and no ordering comparison. rayfin-core's `serializeCheckToAst` turns that
@@ -43,7 +43,7 @@ pub enum CompareOp {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operand {
-    /// A claim of the caller's token (`@claims.sub`); 1.36.2 offers `sub`, `email` and `role`.
+    /// A claim of the caller's token (`@claims.sub`); 2.0.0 offers `sub`, `email` and `role`.
     Claim(String),
     /// A field of the row (`@item.user_id`), by its exposed (GraphQL) name.
     Field(String),
@@ -64,7 +64,7 @@ pub enum Literal {
     String(String),
 }
 
-/// Why a check AST node is outside the 1.36.2 policy grammar.
+/// Why a check AST node is outside the 2.0.0 policy grammar.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{reason}")]
 pub struct PolicyAstError {

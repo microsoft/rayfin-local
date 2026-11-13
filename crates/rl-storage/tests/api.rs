@@ -1,4 +1,4 @@
-//! The storage routes driven as the 1.36.2 client drives them (`StorageFolderClient.js`), on the
+//! The storage routes driven as the 2.0.0 client drives them (`StorageFolderClient.js`), on the
 //! `basic` fixture's folders plus a folder readable by every signed-in caller.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};

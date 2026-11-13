@@ -1,5 +1,5 @@
 {
-  "coreVersion": "1.36.2",
+  "coreVersion": "2.0.0",
   "typescriptVersion": "5.9.3",
   "dialect": "mssql",
   "featureFlags": null,
@@ -68,6 +68,8 @@
           "nullable": false,
           "primaryKey": false,
           "unique": false,
+          "checkConstraint": "[sortOrder] >= 0 AND [sortOrder] <= 1000",
+          "checkConstraintNameSuffix": "_range",
           "isRelationship": false,
           "originalFieldMetadata": {
             "default": 0,
@@ -715,7 +717,7 @@
           "nullable": false,
           "primaryKey": false,
           "unique": false,
-          "checkConstraint": "[status] IN ('its new', 'doing', 'done', 'its archived')",
+          "checkConstraint": "[status] COLLATE Latin1_General_100_BIN2 IN ('its new', 'doing', 'done', 'its archived')",
           "isRelationship": false,
           "originalFieldMetadata": {
             "default": "it's new",
@@ -738,7 +740,7 @@
           "nullable": true,
           "primaryKey": false,
           "unique": false,
-          "checkConstraint": "[priority] IN ('low', 'high')",
+          "checkConstraint": "[priority] COLLATE Latin1_General_100_BIN2 IN ('low', 'high')",
           "isRelationship": false,
           "originalFieldMetadata": {
             "enum": [
@@ -758,6 +760,8 @@
           "nullable": true,
           "primaryKey": false,
           "unique": false,
+          "checkConstraint": "[estimate] >= 0",
+          "checkConstraintNameSuffix": "_range",
           "isRelationship": false,
           "originalFieldMetadata": {
             "min": 0,
@@ -789,6 +793,8 @@
           "nullable": true,
           "primaryKey": false,
           "unique": false,
+          "checkConstraint": "[weight] >= 0 AND [weight] <= 99999",
+          "checkConstraintNameSuffix": "_range",
           "isRelationship": false,
           "originalFieldMetadata": {
             "precision": 10,
@@ -1114,6 +1120,10 @@
               {
                 "name": "CK_Categories_name_minlen",
                 "expression": "LEN([name]) >= 2"
+              },
+              {
+                "name": "CK_Categories_sortOrder_range",
+                "expression": "[sortOrder] >= 0 AND [sortOrder] <= 1000"
               }
             ]
           }
@@ -1680,11 +1690,19 @@
               },
               {
                 "name": "CK_Todos_status",
-                "expression": "[status] IN ('its new', 'doing', 'done', 'its archived')"
+                "expression": "[status] COLLATE Latin1_General_100_BIN2 IN ('its new', 'doing', 'done', 'its archived')"
               },
               {
                 "name": "CK_Todos_priority",
-                "expression": "[priority] IN ('low', 'high')"
+                "expression": "[priority] COLLATE Latin1_General_100_BIN2 IN ('low', 'high')"
+              },
+              {
+                "name": "CK_Todos_estimate_range",
+                "expression": "[estimate] >= 0"
+              },
+              {
+                "name": "CK_Todos_weight_range",
+                "expression": "[weight] >= 0 AND [weight] <= 99999"
               }
             ]
           }

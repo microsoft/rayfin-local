@@ -1,6 +1,6 @@
 //! Where a Category A connector's database is: the TDS server and database of its Fabric item,
 //! from the Fabric REST API with the developer's token, as `rayfin connector add` resolves them
-//! (CLI 1.36.2 `SqlEndpointManager`), and cached in `.rayfin-local/cache/connectors/`.
+//! (CLI 2.0.0 `SqlEndpointManager`), and cached in `.rayfin-local/cache/connectors/`.
 //!
 //! | Type | Request | Server | Database |
 //! | --- | --- | --- | --- |

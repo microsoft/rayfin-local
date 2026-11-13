@@ -1,5 +1,5 @@
 import { role, text, int } from '@microsoft/rayfin-core';
-import { blob, StorageObject, mb, ContentTypes } from '@microsoft/rayfin-core/experimental';
+import { blob, StorageObject, mb, ContentTypes } from '@microsoft/rayfin-core';
 
 /**
  * A storage folder with every `@blob` option, app fields stored in

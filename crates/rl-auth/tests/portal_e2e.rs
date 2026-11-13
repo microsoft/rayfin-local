@@ -1,5 +1,5 @@
 //! The sign-in popup end to end: a real browser (Playwright) runs the real
-//! `ensureSignedInWithFabric` (SDK 1.36.2) against the auth routes behind `rl-server`, and signs
+//! `ensureSignedInWithFabric` (SDK 2.0.0) against the auth routes behind `rl-server`, and signs
 //! in with a password, by signing up, with "Continue as" (a fake developer token), then cancels
 //! and closes the popup. It also runs the real `initEmbeddedAuth` in the local Fabric host's frame:
 //! signs in on the host, reloads the page and the app, and switches to a new account. A second
@@ -7,8 +7,8 @@
 //!
 //! Ignored by default. Set up once: `npm install` and `npx playwright install chromium` in
 //! `tests/e2e/portal` (without the Chromium download it falls back to the installed Edge). The
-//! SDK comes from `RAYFIN_SDK_NODE_MODULES`, by default the explorer app next to this repository
-//! (`../fabric-apps/apps/explorer/node_modules`). Run with
+//! SDK comes from `RAYFIN_SDK_NODE_MODULES`, by default the basic fixture app
+//! (`tests/fixtures/apps/basic/node_modules`). Run with
 //! `cargo test -p rl-auth --test portal_e2e -- --ignored --nocapture`.
 
 use std::{
@@ -67,7 +67,7 @@ fn repo_root() -> PathBuf {
 fn sdk_node_modules() -> PathBuf {
     std::env::var_os("RAYFIN_SDK_NODE_MODULES")
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join("../fabric-apps/apps/explorer/node_modules"))
+        .unwrap_or_else(|| repo_root().join("tests/fixtures/apps/basic/node_modules"))
 }
 
 /// Where `run.mjs` and the SDK are, or `None` (the test skipped) when one is missing.
@@ -81,7 +81,7 @@ fn prerequisites() -> Option<(PathBuf, PathBuf)> {
         ),
         (
             sdk.join("@microsoft/rayfin-auth-provider-fabric"),
-            "set RAYFIN_SDK_NODE_MODULES to a node_modules with the Rayfin SDK 1.36.2",
+            "set RAYFIN_SDK_NODE_MODULES to a node_modules with the Rayfin SDK 2.0.0",
         ),
     ] {
         if !needed.exists() {
@@ -185,7 +185,7 @@ async fn run(backend: &Backend, harness: &Path, sdk: &Path, scenarios: &str) -> 
 }
 
 #[tokio::test]
-#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 1.36.2 (see the module docs)"]
+#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 2.0.0 (see the module docs)"]
 async fn the_sdk_signs_in_through_the_portal_popup() {
     let Some((harness, sdk)) = prerequisites() else {
         return;
@@ -266,7 +266,7 @@ async fn the_sdk_signs_in_through_the_portal_popup() {
 }
 
 #[tokio::test]
-#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 1.36.2 (see the module docs)"]
+#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 2.0.0 (see the module docs)"]
 async fn the_popup_signs_in_as_the_sign_in_identity_without_asking() {
     let Some((harness, sdk)) = prerequisites() else {
         return;

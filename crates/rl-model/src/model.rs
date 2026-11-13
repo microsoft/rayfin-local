@@ -21,7 +21,7 @@ use crate::policy::PolicyExpr;
 pub enum ModelError {
     #[error(
         "the schema analysis output is malformed ({0}); this @microsoft/rayfin-core version may \
-         not be supported by rayfin-local (it targets 1.36.x)"
+         not be supported by rayfin-local (it targets 2.0.x)"
     )]
     Malformed(String),
     #[error("entity `{entity}`: {message}")]
@@ -77,8 +77,7 @@ pub struct AppModel {
     /// The project's TypeScript version that compiled `rayfin/`.
     pub typescript_version: Option<String>,
     pub dialect: Dialect,
-    /// `RAYFIN_FEATURE_FLAGS` during the analysis (`cli-minor-fixes` adds range CHECKs and
-    /// case-sensitive enum CHECKs, as it does for `rayfin up`).
+    /// `RAYFIN_FEATURE_FLAGS` during the analysis.
     pub feature_flags: Option<String>,
     /// In the DAB config's order: entity modules sorted by file name, then their exports.
     pub entities: Vec<Entity>,
@@ -306,7 +305,7 @@ pub enum FieldKind {
         values: Vec<String>,
         allowed: Vec<String>,
     },
-    /// `@int()`; `min`/`max` become a CHECK only under the `cli-minor-fixes` flag.
+    /// `@int()`; `min`/`max` become a CHECK.
     Int { min: Option<f64>, max: Option<f64> },
     /// `@decimal()`: `precision`/`scale` default to 18 and 2; `min`/`max` as for `Int`.
     Decimal {
@@ -549,7 +548,7 @@ pub enum StorageFieldType {
 /// A storage authorization rule.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StorageRule {
-    /// `**` in 1.36.2.
+    /// `**` in 2.0.0.
     pub path_pattern: String,
     pub role: String,
     pub actions: Vec<Action>,

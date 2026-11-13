@@ -246,7 +246,7 @@ fn installed_packages_beat_declared_ones() {
     assert_eq!(project.sdk_version(), Some("1.37.0"));
     let warning = project.sdk_version_warning().unwrap();
     assert!(
-        warning.starts_with("@microsoft/rayfin-client 1.37.0 is not the 1.36 SDK"),
+        warning.starts_with("@microsoft/rayfin-client 1.37.0 is not the 2.0 SDK"),
         "{warning}"
     );
     project.check_installed().unwrap();
@@ -275,7 +275,7 @@ fn workspace_frontends_use_hoisted_packages() {
         ),
         (
             "node_modules/@microsoft/rayfin-client/package.json",
-            &package("x", "1.36.2"),
+            &package("x", "2.0.0"),
         ),
         (
             "node_modules/@microsoft/rayfin-core/package.json",
@@ -291,7 +291,7 @@ fn workspace_frontends_use_hoisted_packages() {
         project.root_package().unwrap().name.as_deref(),
         Some("root")
     );
-    assert_eq!(project.sdk_version(), Some("1.36.2"));
+    assert_eq!(project.sdk_version(), Some("2.0.0"));
     assert_eq!(project.sdk_version_warning(), None);
     project.check_installed().unwrap();
 }

@@ -5,9 +5,9 @@
   "type": "module",
   "description": "rayfin-local test fixture: Category A (SQL) connector entities, as `rayfin connector add` and the entity generation contract produce them.",
   "dependencies": {
-    "@microsoft/rayfin-connector-fabric-graphql": "1.36.2",
-    "@microsoft/rayfin-connectors": "1.36.2",
-    "@microsoft/rayfin-core": "1.36.2"
+    "@microsoft/rayfin-connector-fabric-graphql": "2.0.0",
+    "@microsoft/rayfin-connectors": "2.0.0",
+    "@microsoft/rayfin-core": "2.0.0"
   },
   "devDependencies": {
     "typescript": "5.9.3"

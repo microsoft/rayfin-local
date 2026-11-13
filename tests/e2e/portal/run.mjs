@@ -1,11 +1,11 @@
 // Drives the rayfin-local sign-in popup with a real browser (Playwright) and the real Rayfin SDK
-// 1.36.2. Run by crates/rl-auth/tests/portal_e2e.rs, which starts the backend and passes:
+// 2.0.0. Run by crates/rl-auth/tests/portal_e2e.rs, which starts the backend and passes:
 //
 //   RL_API_URL            the backend origin (it serves the portal and /api/auth/v1/*)
 //   RL_PUBLISHABLE_KEY    its publishable key
 //   RL_WORKSPACE_ID, RL_ITEM_ID
 //   RL_SDK_NODE_MODULES   a node_modules with @microsoft/rayfin-client and
-//                         @microsoft/rayfin-auth-provider-fabric 1.36.2
+//                         @microsoft/rayfin-auth-provider-fabric 2.0.0
 //   RL_USER, RL_PASSWORD  an existing password user
 //   RL_NEW_USER           a username to sign up with
 //   RL_EMBED_USER         a username to sign up with on the local Fabric host

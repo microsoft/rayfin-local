@@ -2,7 +2,7 @@
 
 This note is the design of rayfin-local's Category A connectors: `fabric-sqldatabase`, `fabric-warehouse` and `fabric-sqlanalytics`.
 It covers the contract the SDK expects, how the GraphQL schema derives from the connector's files, how rayfin-local finds and signs in to the database, and where it differs from Fabric.
-The sources of truth are the SDK 1.36.2 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
+The sources of truth are the SDK 2.0.0 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
 
 ## Contents
 
@@ -125,7 +125,7 @@ sequenceDiagram
 
 ### Which item, which server
 
-rayfin-local resolves the item in `rayfin.yml` to its TDS server and database with the Fabric REST API, as `rayfin connector add` does (CLI 1.36.2 `SqlEndpointManager`):
+rayfin-local resolves the item in `rayfin.yml` to its TDS server and database with the Fabric REST API, as `rayfin connector add` does (CLI 2.0.0 `SqlEndpointManager`):
 
 | Type | `config.itemId` that `connector add` records | Request | Server | Database |
 | --- | --- | --- | --- | --- |
@@ -206,7 +206,7 @@ Keep `serve` on loopback (the default): anyone who can reach the backend acts on
 - `crates/rl-model/tests/connector_model.rs` and `analyze_js.rs`: the model of the `inventory` connector of `tests/fixtures/apps/connectors`, and the helper against its golden analysis.
 - `crates/rl-graphql/tests/tsql.rs`: the schema of that connector per type, and the statements its documents become, on a fake database.
 - `crates/rl-connectors/tests/sql_server.rs`: the routes against a real SQL Server (queries, roles and policies, composite and keyless keys, mutations per type, failures).
-- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 1.36.2 client with the fixture's entity classes against the same.
+- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 2.0.0 client with the fixture's entity classes against the same.
 - `crates/rl-connectors/tests/real_fabric_sql.rs` (ignored): a read-only query of a real Fabric SQL database, Warehouse or SQL analytics endpoint as you.
 - `crates/rl-connectors/src/sql/tds.rs`'s unit tests: the driver patches are in place (the PRELOGIN's `TRACEID`, an empty `TRACEID` in the server's answer, the routed host).
 

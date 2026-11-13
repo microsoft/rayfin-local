@@ -1,4 +1,4 @@
-// Runs the real Rayfin SDK 1.36.2 Category A client (`createConnectorsApi` with the connector's
+// Runs the real Rayfin SDK 2.0.0 Category A client (`createConnectorsApi` with the connector's
 // entity classes, as an app's `connectorConfig` wires it) against rayfin-local's
 // /connectors/<name>/graphql route over a real SQL Server, and checks what the app gets back.
 //
@@ -64,7 +64,7 @@ await check('findMany with the default columns', async () => {
 });
 
 await check('select, where, orderBy and dotted relationship paths', async () => {
-  const rows = await alice.inventory.Product.select(['name', 'price', 'category.name', 'stockLevels.quantity'])
+  const rows = await alice.inventory.Product.select(['name', 'price', 'category.name', 'stockLevels[].quantity'])
     .where({ inStock: { eq: true } })
     .orderBy({ price: 'desc' })
     .execute();

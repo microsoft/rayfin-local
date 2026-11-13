@@ -61,8 +61,10 @@ fn ddl_of_the_fixture_apps() {
         "CONSTRAINT \"PK_Todos\" PRIMARY KEY (\"id\")",
         "CONSTRAINT \"FK_Todos_category_id\" FOREIGN KEY (\"category_id\") REFERENCES \
          \"Categories\" (\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
-        "CONSTRAINT \"CK_Todos_status\" CHECK (\"status\" IN ('its new', 'doing', 'done', \
-         'its archived'))",
+        "CONSTRAINT \"CK_Todos_status\" CHECK (\"status\" COLLATE BINARY IN ('its new', 'doing', \
+         'done', 'its archived'))",
+        "CONSTRAINT \"CK_Todos_estimate_range\" CHECK (\"estimate\" >= 0)",
+        "CONSTRAINT \"CK_Todos_weight_range\" CHECK (\"weight\" >= 0 AND \"weight\" <= 99999)",
         "CONSTRAINT \"CK_Todos_title_minlen\" CHECK (length(rtrim(\"title\", ' ')) >= 1)",
         "CONSTRAINT \"CK_Todos_title_maxlen\" CHECK (length(\"title\") <= 200)",
         "CONSTRAINT \"CK_Todos_contactEmail_email\" CHECK (\"contactEmail\" LIKE '_%@_%._%' AND \
@@ -72,8 +74,6 @@ fn ddl_of_the_fixture_apps() {
     ] {
         assert!(todo.contains(expected), "missing {expected}\n{todo}");
     }
-    // No range CHECK without `cli-minor-fixes` (the IR has none).
-    assert!(!todo.contains("_range"), "{todo}");
 
     // The system `User` participates in real, indexed foreign keys.
     let people = create_table_sql(model.entity("Person").unwrap()).unwrap();
@@ -146,7 +146,7 @@ fn constraints_behave_like_fabric() {
 
         let cases = [
             (todo(", status", ", 'doing'"), None),
-            (todo(", status", ", 'DOING'"), None),
+            (todo(", status", ", 'DOING'"), Some(ConstraintKind::Check)),
             (todo(", status", ", 'its new'"), None),
             (
                 todo(", status", ", 'archived'"),

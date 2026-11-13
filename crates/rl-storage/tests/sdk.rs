@@ -1,4 +1,4 @@
-//! Drives the real `@microsoft/rayfin-storage` 1.36.2 client (`tests/sdk/storage.mjs`) against the
+//! Drives the real `@microsoft/rayfin-storage` 2.0.0 client (`tests/sdk/storage.mjs`) against the
 //! storage routes served by `rl-server`. Skipped (with a note) without Node.js or without
 //! `tests/sdk/node_modules` (`npm install` in crates/rl-storage/tests/sdk).
 

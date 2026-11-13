@@ -1,7 +1,7 @@
 //! `fabric-semanticmodel`: DAX through Power BI's `executeDaxQueries`, as the developer.
 //!
 //! This is the SDK's direct path (`directExecute.js` in
-//! `@microsoft/rayfin-connector-fabric-semanticmodel` 1.36.2) moved behind the route: the same
+//! `@microsoft/rayfin-connector-fabric-semanticmodel` 2.0.0) moved behind the route: the same
 //! request to Power BI, and its failures reported in the same `FabricSemanticModelTabularResponse`
 //! envelope, so `toQueryResult` turns them into the same `QueryError`s. Tokens `executeDaxQueries`
 //! refuses for want of a dataset scope (the Azure CLI's) are served by [`json_fallback`]. When
@@ -48,11 +48,11 @@ const ACCESS_HINT: &str = "Sign in again, and confirm you have at least Viewer a
 /// `directExecute.js` `parseErrorBody`'s hint for a 401 or 403 with an empty body.
 const EMPTY_ACCESS_HINT: &str = "The request was rejected before Power BI evaluated model access, \
      so check the token first: confirm the caller sends one and that it carries the \
-     https://analysis.windows.net/powerbi/api audience. Only then check workspace and semantic \
-     model permissions.";
+     https://analysis.windows.net/powerbi/api audience. Only then check Read and Build permissions \
+     on the semantic model.";
 /// The delegated scopes `executeDaxQueries` requires.
 const DATASET_SCOPES: [&str; 2] = ["Dataset.Read.All", "Dataset.ReadWrite.All"];
-/// The Rayfin CLI's Entra app (`DEFAULT_RAYFIN_CLIENT_ID` in `@microsoft/rayfin-cli/auth`).
+/// The Rayfin CLI's Entra app (`DEFAULT_RAYFIN_CLIENT_ID` in `@microsoft/rayfin-cli/_internal/auth`).
 const RAYFIN_CLI_APP_ID: &str = "2f844663-8e82-4a34-8b65-09d9d14b0fb6";
 /// The input file for a `rayfin connector invoke` that only needs to sign in.
 const PROBE_INPUT: &str = r#"{"query": "EVALUATE {1}"}"#;

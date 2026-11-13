@@ -1,15 +1,15 @@
 //! `runtimemetadata.json` for the functions package.
 //!
-//! `@microsoft/fabric-user-data-functions` 1.36 never analyses source at runtime: `new
+//! `@microsoft/fabric-user-data-functions` 2.0.0 never analyses source at runtime: `new
 //! UserDataFunctions()` reads `runtimemetadata.json` from the process's working directory (beside
 //! its default `srcRoot`, `./src`) and answers every invocation with "Unable to determine function
-//! metadata" when the file is missing, invalid or not schema 2.x. The function host runs in the
-//! functions directory, so the file belongs at `<functions dir>/runtimemetadata.json`, which is
-//! where `rayfin dev` writes it too. It is a generated artifact, rewritten only when its content
-//! changes; a stamp in the cache folder remembers which inputs it was generated from.
+//! metadata" when the file is missing, invalid or not schema 2.x or 3.x. The function host runs
+//! in the functions directory, so the file belongs at `<functions dir>/runtimemetadata.json`,
+//! which is where `rayfin dev` writes it too. It is a generated artifact, rewritten only when its
+//! content changes; a stamp in the cache folder remembers which inputs it was generated from.
 //!
 //! `js/udf-metadata.mjs` generates it with the functions package's own TypeScript compiler,
-//! following the rules of the Rayfin CLI 1.36.2 type generation, so the output is byte-for-byte
+//! following the rules of the Rayfin CLI 2.0.0 type generation, so the output is byte-for-byte
 //! what `rayfin dev` writes for the same source.
 
 mod model;
@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 /// The file the UDF package reads, in the functions directory.
 pub const FILE_NAME: &str = "runtimemetadata.json";
 
-/// The schema version generated: the one the 1.36 UDF package requires.
-pub const SCHEMA_VERSION: &str = "2.0";
+/// The schema version generated: the one the Rayfin CLI 2.0.0 writes.
+pub const SCHEMA_VERSION: &str = "3.0";
 
 const HELPER: Helper = Helper::new("udf-metadata", include_str!("../../../js/udf-metadata.mjs"));
 

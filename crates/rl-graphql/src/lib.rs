@@ -2,7 +2,7 @@
 //! SQLite database, with `@role` policies and field permissions enforced in every statement.
 //!
 //! On Fabric an app's entities are served by Data API Builder (DAB, on Hot Chocolate) over
-//! Fabric SQL. [`DataApi`] answers the documents the Rayfin SDK 1.36.2 sends with the same
+//! Fabric SQL. [`DataApi`] answers the documents the Rayfin SDK 2.0.0 sends with the same
 //! schema and data. Authorization follows Fabric BaaS's embedded DAB 2.0.10 behavior,
 //! including BaaS's sanitized wire codes, rather than raw standalone DAB substatus names.
 //!

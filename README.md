@@ -6,7 +6,7 @@
 Even `rayfin dev` keeps that backend in Fabric, so before you can run anything you need a workspace, a capacity and a deployed app backend.
 
 `rayfin-local` runs that backend locally instead.
-It answers the same requests as the Fabric backend, so the Rayfin SDK 1.36 in your app can't tell the difference, and your code runs unchanged:
+It answers the same requests as the Fabric backend, so the Rayfin SDK 2.0 in your app can't tell the difference, and your code runs unchanged:
 
 ```sh
 cd my-rayfin-app
@@ -132,8 +132,8 @@ flowchart LR
 | Passwordless sign-in, email verification, password-reset email | No | |
 | GraphQL introspection | No | |
 
-rayfin-local implements the contract of `@microsoft/rayfin-*` 1.36.x.
-It is tested with the real 1.36.2 SDK, and end to end with real apps.
+rayfin-local implements the contract of `@microsoft/rayfin-*` 2.0.x.
+It is tested with the real 2.0.0 SDK, and end to end with real apps.
 [docs/differences.md](docs/differences.md) lists every difference from Fabric.
 
 ## Install
@@ -280,7 +280,7 @@ Deleting an auth account retains its mirrored row so existing app references rem
   "Continue as" is offered only when the backend listens on a loopback address.
 - **Email and password.** The app's own sign-up and sign-in work as on Fabric.
   One local convenience: a password sign-in for an email that has no account creates the account (a wrong password for an existing account is still refused).
-  Many app templates sign in to a local backend with a fixed development account (`MockAuthService`) and fall back to sign-up when it doesn't exist yet, a fallback the 1.36.2 SDK never reaches because `@microsoft/rayfin-client` exports a different `AuthError` class from the one it throws.
+  Many app templates sign in to a local backend with a fixed development account (`MockAuthService`) and fall back to sign-up when it doesn't exist yet.
   Turn this off with `[auth] auto_create_users = false` in `rayfin-local.toml`.
 - **Apps that sign in only inside Fabric** (`initEmbeddedAuth`, which does nothing outside a Fabric frame) need the **Embedded** URL from the banner, `http://localhost:7171/.rayfin-local/portal/embed`.
   That page plays Fabric's role: sign in there once, and it shows the app in a frame and signs it in, as Fabric does.
@@ -326,7 +326,7 @@ A function or query can therefore reach exactly what your account can reach.
 | --- | --- |
 | `auto` (default) | The Azure CLI, then the Rayfin CLI's login. When Power BI turns down the Azure CLI's token for a semantic-model query, the Rayfin CLI's sign-in gets one instead (the first time, it may open a browser window to sign in or consent), and Power BI tokens come from it from then on. |
 | `az` | `az account get-access-token --scope <scope>`: run `az login` first. |
-| `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
+| `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/_internal/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
 
 `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` overrides every source for one audience: `SQL`, `STORAGE`, `FABRIC`, `AZUREAI`, `ADO` or `POWERBI`.
 It is meant for tests and CI; the token is used as given.
@@ -594,9 +594,9 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
   With the `auto` token source, rayfin-local asks the Rayfin CLI for a token itself, and the first time it may open a browser window to sign in or consent: finish it there.
   Otherwise, run `npx rayfin connector invoke <connector> executeQuery --file query.json` once in a terminal in the project folder, with `{"query": "EVALUATE {1}"}` in `query.json`, and finish signing in in the browser it opens; or ask a tenant administrator to consent to the Rayfin CLI app (`2f844663-8e82-4a34-8b65-09d9d14b0fb6`) for Power BI Service.
   If it still fails, check that your account can query the model (Build permission) in the model's tenant.
-- **"… is not the 1.36 SDK rayfin-local implements".**
-  rayfin-local implements the wire contract of `@microsoft/rayfin-*` 1.36.x; with another version, behavior may differ from Fabric.
-  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 1.36.
+- **"… is not the 2.0 SDK rayfin-local implements".**
+  rayfin-local implements the wire contract of `@microsoft/rayfin-*` 2.0.x; with another version, behavior may differ from Fabric.
+  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 2.0.
 - **"Cannot find type definition file for …" (TS2688) when the entities are analyzed.**
   TypeScript also loads the `@types` packages in the `node_modules` of every parent folder; set `"types"` (or `"typeRoots"`) in `rayfin/tsconfig.json`, or remove the stray folder the message names.
 - **"rayfin-local serve is already running this project".**

@@ -4,6 +4,7 @@ import {
   signInWithBrokeredToken,
 } from '@microsoft/rayfin-auth-provider-fabric';
 import { fetchRayfinLocalSessionToken } from '@microsoft/rayfin-local-dev';
+import type { CreateInput } from '@microsoft/rayfin-data';
 
 import type { BasicSchema } from '../rayfin/data/schema';
 import { bootstrap, type AppServices } from './services/bootstrap';
@@ -131,7 +132,7 @@ async function todoCategory() {
     const [withCategory] = await client.data.Todo.select(['id', 'title', 'category.name'])
       .where({ id: { eq: todo.id } })
       .execute();
-    const [withTodos] = await client.data.Category.select(['id', 'name', 'todos.title'])
+    const [withTodos] = await client.data.Category.select(['id', 'name', 'todos[].title'])
       .where({ id: { eq: category.id } })
       .execute();
     return {
@@ -215,8 +216,8 @@ function todoInput(title: string, status: Todo['status'] = 'done', cost = 1) {
   return { user_id: signedInUserId(), title, status, cost, isPublic: false, createdAt: new Date() };
 }
 
-async function createTodos(inputs: Parameters<typeof client.data.Todo.create>[0][]) {
-  const created: Todo[] = [];
+async function createTodos(inputs: CreateInput<Todo>[]) {
+  const created: { id: string }[] = [];
   for (const input of inputs) created.push(await client.data.Todo.create(input));
   return created;
 }
