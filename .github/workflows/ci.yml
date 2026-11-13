@@ -38,6 +38,80 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  npm-runtime:
+    name: npm runtime (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: rayfin-local.exe
+            addon: rl_napi.dll
+            package: win32-x64-msvc
+            binary-rustflags: -C target-feature=+crt-static
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            binary: rayfin-local
+            addon: librl_napi.so
+            package: linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            binary: rayfin-local
+            addon: librl_napi.so
+            package: linux-arm64-gnu
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: rayfin-local
+            addon: librl_napi.dylib
+            package: darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            binary: rayfin-local
+            addon: librl_napi.dylib
+            package: darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: npm-${{ matrix.target }}
+      - name: Build the standalone executable
+        run: cargo build --release --locked -p rayfin-local --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.binary-rustflags || '' }}
+      # The Windows cdylib must not inherit the standalone executable's +crt-static.
+      - name: Build the Node-API addon
+        run: cargo build --release --locked -p rl-napi --target ${{ matrix.target }}
+      - name: Install the real SDK fixture
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: tests/fixtures/apps/basic
+      - name: Install the fixture's functions
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: tests/fixtures/apps/basic/rayfin/functions
+      - name: Assemble platform and wrapper packages
+        run: >-
+          node scripts/assemble-npm.mjs --target ${{ matrix.target }}
+          --binary target/${{ matrix.target }}/release/${{ matrix.binary }}
+          --addon target/${{ matrix.target }}/release/${{ matrix.addon }}
+      - name: Exercise installed tarballs and TypeScript exports
+        run: >-
+          node scripts/test-npm.mjs
+          --platform .artifacts/npm/rayfin-local-runtime-${{ matrix.package }}
+          --project tests/fixtures/apps/basic
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-runtime-${{ matrix.target }}
+          path: .artifacts/npm/
+          if-no-files-found: error
+
   sql-connectors:
     # Category A (SQL) connectors against a real SQL Server: crates/rl-connectors/tests/sql_server.rs
     # and sql_sdk.rs (the real SDK, from the connectors fixture's packages). The password only

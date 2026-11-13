@@ -32,6 +32,12 @@ rl-connectors = { path = "crates/rl-connectors" }
 rl-storage = { path = "crates/rl-storage" }
 rl-frontend = { path = "crates/rl-frontend" }
 rl-server = { path = "crates/rl-server" }
+rl-runtime = { path = "crates/rl-runtime" }
+rl-http = { path = "crates/rl-http" }
+napi = { version = "3.16.2", default-features = false, features = ["napi8", "tokio_rt"] }
+napi-derive = "3.7.1"
+napi-build = "2.6.0"
+rustls-platform-verifier = "0.7.1"
 
 anyhow = "1.0.104"
 thiserror = "2.0.21"

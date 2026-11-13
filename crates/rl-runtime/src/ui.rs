@@ -234,13 +234,23 @@ pub fn functions_sink() -> LineSink {
 
 fn sink_for(source: Option<LogSource>) -> LineSink {
     if events::is_json() {
+        let context = events::current();
         return Arc::new(move |label: &str, stream: Stream, line: &str| {
             let level = match stream {
                 Stream::Stdout => LogLevel::Info,
                 Stream::Stderr => LogLevel::Warn,
             };
             let source = source.unwrap_or_else(|| LogSource::of_label(label));
-            events::log(source, level, rl_node::strip_ansi(line));
+            let line = rl_node::strip_ansi(line);
+            if let Some(context) = &context {
+                context.emit(events::Event::Log(events::Log {
+                    source,
+                    level,
+                    line: line.into_owned(),
+                }));
+            } else {
+                events::log(source, level, line);
+            }
         });
     }
     Arc::new(|label: &str, _stream: Stream, line: &str| {

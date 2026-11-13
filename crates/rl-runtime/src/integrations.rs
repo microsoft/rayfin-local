@@ -76,6 +76,8 @@ pub struct ServeContext<'a> {
     /// Applies `rayfin.yml`, the entities, the connectors and the secret values now, on demand
     /// (see [`ReloadHandle::reload`]): what the control API's `POST /reload` calls.
     pub reload: ReloadHandle,
+    /// Owns a function service until startup hands it to the active slot, including on cancellation.
+    pub starting_functions: FunctionsSlot,
 }
 
 impl ServeContext<'_> {
@@ -481,8 +483,10 @@ pub async fn start_functions(
         .or(ctx.project.local_config().functions.inspect_port);
     config.sink = ui::functions_sink();
     let warned = Mutex::new(None);
-    config.on_state = Some(Arc::new(move |state: &FunctionsState| {
-        report_functions_state(state, &warned);
+    let context = events::current();
+    config.on_state = Some(Arc::new(move |state: &FunctionsState| match &context {
+        Some(context) => context.sync_scope(|| report_functions_state(state, &warned)),
+        None => report_functions_state(state, &warned),
     }));
     if let Some(missing) = still_missing_packages(functions_dir, PACKAGES_GRACE).await {
         let dir = functions_dir.display().to_string();
@@ -498,7 +502,10 @@ pub async fn start_functions(
             details: serde_json::json!({ "dir": dir }),
         }));
     }
-    let service = FunctionsService::start(config, ctx.callers(), ctx.tokens())
+    let service =
+        FunctionsService::start_with_owner(config, ctx.callers(), ctx.tokens(), |service| {
+            ctx.starting_functions.replace(Some(service));
+        })
         .await
         .with_context(|| {
             format!(
@@ -506,6 +513,7 @@ pub async fn start_functions(
                 functions_dir.display()
             )
         })?;
+    ctx.starting_functions.replace(None);
     Ok(Some(service))
 }
 
@@ -787,7 +795,7 @@ pub async fn start_frontend(
     };
     events::emit(Event::Vite(ready.clone()));
     let (stop, stopped) = oneshot::channel();
-    let supervisor = tokio::spawn(supervise_dev_server(
+    let supervisor = events::spawn(supervise_dev_server(
         server,
         stopped,
         launch,
