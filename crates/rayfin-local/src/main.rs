@@ -172,6 +172,15 @@ struct ServeArgs {
     /// Start the function host with the Node inspector (default port 9229).
     #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9229")]
     inspect: Option<u16>,
+    /// Start the function host (Node.js) on the first function call instead of at start, so an
+    /// app that calls no function runs no Node.js (default: `[functions] lazy` in
+    /// rayfin-local.toml). Also RAYFIN_LOCAL_LAZY_FUNCTIONS=1.
+    #[arg(
+        long,
+        env = "RAYFIN_LOCAL_LAZY_FUNCTIONS",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    lazy_functions: bool,
     /// Who apps that sign in automatically (`rayfinLocalDev({ autoLogin: true })`) are signed in
     /// as: developer (you), none, or `user:<USERNAME>`, created when missing (default:
     /// `[auth] sign_in_as` in rayfin-local.toml, else developer).
@@ -229,6 +238,7 @@ impl ServeArgs {
             reset: self.reset,
             seed: self.seed,
             inspect: self.inspect,
+            lazy_functions: self.lazy_functions,
             sign_in_as: self.sign_in_as,
             open_sign_in: self.open_sign_in,
             open: self.open,

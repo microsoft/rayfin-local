@@ -94,7 +94,7 @@ async fn answer(service: &FunctionsService, name: &str, request: Request) -> Ans
             ),
         );
     }
-    let host = match service.manager.host().await {
+    let host = match service.host().await {
         Ok(host) => host,
         Err(error) => return host_error(name, error, true),
     };

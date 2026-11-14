@@ -12,6 +12,11 @@ pub enum FunctionsState {
     Building,
     /// The function host runs the package; `names` are the functions the routes invoke.
     Ready { names: Vec<String> },
+    /// The package is built and the function host starts on the first invocation
+    /// ([`FunctionsConfig::lazy`]); `names` are the functions `runtimemetadata.json` describes.
+    ///
+    /// [`FunctionsConfig::lazy`]: crate::FunctionsConfig::lazy
+    Idle { names: Vec<String> },
     /// The build (`build: true`) or the loading of the package failed. `errors` are the
     /// compiler's messages, one per message; `names` are the functions a previous build still
     /// serves.

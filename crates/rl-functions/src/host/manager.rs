@@ -137,7 +137,11 @@ impl HostManager {
     /// [`HostConfig::inspect_port`] set it does so (within [`ManagerOptions::stop_grace`]) before
     /// the new host starts, which then gets the inspector's port.
     pub async fn reload(&self) -> Result<Vec<RegisteredFunction>, HostError> {
-        self.shared.clone().reload(None).await
+        self.shared
+            .clone()
+            .reload(None, false)
+            .await
+            .map(Option::unwrap_or_default)
     }
 
     /// Like [`reload`](Self::reload), with a new config (e.g. changed settings).
@@ -145,7 +149,23 @@ impl HostManager {
         &self,
         config: HostConfig,
     ) -> Result<Vec<RegisteredFunction>, HostError> {
-        self.shared.clone().reload(Some(config)).await
+        self.shared
+            .clone()
+            .reload(Some(config), false)
+            .await
+            .map(Option::unwrap_or_default)
+    }
+
+    /// Like [`reload`](Self::reload) (`config` is `None`) or [`reload_with`](Self::reload_with),
+    /// for a manager whose host starts on the first invocation: without a running host (not
+    /// started yet, between a crash and the restart, or its package failed to load) it only takes
+    /// the config and stays [`Idle`](HostStatus::Idle), answering `Ok(None)`; the next invocation
+    /// starts the host on the new config.
+    pub async fn reload_if_running(
+        &self,
+        config: Option<HostConfig>,
+    ) -> Result<Option<Vec<RegisteredFunction>>, HostError> {
+        self.shared.clone().reload(config, true).await
     }
 
     /// Stops the host and the replaced hosts still finishing invocations (in-flight invocations
@@ -187,6 +207,14 @@ impl HostManager {
     pub fn functions(&self) -> Option<Vec<RegisteredFunction>> {
         match &*self.shared.state.borrow() {
             State::Ready(host) => Some(host.functions().to_vec()),
+            _ => None,
+        }
+    }
+
+    /// The process id of the running host.
+    pub fn pid(&self) -> Option<u32> {
+        match &*self.shared.state.borrow() {
+            State::Ready(host) if host.is_alive() => host.pid(),
             _ => None,
         }
     }
@@ -334,23 +362,38 @@ impl Shared {
         }
     }
 
+    /// `if_running`: without a running host, only take the config and stay idle (`Ok(None)`).
     async fn reload(
         self: Arc<Self>,
         config: Option<HostConfig>,
-    ) -> Result<Vec<RegisteredFunction>, HostError> {
+        if_running: bool,
+    ) -> Result<Option<Vec<RegisteredFunction>>, HostError> {
         let _lifecycle = self.lifecycle.lock().await;
         if let Some(config) = config {
             *self.config.lock().unwrap_or_else(PoisonError::into_inner) = config;
         }
         let mut previous = None;
-        let reloading = self.state.send_if_modified(|state| {
-            if matches!(state, State::Stopped) {
-                return false;
+        let mut idle = false;
+        let changed = self.state.send_if_modified(|state| match state {
+            State::Stopped => false,
+            State::Idle if if_running => {
+                idle = true;
+                false
             }
-            previous = Some(std::mem::replace(state, State::Starting));
-            true
+            State::Failed(_) if if_running => {
+                idle = true;
+                *state = State::Idle;
+                true
+            }
+            _ => {
+                previous = Some(std::mem::replace(state, State::Starting));
+                true
+            }
         });
-        if !reloading {
+        if idle {
+            return Ok(None);
+        }
+        if !changed {
             return Err(HostError::Stopped);
         }
         let config = self.config();
@@ -365,7 +408,7 @@ impl Shared {
         if let Some(State::Ready(old)) = previous {
             self.drain(old).await;
         }
-        installed
+        installed.map(Some)
     }
 
     /// Stops a host replaced by a reload: it refuses new invocations once this returns (which

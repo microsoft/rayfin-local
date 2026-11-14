@@ -774,6 +774,45 @@ async fn manager_keeps_a_load_failure_until_reloaded() {
 }
 
 #[tokio::test]
+async fn manager_reload_if_running_keeps_an_idle_or_failed_manager_idle() {
+    let output = Output::default();
+    let package = package_with("throw new Error('not yet');\n");
+    let config = package_config(package.path(), &output).await;
+    let manager = HostManager::with_options(config.clone(), manager_options());
+
+    // Never started: the reload only takes the config.
+    assert!(manager.reload_if_running(None).await.unwrap().is_none());
+    assert!(matches!(manager.status(), HostStatus::Idle));
+    assert_eq!(manager.pid(), None);
+
+    // A failed load goes back to idle, and the next invocation tries the new build.
+    assert!(matches!(
+        manager.invoke(call("hello", json!({})), TIMEOUT).await,
+        Err(HostError::Load { .. })
+    ));
+    std::fs::write(package.path().join("index.js"), "export {};\n").unwrap();
+    assert!(
+        manager
+            .reload_if_running(Some(config))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(manager.status(), HostStatus::Idle));
+    assert!(manager.host().await.unwrap().functions().is_empty());
+    let pid = manager.pid().expect("a running host");
+
+    // A running host is replaced, as by `reload`.
+    assert!(manager.reload_if_running(None).await.unwrap().is_some());
+    assert_ne!(manager.pid(), Some(pid));
+    manager.stop().await;
+    assert!(matches!(
+        manager.reload_if_running(None).await,
+        Err(HostError::Stopped)
+    ));
+}
+
+#[tokio::test]
 async fn loads_the_explorer_functions() {
     let dir = explorer_functions();
     if !dir.join("dist/src/function_app.js").is_file() {

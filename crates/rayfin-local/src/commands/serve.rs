@@ -78,6 +78,8 @@ pub struct ServeOptions {
     /// `--seed`: load the seed data once the backend is up.
     pub seed: bool,
     pub inspect: Option<u16>,
+    /// `--lazy-functions`: start the function host on the first invocation.
+    pub lazy_functions: bool,
     /// `--sign-in-as`: who apps are signed in as automatically.
     pub sign_in_as: Option<rl_project::SignInAs>,
     /// `--open-sign-in`: automatic sign-in answers pages another dev server or proxy serves.

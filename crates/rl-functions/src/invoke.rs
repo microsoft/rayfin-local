@@ -102,6 +102,13 @@ pub struct FunctionsConfig {
     pub secrets: Vec<(String, String)>,
     /// Starts the Node.js inspector on `127.0.0.1:<port>`.
     pub inspect_port: Option<u16>,
+    /// Start the function host on the first invocation instead of in
+    /// [`FunctionsService::start`] (and after a rebuild, unless it runs): an app that never calls
+    /// a function never runs Node.js. Until then the functions are reported
+    /// [`FunctionsState::Idle`] with the names `runtimemetadata.json` describes.
+    ///
+    /// [`FunctionsState::Idle`]: crate::FunctionsState::Idle
+    pub lazy: bool,
     /// How long an invocation may run (408 after).
     pub invoke_timeout: Duration,
     /// Receives the output of the build (`build`), the metadata helper and the host (`fn`).
@@ -130,6 +137,7 @@ impl FunctionsConfig {
             item_id: String::new(),
             secrets: Vec::new(),
             inspect_port: None,
+            lazy: false,
             invoke_timeout: DEFAULT_INVOKE_TIMEOUT,
             sink: rl_node::default_sink(),
             on_state: None,
@@ -149,6 +157,7 @@ impl std::fmt::Debug for FunctionsConfig {
                 &self.secrets.iter().map(|(k, _)| k).collect::<Vec<_>>(),
             )
             .field("inspect_port", &self.inspect_port)
+            .field("lazy", &self.lazy)
             .field("invoke_timeout", &self.invoke_timeout)
             .finish_non_exhaustive()
     }

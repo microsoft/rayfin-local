@@ -48,12 +48,14 @@ impl ConfigChange {
         );
         change.add("name", served.display_name() != new.display_name());
         change.add("data", before.services.data != after.services.data);
-        let inspector =
-            options.inspect.is_none() && local_before.functions != local_after.functions;
+        let (functions_before, functions_after) = (&local_before.functions, &local_after.functions);
+        let local_functions = (options.inspect.is_none()
+            && functions_before.inspect_port != functions_after.inspect_port)
+            || (!options.lazy_functions && functions_before.lazy != functions_after.lazy);
         change.add(
             "functions",
             !options.no_functions
-                && (before.services.functions != after.services.functions || inspector),
+                && (before.services.functions != after.services.functions || local_functions),
         );
         change.add("storage", before.services.storage != after.services.storage);
         change.add(
@@ -237,6 +239,34 @@ mod tests {
             ..ServeOptions::default()
         };
         assert_eq!(between(as_ana, &flagged), ConfigChange::default());
+    }
+
+    #[test]
+    fn functions_settings_restart_the_functions_unless_a_flag_sets_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let served = project(dir.path(), SERVED, None);
+        let between = |toml: &str, options: &ServeOptions| {
+            ConfigChange::between(
+                &served,
+                &project(dir.path(), SERVED, Some(toml)),
+                options,
+                true,
+            )
+            .what
+        };
+        let lazy = "[functions]\nlazy = true\n";
+        assert_eq!(between(lazy, &ServeOptions::default()), ["functions"]);
+        let flagged = ServeOptions {
+            lazy_functions: true,
+            ..ServeOptions::default()
+        };
+        assert!(between(lazy, &flagged).is_empty());
+        let inspected = ServeOptions {
+            inspect: Some(9229),
+            ..ServeOptions::default()
+        };
+        assert!(between("[functions]\ninspect_port = 9230\n", &inspected).is_empty());
+        assert_eq!(between(lazy, &inspected), ["functions"]);
     }
 
     #[test]

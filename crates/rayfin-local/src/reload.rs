@@ -1178,6 +1178,7 @@ impl Reloader {
                 names: Vec::new(),
                 errors: Vec::new(),
                 message: Some("services.functions is disabled in rayfin.yml.".to_owned()),
+                host: None,
             })),
             Err(err) => ui::error_event(&err),
         }
