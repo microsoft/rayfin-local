@@ -479,8 +479,13 @@ pub async fn start_functions(
         .options
         .inspect
         .or(ctx.project.local_config().functions.inspect_port);
-    config.lazy =
+    // A debugger is attached at start, so the inspector needs the host running from the start.
+    let lazy =
         ctx.options.lazy_functions || ctx.project.local_config().functions.lazy == Some(true);
+    if lazy && config.inspect_port.is_some() {
+        tracing::info!("--inspect starts the function host at start; lazy functions is off");
+    }
+    config.lazy = lazy && config.inspect_port.is_none();
     config.sink = ui::functions_sink();
     let warned = Mutex::new(None);
     config.on_state = Some(Arc::new(move |state: &FunctionsState| {

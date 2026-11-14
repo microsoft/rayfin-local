@@ -530,7 +530,7 @@ Every command takes these options:
 | `--reset` | Start from an empty database: delete the database and stored files (keeps ports, keys and secrets). |
 | `--seed` | Replace the local data with the project's [seed data](#seed-data) once the backend is up. Users stay; with `--reset`, only the seed's are there. |
 | `--inspect[=PORT]` | Start the function host with the Node.js inspector, on port 9229 by default. |
-| `--lazy-functions` | Start the function host (Node.js) on the first function call instead of at start, so an app that calls no function runs no Node.js; the first call waits for it to load. The functions are still built, watched and listed from `runtimemetadata.json`. Default: `[functions] lazy`. Also `RAYFIN_LOCAL_LAZY_FUNCTIONS=1`. |
+| `--lazy-functions` | Start the function host (Node.js) on the first function call instead of at start, so an app that calls no function runs no Node.js; the first call waits for it to load. The functions are still built, watched and listed from `runtimemetadata.json`. Default: `[functions] lazy`. Also `RAYFIN_LOCAL_LAZY_FUNCTIONS=1`. Off with `--inspect`, whose inspector needs the host from the start. |
 | `--open` | Open the app in the browser once it is ready. |
 | `--json` | For programs that run rayfin-local: events as JSON lines on stdout instead of the human output, and a graceful stop when stdin closes. [docs/embedding.md](docs/embedding.md) is the contract. |
 

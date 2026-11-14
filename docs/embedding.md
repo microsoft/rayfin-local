@@ -25,7 +25,7 @@ Anything else bumps it.
 rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--force-schema] [--reset] [--no-functions] [--lazy-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
 
-`--lazy-functions` starts the function host (a Node.js process) on the first function call instead of before `ready`, so an app that calls no function runs no Node.js; the first call waits for the package to load (about as long as a start). Hosts that run many apps at once can save a Node.js process per app this way. Builds that don't know the flag refuse it (exit 2, usage error); `serve --help` lists it when it is supported.
+`--lazy-functions` starts the function host (a Node.js process) on the first function call instead of before `ready`, so an app that calls no function runs no Node.js; the first call waits for the package to load (about as long as a start). Hosts that run many apps at once can save a Node.js process per app this way. Builds that don't know the flag refuse it (exit 2, usage error); `serve --help` lists it when it is supported. `--inspect` turns it off: the inspector needs the host from the start.
 
 With `--json`:
 
