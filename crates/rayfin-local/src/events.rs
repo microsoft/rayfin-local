@@ -97,6 +97,16 @@ pub struct Functions {
     pub names: Vec<String>,
     pub errors: Vec<String>,
     pub message: Option<String>,
+    /// With `ready`: whether the function host runs, or starts on the first invocation
+    /// (`--lazy-functions`).
+    pub host: Option<FunctionsHost>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FunctionsHost {
+    Running,
+    Idle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -916,11 +926,12 @@ mod tests {
             names: vec!["getBacklog".into(), "askAnalyst".into()],
             errors: vec![],
             message: None,
+            host: Some(FunctionsHost::Idle),
         });
         assert_eq!(
             line(functions),
             parse(
-                r#"{"v":1,"type":"functions","time":"2026-10-30T03:12:09.512Z","state":"ready","names":["getBacklog","askAnalyst"],"errors":[],"message":null}"#
+                r#"{"v":1,"type":"functions","time":"2026-10-30T03:12:09.512Z","state":"ready","names":["getBacklog","askAnalyst"],"errors":[],"message":null,"host":"idle"}"#
             )
         );
         let vite = Event::Vite(Vite {

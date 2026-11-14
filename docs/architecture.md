@@ -354,6 +354,7 @@ With `--reuse-build`, an output folder that already holds it is served as it is,
 - **Environment.** `RAYFIN_API_URL` and `RAYFIN_PUBLISHABLE_KEY` point at rayfin-local, and `IsLocal` is `false`, so failed functions still answer HTTP 200 envelopes as deployed.
 - **Supervision.** The host restarts when the compiled output changes; requests that arrive meanwhile get 503 with `Retry-After`.
   `--inspect[=PORT]` starts it with the Node.js inspector on `127.0.0.1`.
+  `--lazy-functions` leaves it stopped until the first invocation (rebuilds don't start it either); until then the function names come from `runtimemetadata.json`.
 
 ### An invocation
 

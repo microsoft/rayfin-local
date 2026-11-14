@@ -20,6 +20,7 @@
 //!
 //! [functions]
 //! inspect_port = 9229
+//! lazy = true            # start the function host on the first function call
 //!
 //! [auth]
 //! auto_create_users = true  # a password sign-in to an unknown email creates the account
@@ -211,6 +212,9 @@ pub struct LocalConnectorsConfig {
 pub struct LocalFunctionsConfig {
     /// Start the function host with the Node inspector on this port.
     pub inspect_port: Option<u16>,
+    /// Start the function host on the first invocation instead of at start
+    /// (`--lazy-functions`).
+    pub lazy: Option<bool>,
 }
 
 impl LocalConfig {
@@ -294,7 +298,7 @@ mod tests {
             "[server]\nport = 7200\nhost = \"0.0.0.0\"\n[frontend]\nport = 5180\n[tokens]\n\
              source = \"az\"\ntenant = \"t\"\n[tokens.scopes]\nAzureAI = \"s/.default\"\n\
              [connectors]\npowerbi_base_url = \"http://127.0.0.1:9000\"\n[functions]\n\
-             inspect_port = 9230\n[auth]\nauto_create_users = false\n\
+             inspect_port = 9230\nlazy = true\n[auth]\nauto_create_users = false\n\
              sign_in_as = \"user:ana@example.com\"\n\
              [fabric]\nanonymous_data_access = false\n",
         )
@@ -309,6 +313,7 @@ mod tests {
             Some("http://127.0.0.1:9000")
         );
         assert_eq!(config.functions.inspect_port, Some(9230));
+        assert_eq!(config.functions.lazy, Some(true));
         assert_eq!(config.auth.auto_create_users, Some(false));
         assert_eq!(
             config.auth.sign_in_as,

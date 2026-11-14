@@ -37,8 +37,8 @@ use tokio::sync::oneshot;
 use crate::analysis::SourcesStamp;
 use crate::commands::serve::ServeOptions;
 use crate::events::{
-    self, EntityChanges, ErrorCode, Event, Functions, FunctionsStatus, Schema, Vite, ViteState,
-    WarningCode,
+    self, EntityChanges, ErrorCode, Event, Functions, FunctionsHost, FunctionsStatus, Schema, Vite,
+    ViteState, WarningCode,
 };
 use crate::reload::ReloadHandle;
 use crate::shutdown::StopHooks;
@@ -479,6 +479,8 @@ pub async fn start_functions(
         .options
         .inspect
         .or(ctx.project.local_config().functions.inspect_port);
+    config.lazy =
+        ctx.options.lazy_functions || ctx.project.local_config().functions.lazy == Some(true);
     config.sink = ui::functions_sink();
     let warned = Mutex::new(None);
     config.on_state = Some(Arc::new(move |state: &FunctionsState| {
@@ -519,6 +521,7 @@ fn report_functions_state(state: &FunctionsState, warned: &Mutex<Option<(String,
             names: Vec::new(),
             errors: Vec::new(),
             message: None,
+            host: None,
         },
         FunctionsState::Ready { names } => {
             *warned = None;
@@ -527,6 +530,17 @@ fn report_functions_state(state: &FunctionsState, warned: &Mutex<Option<(String,
                 names: names.clone(),
                 errors: Vec::new(),
                 message: None,
+                host: Some(FunctionsHost::Running),
+            }
+        }
+        FunctionsState::Idle { names } => {
+            *warned = None;
+            Functions {
+                state: FunctionsStatus::Ready,
+                names: names.clone(),
+                errors: Vec::new(),
+                message: None,
+                host: Some(FunctionsHost::Idle),
             }
         }
         FunctionsState::Failed {
@@ -550,6 +564,7 @@ fn report_functions_state(state: &FunctionsState, warned: &Mutex<Option<(String,
                 names: names.clone(),
                 errors: errors.clone(),
                 message: Some(message.clone()),
+                host: None,
             }
         }
     };

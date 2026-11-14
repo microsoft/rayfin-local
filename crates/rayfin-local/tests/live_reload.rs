@@ -682,6 +682,36 @@ fn new_secret_values_restart_only_the_function_host() {
 }
 
 #[test]
+fn lazy_functions_start_the_function_host_on_the_first_call() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let mut serve = Serve::start(
+        app.path(),
+        &["--no-frontend", "--port", "0", "--lazy-functions"],
+    );
+    let ready = serve.next("ready");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let key = publishable_key(&api_url);
+    let names = ready["features"]["functions"]["names"].as_array().unwrap();
+    assert!(names.contains(&json!("secretInfo")), "{ready}");
+    let idle = serve.seen_since(0, "functions");
+    let idle = idle.last().unwrap();
+    assert_eq!(idle["state"], "ready", "{idle}");
+    assert_eq!(idle["host"], "idle", "{idle}");
+    assert!(started_by(serve.child.id(), "function-host").is_empty());
+
+    let fixture_value = json!({ "matchesFixture": true, "length": 18 });
+    assert_eq!(invoke(&api_url, &key, "secretInfo"), (200, fixture_value));
+    let running = serve.next("functions");
+    assert_eq!(running["state"], "ready", "{running}");
+    assert_eq!(running["host"], "running", "{running}");
+    assert_eq!(started_by(serve.child.id(), "function-host").len(), 1);
+
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
+
+#[test]
 fn vite_starts_again_on_its_port_after_it_is_killed() {
     let Some(app) = App::copy() else {
         return;

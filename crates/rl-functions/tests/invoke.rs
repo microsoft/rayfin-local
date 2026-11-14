@@ -239,6 +239,10 @@ async fn eventually(
 async fn functions_answer_with_the_deployed_envelope() {
     let service = start(fixture_config().await, Arc::default()).await;
     let router = service.router();
+    assert!(
+        service.host_pid().is_some(),
+        "the host starts with the service"
+    );
     assert!(service.functions().contains(&"hello".to_owned()));
     assert!(!service.functions().contains(&"nightly".to_owned()));
 
@@ -653,6 +657,120 @@ async fn a_broken_build_answers_503_until_it_is_fixed() {
     )
     .await;
     assert_eq!(hello.output(), "Hello from rayfin-local!");
+    service.stop().await;
+}
+
+type States = Arc<Mutex<Vec<rl_functions::FunctionsState>>>;
+
+fn observe(config: &mut FunctionsConfig) -> States {
+    let states = States::default();
+    let seen = Arc::clone(&states);
+    config.on_state = Some(Arc::new(move |state: &rl_functions::FunctionsState| {
+        seen.lock().unwrap().push(state.clone());
+    }));
+    states
+}
+
+fn last_state(states: &States) -> Option<rl_functions::FunctionsState> {
+    states.lock().unwrap().last().cloned()
+}
+
+#[tokio::test]
+async fn lazy_functions_start_the_host_on_the_first_invocation() {
+    use rl_functions::FunctionsState::{Building, Idle, Ready};
+    let mut config = fixture_config().await;
+    config.lazy = true;
+    let states = observe(&mut config);
+    let service = start(config, Arc::default()).await;
+    let router = service.router();
+
+    // Built, described by the metadata, and no Node.js process yet.
+    assert_eq!(service.host_pid(), None);
+    let names = service.functions();
+    assert!(names.contains(&"hello".to_owned()), "{names:?}");
+    assert!(!names.contains(&"nightly".to_owned()), "{names:?}");
+    assert_eq!(*states.lock().unwrap(), [Building, Idle { names }]);
+
+    let started = Instant::now();
+    let hello = invoke(&router, "hello", json!({})).await;
+    eprintln!("first invocation: {:?}", started.elapsed());
+    assert_eq!(hello.output(), "Hello from rayfin-local!");
+    assert!(service.host_pid().is_some());
+    assert!(
+        matches!(last_state(&states), Some(Ready { names }) if names.contains(&"raw".to_owned())),
+        "{states:?}"
+    );
+    assert_eq!(invoke(&router, "counter", json!({})).await.output(), 1);
+    assert_eq!(states.lock().unwrap().len(), 3, "{states:?}");
+
+    // New secret values replace a running host, as without `lazy`.
+    service
+        .restart_host(vec![("API_KEY".into(), "rotated".into())])
+        .await;
+    assert!(service.host_pid().is_some());
+    assert_eq!(invoke(&router, "counter", json!({})).await.output(), 1);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn lazy_functions_stay_idle_through_rebuilds_and_new_secrets() {
+    use rl_functions::FunctionsState::Idle;
+    let package = PackageCopy::of(fixture());
+    let mut config = package.config().await;
+    config.lazy = true;
+    let states = observe(&mut config);
+    let service = start(config, Arc::default()).await;
+    let router = service.router();
+    assert!(matches!(last_state(&states), Some(Idle { .. })));
+
+    service
+        .restart_host(vec![("API_KEY".into(), "rotated".into())])
+        .await;
+    package.edit("src/function_app.ts", |source| {
+        source + "\nudf.func('added', async (who: string) => `hi ${who}`);\n"
+    });
+    let rebuilt = |states: &States| matches!(last_state(states), Some(Idle { names }) if names.contains(&"added".to_owned()));
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while !rebuilt(&states) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(rebuilt(&states), "{states:?}");
+    assert!(service.functions().contains(&"added".to_owned()));
+    assert_eq!(service.host_pid(), None, "a rebuild started the host");
+
+    let added = invoke(&router, "added", json!({"who": "Ada"})).await;
+    assert_eq!(added.output(), "hi Ada");
+    assert!(service.host_pid().is_some());
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn lazy_functions_answer_a_load_failure_as_without_lazy() {
+    use rl_functions::FunctionsState::{Failed, Idle};
+    let package = PackageCopy::of(fixture());
+    package.edit("src/function_app.ts", |source| {
+        source + "\nthrow new Error('cannot load');\n"
+    });
+    let mut config = package.config().await;
+    config.lazy = true;
+    let states = observe(&mut config);
+    let service = start(config, Arc::default()).await;
+    let router = service.router();
+    assert!(matches!(last_state(&states), Some(Idle { .. })));
+
+    let failed = invoke(&router, "hello", json!({})).await;
+    assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+    let (code, message) = failed.error();
+    assert_eq!(code, "FUNCTIONS_UNAVAILABLE");
+    assert!(message.contains("cannot load"), "{message}");
+    assert!(
+        matches!(
+            last_state(&states),
+            Some(Failed { build: false, message, .. }) if message.contains("cannot load")
+        ),
+        "{states:?}"
+    );
+    assert!(service.functions().is_empty());
     service.stop().await;
 }
 

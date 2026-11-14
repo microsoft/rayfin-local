@@ -1,7 +1,10 @@
 //! [`FunctionsService`]: the build, the metadata, the host and the watcher behind the routes.
 
 use std::{
-    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -19,8 +22,8 @@ use super::{FunctionsConfig, FunctionsError, routes, tokens::TokenFetches};
 use crate::{
     builder::{self, BuildConfig, BuildError, FunctionsWatch, WatchEvent, WatchMode},
     host::{
-        HostConfig, HostError, HostManager, HostStatus, ManagerOptions, RegisteredFunction,
-        local_settings_values, secrets_header,
+        FunctionHost, HostConfig, HostError, HostManager, HostStatus, ManagerOptions,
+        RegisteredFunction, local_settings_values, secrets_header,
     },
     metadata,
     state::{CompilerOutput, FunctionsState, Milestone, Reporter},
@@ -66,6 +69,9 @@ pub struct FunctionsService {
     compile_failure: Mutex<Option<(String, Vec<String>)>>,
     /// The command line of the build, for messages.
     build_command: String,
+    /// The last report was [`FunctionsState::Idle`] (or a failed build while idle): the start an
+    /// invocation causes is to be reported.
+    idle_reported: AtomicBool,
 }
 
 struct WatchTask {
@@ -92,7 +98,8 @@ impl Secrets {
 
 impl FunctionsService {
     /// Builds the functions, refreshes their metadata, starts the host (waiting until the package
-    /// is loaded) and watches the package. Fails only when the package can't be served at all
+    /// is loaded; with [`FunctionsConfig::lazy`], the first invocation starts it) and watches the
+    /// package. Fails only when the package can't be served at all
     /// (no folder, no usable `package.json` or `local.settings.json`); a failed build or load is
     /// logged and answered with 503 until a rebuild fixes it.
     pub async fn start(
@@ -168,10 +175,19 @@ impl FunctionsService {
             reporter,
             compiler,
             compile_failure: Mutex::new(None),
+            idle_reported: AtomicBool::new(false),
         });
 
         match service.unavailable() {
             Some(message) => service.report_build_failure(message, errors),
+            None if service.config.lazy => {
+                tracing::info!(
+                    "Functions built ({} functions); the function host starts on the first \
+                     invocation",
+                    service.functions().len()
+                );
+                service.report_idle();
+            }
             None => {
                 // A load failure is logged by the manager, and invocations answer it.
                 let loaded = service.manager.start().await;
@@ -209,15 +225,65 @@ impl FunctionsService {
     }
 
     /// The functions the routes can invoke (HTTP functions that accept `POST`); empty while the
-    /// host is not running.
+    /// host is not running. With [`FunctionsConfig::lazy`], those `runtimemetadata.json`
+    /// describes until the host runs (each is a `udf.func`, which accepts `POST`).
     pub fn functions(&self) -> Vec<String> {
-        self.manager
-            .functions()
-            .unwrap_or_default()
-            .iter()
-            .filter(|function| function.accepts("POST"))
-            .map(|function| function.name.clone())
-            .collect()
+        if let Some(functions) = self.manager.functions() {
+            return invocable(&functions)
+                .map(|function| function.name.clone())
+                .collect();
+        }
+        if self.waits_for_invocation() {
+            return self.described_functions();
+        }
+        Vec::new()
+    }
+
+    /// The process id of the function host (Node.js), while it runs.
+    pub fn host_pid(&self) -> Option<u32> {
+        self.manager.pid()
+    }
+
+    /// Whether the host starts on the next invocation (lazy, built, and not running or failed).
+    fn waits_for_invocation(&self) -> bool {
+        self.config.lazy
+            && self.unavailable().is_none()
+            && matches!(
+                self.manager.status(),
+                HostStatus::Idle | HostStatus::Starting
+            )
+    }
+
+    /// The functions `runtimemetadata.json` describes; empty when it can't be read.
+    fn described_functions(&self) -> Vec<String> {
+        match metadata::load(&metadata::metadata_path(&self.config.functions_dir)) {
+            Ok(metadata) => metadata.function_names().map(str::to_owned).collect(),
+            Err(error) => {
+                tracing::debug!("could not read the functions' metadata: {error}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// The running host, started if need be. With [`FunctionsConfig::lazy`], the outcome of
+    /// the start an invocation caused is reported, as [`start`](Self::start) reports it without.
+    pub(super) async fn host(&self) -> Result<Arc<FunctionHost>, HostError> {
+        let result = self.manager.host().await;
+        let settled = !matches!(
+            result,
+            Err(HostError::Starting | HostError::ShuttingDown | HostError::Stopped)
+        );
+        if settled && self.idle_reported.swap(false, Ordering::SeqCst) {
+            let loaded = result.as_ref().map(|host| host.functions().to_vec());
+            if let Ok(functions) = &loaded {
+                tracing::info!(
+                    "Function host started ({} functions)",
+                    invocable(functions).count()
+                );
+            }
+            self.report_loaded(&loaded.map_err(Clone::clone));
+        }
+        result
     }
 
     /// Stops watching (and `npm run build:watch`) and stops the host; invocations then answer
@@ -282,14 +348,35 @@ impl FunctionsService {
             }
         };
         let config = host_config(&self.config, &self.secret_values(), &self.api_url, entry);
-        let result = match config {
-            Ok(config) => self.manager.reload_with(config).await,
+        let config = match config {
+            Ok(config) => Some(config),
             Err(error) => {
                 tracing::error!(
                     "could not read the functions' local.settings.json ({error}); reloading with \
                      the previous settings"
                 );
-                self.manager.reload().await
+                None
+            }
+        };
+        let result = if self.config.lazy {
+            match self.manager.reload_if_running(config).await {
+                Ok(Some(functions)) => Ok(functions),
+                Ok(None) => {
+                    *lock(&self.unavailable) = None;
+                    tracing::info!(
+                        "Functions rebuilt; the function host starts on the next invocation"
+                    );
+                    if report {
+                        self.report_idle();
+                    }
+                    return;
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            match config {
+                Some(config) => self.manager.reload_with(config).await,
+                None => self.manager.reload().await,
             }
         };
         match &result {
@@ -312,6 +399,7 @@ impl FunctionsService {
     /// What loading the package (a start or a reload) came to; output loaded despite a failed
     /// compilation is still failed.
     fn report_loaded(&self, loaded: &Result<Vec<RegisteredFunction>, HostError>) {
+        self.idle_reported.store(false, Ordering::SeqCst);
         match loaded {
             Ok(functions) => {
                 let names = invocable(functions)
@@ -336,6 +424,23 @@ impl FunctionsService {
                 names: Vec::new(),
             }),
         }
+    }
+
+    /// Built, and the host starts on the first invocation ([`FunctionsConfig::lazy`]); output
+    /// built despite a failed compilation is still failed.
+    fn report_idle(&self) {
+        let names = self.described_functions();
+        let state = match lock(&self.compile_failure).clone() {
+            Some((message, errors)) => FunctionsState::Failed {
+                message,
+                errors,
+                build: true,
+                names,
+            },
+            None => FunctionsState::Idle { names },
+        };
+        self.idle_reported.store(true, Ordering::SeqCst);
+        self.reporter.report(state);
     }
 
     /// A failed build; the previous build's functions (if any) keep running.
@@ -364,6 +469,7 @@ impl FunctionsService {
         match self.manager.status() {
             HostStatus::Ready { functions } => self.report_loaded(&Ok(functions)),
             HostStatus::Failed(error) => self.report_loaded(&Err(error)),
+            HostStatus::Idle if self.config.lazy => self.report_idle(),
             HostStatus::Idle | HostStatus::Starting | HostStatus::Stopped => {}
         }
     }

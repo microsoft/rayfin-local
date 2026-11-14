@@ -22,8 +22,10 @@ Anything else bumps it.
 ## Starting
 
 ```sh
-rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--force-schema] [--reset] [--no-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
+rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--force-schema] [--reset] [--no-functions] [--lazy-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
+
+`--lazy-functions` starts the function host (a Node.js process) on the first function call instead of before `ready`, so an app that calls no function runs no Node.js; the first call waits for the package to load (about as long as a start). Hosts that run many apps at once can save a Node.js process per app this way. Builds that don't know the flag refuse it (exit 2, usage error); `serve --help` lists it when it is supported.
 
 With `--json`:
 
@@ -42,6 +44,7 @@ The environment configures the rest:
 | --- | --- |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the [control API](#control-api); requests must send it as a bearer token. At least 32 characters; shorter values are refused with a fatal `config-invalid` error. An empty value counts as unset. rayfin-local removes it from its environment, so the processes it starts (Vite, the function host, the app's code) don't see it. |
 | `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `--open-sign-in` ([open sign-in](#open-sign-in)); `0`, `false` or empty leave it off. |
+| `RAYFIN_LOCAL_LAZY_FUNCTIONS` | `1` or `true` acts as `--lazy-functions`; `0`, `false` or empty leave it off. Builds that don't know it ignore it. |
 | `RAYFIN_LOCAL_NODE` | The `node` executable. |
 | `RAYFIN_LOCAL_STATE_DIR` | The state folder (the database, stored files, keys, `state.json`, secrets and `serve.lock`) instead of `<project>/.rayfin-local`, for every command; `--state-dir` wins over it. Hosts that keep the project in a synced folder can keep the live state elsewhere on local disk. Paths in this page under `.rayfin-local/` are then under this folder. |
 | `RAYFIN_CONFIG_DIR` | The Rayfin CLI's config folder, for the `rayfin` token source (the account a host has signed in). |
@@ -101,10 +104,11 @@ The database was brought up to date with the model, or wasn't.
 ### `functions`
 
 ```json
-{"v":1,"type":"functions","time":"…","state":"ready","names":["getBacklog","askAnalyst"],"errors":[],"message":null}
+{"v":1,"type":"functions","time":"…","state":"ready","names":["getBacklog","askAnalyst"],"errors":[],"message":null,"host":"running"}
 ```
 
 `state` is `building`, `ready`, `failed` (with the build's `errors`, one string per compiler message, and the previous build keeps serving if there was one) or `off` (with the reason in `message`).
+With `ready`, `host` is `running` when the function host runs the package, or `idle` with `--lazy-functions` until the first call starts it (`names` are then the `udf.func` functions `runtimemetadata.json` describes). It is `null` with the other states. The call that starts the host is followed by `ready` with `host: "running"`, or by `failed` when the package doesn't load (the call answers 503 `FUNCTIONS_UNAVAILABLE` with the error, as it does without the flag); rebuilds and new secret values while it is `idle` emit `ready` with `host: "idle"` again, without starting it.
 With `failed`, `names` lists the functions that still run: those of the previous build, or of output the compiler emitted despite the errors (`tsc` does), which is loaded but stays `failed` until a build succeeds.
 `serve` starts without a `functions` event when the service is off (`--no-functions`, or `services.functions` disabled in `rayfin.yml`).
 Turning `services.functions` off while serving emits `off`; turning it on emits `building`, then `ready` or `failed`.
@@ -156,6 +160,7 @@ It comes again after each `config-changed` that applied, with the new features; 
 - `signInAs` is the [automatic sign-in](#automatic-sign-in) identity: `{"kind":"developer"}`, `{"kind":"user","username":"ana@example.com"}` or `{"kind":"none"}`.
 - `openSignIn` is `true` with [open sign-in](#open-sign-in) (`--open-sign-in`).
 - `features.data.enabled` is `false` while the data service is off, or when it was turned on while serving with a schema change that was refused.
+- `features.functions.names` are the functions the routes invoke; with `--lazy-functions`, before the first call, those `runtimemetadata.json` describes (the function host isn't running yet).
 - `connectors[].supported` is `false` for connector types rayfin-local answers with 501.
 
 ### `config-changed`

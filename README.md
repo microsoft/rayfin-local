@@ -472,6 +472,7 @@ powerbi_base_url = "https://api.powerbi.com"   # for mocks and sovereign clouds
 
 [functions]
 inspect_port = 9229     # --inspect
+lazy = true             # --lazy-functions
 
 [auth]
 auto_create_users = true   # a password sign-in to an unknown email creates the account
@@ -529,6 +530,7 @@ Every command takes these options:
 | `--reset` | Start from an empty database: delete the database and stored files (keeps ports, keys and secrets). |
 | `--seed` | Replace the local data with the project's [seed data](#seed-data) once the backend is up. Users stay; with `--reset`, only the seed's are there. |
 | `--inspect[=PORT]` | Start the function host with the Node.js inspector, on port 9229 by default. |
+| `--lazy-functions` | Start the function host (Node.js) on the first function call instead of at start, so an app that calls no function runs no Node.js; the first call waits for it to load. The functions are still built, watched and listed from `runtimemetadata.json`. Default: `[functions] lazy`. Also `RAYFIN_LOCAL_LAZY_FUNCTIONS=1`. |
 | `--open` | Open the app in the browser once it is ready. |
 | `--json` | For programs that run rayfin-local: events as JSON lines on stdout instead of the human output, and a graceful stop when stdin closes. [docs/embedding.md](docs/embedding.md) is the contract. |
 
@@ -541,6 +543,7 @@ Every command takes these options:
 | `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` | A fixed token for one audience (see [Identity and Azure tokens](#identity-and-azure-tokens)). |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the control API for programs that run rayfin-local; at least 32 characters (see [docs/embedding.md](docs/embedding.md#control-api)). |
 | `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `serve --open-sign-in`; `0`, `false` or empty leave it off. |
+| `RAYFIN_LOCAL_LAZY_FUNCTIONS` | `1` or `true` acts as `serve --lazy-functions`; `0`, `false` or empty leave it off. |
 | `RAYFIN_ENV_FILE` | The env file to read instead of `rayfin/.env`, as for the Rayfin CLI. |
 | `RUST_LOG` | Log filters, such as `rl_graphql=debug`. |
 | `NO_COLOR` | Turn off colored output. |
