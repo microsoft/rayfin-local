@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 rl-node.workspace = true
 base64.workspace = true
+# The host token source (`--token-source host`): a loopback HTTP endpoint of the app that runs
+# rayfin-local.
+reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -23,4 +27,5 @@ tracing.workspace = true
 which.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true

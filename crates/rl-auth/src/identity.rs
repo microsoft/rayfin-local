@@ -60,6 +60,15 @@ pub enum SignInAs {
     None,
 }
 
+/// A session [`AuthService::sign_in_session`] issued.
+#[derive(Debug)]
+pub struct SignInSession {
+    pub tokens: TokenResponse,
+    /// [`AuthService::session_stamp`] as the session was issued.
+    pub stamp: String,
+    pub user: User,
+}
+
 /// The state of automatic sign-in.
 #[derive(Default)]
 pub(crate) struct AutoSignIn {
@@ -130,6 +139,25 @@ impl AuthService {
             SignInAs::User(user) => self.find_or_create_user(&user).await.map(Some),
             SignInAs::None => Ok(None),
         }
+    }
+
+    /// A new session (access and refresh tokens) for the user automatic sign-in signs in as now,
+    /// with that user; `None` for nobody. For hosts, which install it in the app's page
+    /// themselves: unlike [`DEV_SESSION_TOKEN_PATH`], it needs neither the dev server's secret
+    /// nor open sign-in. The developer is who [`Self::developer_account`] says: their Entra user
+    /// when a token for it comes without a prompt, unless sign-in is open.
+    pub async fn sign_in_session(&self) -> Result<Option<SignInSession>, AuthError> {
+        let _switching = self.auto_sign_in.switching.read().await;
+        let Some(user) = self.sign_in_user().await? else {
+            return Ok(None);
+        };
+        let tokens = self.issue_session(&user).await?;
+        let stamp = self.session_stamp().await?;
+        Ok(Some(SignInSession {
+            tokens,
+            stamp,
+            user,
+        }))
     }
 
     /// Holds off a switch of identity while a sign-in as the identity is issued, so it belongs to

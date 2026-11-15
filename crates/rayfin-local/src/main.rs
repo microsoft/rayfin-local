@@ -209,6 +209,8 @@ enum TokenSourceArg {
     Az,
     /// Only the Rayfin CLI's login (`rayfin login`).
     Rayfin,
+    /// Only the app that runs rayfin-local (RAYFIN_LOCAL_TOKEN_URL and _SECRET).
+    Host,
 }
 
 impl From<TokenSourceArg> for TokenMode {
@@ -217,6 +219,7 @@ impl From<TokenSourceArg> for TokenMode {
             TokenSourceArg::Auto => TokenMode::Auto,
             TokenSourceArg::Az => TokenMode::Az,
             TokenSourceArg::Rayfin => TokenMode::Rayfin,
+            TokenSourceArg::Host => TokenMode::Host,
         }
     }
 }
@@ -266,6 +269,7 @@ const OWN_CRATES: [&str; 13] = [
 
 fn main() -> ExitCode {
     commands::serve::take_control_token();
+    tokens::take_token_secret();
     let cli = Cli::parse();
     if let Command::Version { json } = cli.command {
         return commands::version::run(json);

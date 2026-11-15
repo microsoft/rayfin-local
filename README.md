@@ -255,7 +255,7 @@ Users are local: they live in `.rayfin-local/db.sqlite`, not in Entra ID.
 
 - **Automatic sign-in.** Apps from Rayfin's templates sign themselves in during development (`rayfinLocalDev({ autoLogin: true })` in their Vite config).
   rayfin-local's dev server answers them itself, without opening any Entra sign-in, as the **sign-in identity** that `--sign-in-as` (or `[auth] sign_in_as` in `rayfin-local.toml`) sets:
-  - `developer` (the default): you, as your own Entra user when `az login` or the Rayfin CLI's login has a token without a prompt and the backend listens on loopback, else a local account, `developer@example.com`.
+  - `developer` (the default): you, as your own Entra user when `az login`, the Rayfin CLI's login or the [host token source](docs/embedding.md#host-token-source) has a token without a prompt and the backend listens on loopback, else a local account, `developer@example.com`.
   - `user:<username>`: that local user, created without a password when missing.
   - `none`: nobody, so the app offers its own sign-in, which opens the local sign-in page.
 
@@ -313,6 +313,7 @@ A function or query can therefore reach exactly what your account can reach.
 | `auto` (default) | The Azure CLI, then the Rayfin CLI's login. When Power BI turns down the Azure CLI's token for a semantic-model query, the Rayfin CLI's sign-in gets one instead (the first time, it may open a browser window to sign in or consent), and Power BI tokens come from it from then on. |
 | `az` | `az account get-access-token --scope <scope>`: run `az login` first. |
 | `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
+| `host` | The program that runs rayfin-local (a desktop host): `POST` to its loopback endpoint `RAYFIN_LOCAL_TOKEN_URL` with the secret `RAYFIN_LOCAL_TOKEN_SECRET`. Needs neither CLI. See [docs/embedding.md](docs/embedding.md#host-token-source). |
 
 `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` overrides every source for one audience: `SQL`, `STORAGE`, `FABRIC`, `AZUREAI`, `ADO` or `POWERBI`.
 It is meant for tests and CI; the token is used as given.
@@ -461,7 +462,7 @@ host = "127.0.0.1"      # --host
 port = 5175             # --frontend-port
 
 [tokens]
-source = "auto"         # --token-source: "auto" | "az" | "rayfin"
+source = "auto"         # --token-source: "auto" | "az" | "rayfin" | "host"
 tenant = "contoso.onmicrosoft.com"   # --tenant
 
 [tokens.scopes]         # audience = OAuth scope
@@ -522,7 +523,7 @@ Every command takes these options:
 | `--no-frontend` | Run only the backend. |
 | `--no-functions` | Don't build or run the functions. |
 | `--host <HOST>` | Interface to listen on. Default: `[server] host`, else `127.0.0.1`. **Anything but loopback exposes your Azure identity** to the network, through functions and connectors. With `0.0.0.0` or `::` the app's URLs still point at `localhost`, so to use the app from another device pass this machine's LAN address instead. |
-| `--token-source <auto\|az\|rayfin>` | Where Azure tokens come from. Default: `[tokens] source`, else `auto`. |
+| `--token-source <auto\|az\|rayfin\|host>` | Where Azure tokens come from. Default: `[tokens] source`, else `auto`. `host` asks the program that runs rayfin-local (`RAYFIN_LOCAL_TOKEN_URL`). |
 | `--tenant <TENANT>` | Entra tenant for tokens. Default: your login's tenant. |
 | `--sign-in-as <WHO>` | Who apps that sign in automatically sign in as: `developer` (you), `user:<username>` (a local user) or `none`. Default: `[auth] sign_in_as`, else `developer`. See [Signing in](#signing-in). |
 | `--open-sign-in` | Let pages another dev server or proxy serves sign in automatically: the backend's automatic sign-in answers any request from this machine on its own origin, and `developer` signs in as `developer@example.com`. Needs a loopback `--host`. Also `RAYFIN_LOCAL_OPEN_SIGN_IN=1`. See [Pages your own dev server serves](#pages-your-own-dev-server-serves). |
@@ -541,6 +542,7 @@ Every command takes these options:
 | `RAYFIN_LOCAL_NODE` | The `node` executable to use instead of the one on `PATH`. |
 | `RAYFIN_LOCAL_STATE_DIR` | The state folder, as `--state-dir` (relative to the current directory). |
 | `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` | A fixed token for one audience (see [Identity and Azure tokens](#identity-and-azure-tokens)). |
+| `RAYFIN_LOCAL_TOKEN_URL`, `RAYFIN_LOCAL_TOKEN_SECRET` | The endpoint (`http://` on loopback) and secret (at least 32 characters) of `--token-source host` (see [docs/embedding.md](docs/embedding.md#host-token-source)). |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the control API for programs that run rayfin-local; at least 32 characters (see [docs/embedding.md](docs/embedding.md#control-api)). |
 | `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `serve --open-sign-in`; `0`, `false` or empty leave it off. |
 | `RAYFIN_LOCAL_LAZY_FUNCTIONS` | `1` or `true` acts as `serve --lazy-functions`; `0`, `false` or empty leave it off. |

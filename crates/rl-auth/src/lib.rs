@@ -36,7 +36,7 @@ use rl_db::Db;
 pub use error::AuthError;
 pub use identity::{
     DEV_SESSION_STAMP_PATH, DEV_SESSION_TOKEN_PATH, DEV_SIGN_IN_SECRET_HEADER, LOCAL_DEVELOPER,
-    SignInAs,
+    SignInAs, SignInSession,
 };
 pub use portal::{EMBED_HOST_PATH, PORTAL_PATH};
 pub use routes::{JWKS_PATH, RUNTIME_SETTINGS_PATH};

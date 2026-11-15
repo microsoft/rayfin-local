@@ -196,6 +196,8 @@ pub enum TokenSourceKind {
     Az,
     /// Only the Rayfin CLI's login.
     Rayfin,
+    /// Only the app that runs rayfin-local (`RAYFIN_LOCAL_TOKEN_URL`).
+    Host,
 }
 
 /// `[connectors]`.

@@ -20,7 +20,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use rl_auth::{AuthError, AuthService, SignInAs, User};
+use rl_auth::{AuthError, AuthService, SignInAs, SignInSession, User};
 use rl_db::Db;
 use rl_graphql::DataApi;
 use rl_graphql::admin::{AdminError, MAX_ROWS, RowsQuery};
@@ -96,6 +96,7 @@ impl Control {
             .route("/.rayfin-local/control/users", get(users).post(add_user))
             .route("/.rayfin-local/control/users/{user}", delete(delete_user))
             .route("/.rayfin-local/control/token", post(token))
+            .route("/.rayfin-local/control/session", post(session))
             .route("/.rayfin-local/control/entities", get(entities))
             .route(
                 "/.rayfin-local/control/entities/{name}/rows",
@@ -523,6 +524,58 @@ async fn token(State(control): AppState, bytes: Bytes) -> Result<Json<Value>, Ap
         "accessToken": tokens.access_token,
         "tokenType": tokens.token_type,
         "expiresIn": tokens.expires_in,
+        "user": user_json(&user),
+    })))
+}
+
+#[derive(Default, Deserialize)]
+struct SessionRequest {}
+
+/// A session for the identity automatic sign-in signs in as, for hosts that install it in the
+/// app's page themselves (`--static`, no rayfin-local dev server): what the dev server's
+/// `GET /.rayfin-local/dev/session-token` answers, plus the session stamp and the user.
+async fn session(State(control): AppState, bytes: Bytes) -> Result<Json<Value>, ApiError> {
+    let SessionRequest {} = body(&bytes)?;
+    if control.live.status().is_none() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "starting",
+            "rayfin-local is still starting.",
+        )
+        .hint("Ask again after the `ready` event."));
+    }
+    if !control.auth.settings().enabled {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "auth-disabled",
+            "Sign-in is turned off for this app.",
+        )
+        .hint("services.auth.enabled is false in rayfin/rayfin.yml."));
+    }
+    let Some(session) = control.auth.sign_in_session().await? else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "identity-none",
+            "Automatic sign-in is off: the identity is `none`.",
+        )
+        .hint("Set the identity with PUT /identity, or sign in with the app's own sign-in."));
+    };
+    let SignInSession {
+        tokens,
+        stamp,
+        user,
+    } = session;
+    tracing::debug!(
+        developer = user.is_developer(),
+        "issued a session for the host"
+    );
+    Ok(Json(json!({
+        "accessToken": tokens.access_token,
+        "tokenType": tokens.token_type,
+        "expiresIn": tokens.expires_in,
+        "refreshToken": tokens.refresh_token,
+        "scope": tokens.scope,
+        "stamp": stamp,
         "user": user_json(&user),
     })))
 }

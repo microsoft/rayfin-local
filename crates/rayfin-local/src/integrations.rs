@@ -123,7 +123,8 @@ pub async fn apply_schema(db: &Db, model: &AppModel, force: bool) -> anyhow::Res
 }
 
 /// The token broker: `--token-source`/`--tenant`, else `[tokens]` in `rayfin-local.toml`.
-/// Without `node`, only the Azure CLI (and env overrides) are used.
+/// Without `node`, only the Azure CLI (and env overrides) are used. The `host` source needs
+/// `RAYFIN_LOCAL_TOKEN_URL` and `RAYFIN_LOCAL_TOKEN_SECRET` ([`tokens::host_token_config`]).
 pub fn token_broker(
     project: &Project,
     state: &LocalState,
@@ -132,11 +133,15 @@ pub fn token_broker(
     tenant: Option<String>,
 ) -> anyhow::Result<TokenBroker> {
     let tokens = &project.local_config().tokens;
-    let mode = mode.or(tokens.source.map(token_mode)).unwrap_or_default();
+    let mode = token_source(project, mode);
     let tenant = tenant
         .or_else(|| tokens.tenant.clone())
         .map(|tenant| tenant.trim().to_owned())
         .filter(|tenant| !tenant.is_empty());
+    let host = match mode {
+        TokenMode::Host => Some(tokens::host_token_config()?),
+        _ => None,
+    };
     Ok(TokenBroker::new(TokenBrokerConfig {
         mode,
         tenant,
@@ -146,8 +151,15 @@ pub fn token_broker(
             project_root: project.root().to_path_buf(),
             cache_dir: state.cache_dir(),
         }),
+        host,
         ..Default::default()
     }))
+}
+
+/// `--token-source`, else `[tokens] source`, else auto.
+pub fn token_source(project: &Project, mode: Option<TokenMode>) -> TokenMode {
+    mode.or(project.local_config().tokens.source.map(token_mode))
+        .unwrap_or_default()
 }
 
 fn token_mode(kind: TokenSourceKind) -> TokenMode {
@@ -155,6 +167,7 @@ fn token_mode(kind: TokenSourceKind) -> TokenMode {
         TokenSourceKind::Auto => TokenMode::Auto,
         TokenSourceKind::Az => TokenMode::Az,
         TokenSourceKind::Rayfin => TokenMode::Rayfin,
+        TokenSourceKind::Host => TokenMode::Host,
     }
 }
 
