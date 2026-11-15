@@ -190,6 +190,11 @@ extends:
                   $ErrorActionPreference = 'Stop'
                   $binary = Join-Path $env:BUILD_SOURCESDIRECTORY "target/$env:RUST_TARGET/release/rayfin-local.exe"
                   $signature = Get-AuthenticodeSignature -LiteralPath $binary
+                  Write-Host "Authenticode status: $($signature.Status)"
+                  if ($null -ne $signature.SignerCertificate) {
+                    Write-Host "Signer subject: $($signature.SignerCertificate.Subject)"
+                    Write-Host "Signer thumbprint: $($signature.SignerCertificate.Thumbprint)"
+                  }
                   if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
                     throw "Windows executable signature verification failed: $($signature.Status)."
                   }
@@ -197,7 +202,7 @@ extends:
                     [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
                   )
                   if ($signer -cne 'Microsoft Corporation') {
-                    throw 'Windows executable must be signed by Microsoft Corporation.'
+                    throw "Windows executable must be signed by Microsoft Corporation; observed signer: $signer."
                   }
                   if ($null -eq $signature.TimeStamperCertificate) {
                     throw 'Windows executable must have a trusted timestamp.'
