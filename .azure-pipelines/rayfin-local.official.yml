@@ -201,8 +201,8 @@ extends:
                   $signer = $signature.SignerCertificate.GetNameInfo(
                     [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
                   )
-                  if ($signer -cne 'Microsoft Corporation') {
-                    throw "Windows executable must be signed by Microsoft Corporation; observed signer: $signer."
+                  if ($signer -cne 'Microsoft 3rd Party Application Component') {
+                    throw "Windows executable must use the CP-231522 publisher Microsoft 3rd Party Application Component; observed signer: $signer."
                   }
                   if ($null -eq $signature.TimeStamperCertificate) {
                     throw 'Windows executable must have a trusted timestamp.'

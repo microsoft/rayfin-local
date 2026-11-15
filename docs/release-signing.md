@@ -21,8 +21,15 @@ build. It checks the binary's version against Cargo metadata; a tag run must use
 `rayfin-local.exe` using the owner-approved OSS/component keycode `CP-231522`.
 The operation requests SHA-256 Authenticode signing, an RFC 3161 SHA-256 timestamp,
 and ESRP signature verification. The job then independently requires a valid
-Authenticode signature from Microsoft Corporation and a timestamp before
+Authenticode signature from Microsoft 3rd Party Application Component and a timestamp before
 executing the binary's version check or recording its hash.
+
+The expected publisher follows the
+[Windows signing-key guidance](https://eng.ms/docs/cloud-ai-platform/ciso-organization/m365-security-engineering/security-services/helios/microsoft-dciso-security-requirements/user-stories/code-security/001)
+for `CP-231522`; the first signing run succeeded at ESRP but failed locally because
+the initial publisher check incorrectly expected the first-party publisher
+Microsoft Corporation. Keep the exact OSS/component publisher check rather than
+accepting any trusted signer or changing the approved keycode.
 
 The official job generates a checkout-local `.cargo/config.toml` that replaces
 crates.io with the existing AppDev `rayfin-official` Azure Artifacts Cargo feed.
