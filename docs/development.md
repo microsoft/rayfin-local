@@ -183,8 +183,8 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 ## Releasing
 
-The manual-only [official ADO pipeline](release-signing.md) is a Windows
-build-validation pilot for resource approval before ESRP signing is enabled.
+The manual-only [official ADO pipeline](release-signing.md) builds and signs the
+Windows binary through ESRP, then verifies its signature.
 It publishes metadata only and does not replace or gate the GitHub release
 workflow below.
 

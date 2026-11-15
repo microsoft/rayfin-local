@@ -49,8 +49,18 @@ The [unsigned validation run](https://dev.azure.com/powerbi/AppDev/_build/result
 succeeded for commit `e2aba0e69627faf8cfdd2be8aa83ec4e71650f27`, including the
 workspace tests, release build, and official security checks. Its historical
 metadata correctly records `signed: false`. Owner approval for client reuse and
-`CP-231522` was confirmed for the next signing phase; that approval is separate
-from a successful signing run.
+`CP-231522` was confirmed separately for the signing phase.
+
+The [signed validation run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21422341&view=results)
+succeeded for commit `bc94d0e25d7fcaaaffb4403123290dc0386db15b`.
+ESRP signing, independent Windows signature/timestamp/version verification, and
+the official security checks all passed.
+The downloaded metadata records version `0.2.8`, `signed: true`,
+`signingKeyCode: CP-231522`, the expected OSS/component publisher, and
+`distribution: none`.
+Its signed executable SHA-256 is
+`ce22596eb0bedfdd059cae7f994f22aaabf51608dadba3f2117f031796949545`.
+The artifact contains only validation and SBOM/provenance metadata, not the executable.
 
 ## Pipeline configuration and resource approvals
 
@@ -114,8 +124,9 @@ Pool role permissions and pipeline resource authorization are separate. Check
 [AppDev agent pools](https://dev.azure.com/powerbi/AppDev/_settings/agentqueues)
 under `1ES-AppDev` -> Security and Pipeline permissions. The Fabricator pilot
 initially encountered a missing pool **Use** permission. The initial rayfin-local
-validation has since succeeded, but signing resource authorization and a real
-signing run must be verified separately.
+validation and the signed validation linked above have since succeeded.
+Any future resource or identity changes still require scoped authorization and
+a real signing run.
 
 Suggested approval-request text:
 
