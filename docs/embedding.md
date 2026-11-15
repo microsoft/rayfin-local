@@ -22,8 +22,10 @@ Anything else bumps it.
 ## Starting
 
 ```sh
-rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--force-schema] [--reset] [--no-functions] [--lazy-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
+rayfin-local serve --json -C <project> [--state-dir <dir>] [--sign-in-as developer|none|user:<username>] [--open-sign-in] [--token-source host] [--force-schema] [--reset] [--no-functions] [--lazy-functions] [--static [--reuse-build]] [--port N] [--frontend-port N]
 ```
+
+`--token-source host` gets the user's tokens from the host itself instead of the Azure CLI or the Rayfin CLI ([host token source](#host-token-source)). Builds that don't know it refuse it (exit 2, usage error).
 
 `--lazy-functions` starts the function host (a Node.js process) on the first function call instead of before `ready`, so an app that calls no function runs no Node.js; the first call waits for the package to load (about as long as a start). Hosts that run many apps at once can save a Node.js process per app this way. Builds that don't know the flag refuse it (exit 2, usage error); `serve --help` lists it when it is supported. `--inspect` turns it off: the inspector needs the host from the start.
 
@@ -43,6 +45,8 @@ The environment configures the rest:
 | Variable | Effect |
 | --- | --- |
 | `RAYFIN_LOCAL_CONTROL_TOKEN` | Turns on the [control API](#control-api); requests must send it as a bearer token. At least 32 characters; shorter values are refused with a fatal `config-invalid` error. An empty value counts as unset. rayfin-local removes it from its environment, so the processes it starts (Vite, the function host, the app's code) don't see it. |
+| `RAYFIN_LOCAL_TOKEN_URL` | With `--token-source host`: where the [host token source](#host-token-source) asks the host for tokens, an `http://` URL on loopback (`http://127.0.0.1:<port>/…`, `http://[::1]:<port>/…` or `http://localhost:<port>/…`). Anything else, or a missing value, is a fatal `config-invalid` error. Ignored with other token sources. |
+| `RAYFIN_LOCAL_TOKEN_SECRET` | With `--token-source host`: the secret sent to `RAYFIN_LOCAL_TOKEN_URL` as a bearer token. At least 32 characters; shorter or missing values are a fatal `config-invalid` error. rayfin-local removes it from its environment, as `RAYFIN_LOCAL_CONTROL_TOKEN`. |
 | `RAYFIN_LOCAL_OPEN_SIGN_IN` | `1` or `true` acts as `--open-sign-in` ([open sign-in](#open-sign-in)); `0`, `false` or empty leave it off. |
 | `RAYFIN_LOCAL_LAZY_FUNCTIONS` | `1` or `true` acts as `--lazy-functions`; `0`, `false` or empty leave it off. Builds that don't know it ignore it. |
 | `RAYFIN_LOCAL_NODE` | The `node` executable. |
@@ -246,13 +250,13 @@ Under rayfin-local, the dev server answers that route itself, ahead of `rayfinLo
 
 | Identity | `--sign-in-as` | Signs the app in as |
 | --- | --- | --- |
-| `developer` (default) | `developer` | You: your Entra identity from the Azure CLI or the Rayfin CLI's cached sign-in when a token for it comes without a prompt and the backend listens on loopback, else a local account, `developer@example.com`. |
+| `developer` (default) | `developer` | You: your Entra identity from the Azure CLI, the Rayfin CLI's cached sign-in or the [host](#host-token-source) when a token for it comes without a prompt and the backend listens on loopback, else a local account, `developer@example.com`. |
 | `user` | `user:<username>` | That local user (created without a password when missing). |
 | `none` | `none` | Nobody: the route answers 401 `{"error":"Automatic sign-in is off.","hint":"Use the app's sign-in to sign in."}`. |
 
 `[auth] sign_in_as` in `rayfin-local.toml` sets the identity too (`"developer"`, `"none"` or `"user:<username>"`); `--sign-in-as` wins.
 Changing it while `serve` runs switches the identity (a `config-changed` event with `auth` in `what`), unless `--sign-in-as` was given; other live changes keep the identity.
-When `developer` finds no Entra identity, it asks again after five minutes, or at once when the identity is set again (`PUT /identity`), for example once the developer signed in to Azure.
+When `developer` finds no Entra identity, it asks again after five minutes, or at once when the identity is set again (`PUT /identity`), for example once the developer signed in to Azure or the host's token endpoint can answer.
 It then signs in as the local account without a warning: an info `log` line says "Signing in as the local developer account; sign in with `az login` to preview as yourself", once until the Entra identity is found.
 The answer is a session like any other, in the shape `fetchRayfinLocalSessionToken()` expects: `{"accessToken","tokenType","expiresIn","refreshToken","scope"}`.
 Failures are `{"error","hint"}`, which the page shows: 403 for requests from other machines or other origins, 404 when the app's auth is off (`services.auth.enabled: false`), 500 when signing in failed.
@@ -275,12 +279,28 @@ rayfin-local serve --no-frontend --open-sign-in --host 0.0.0.0 # fatal config-in
 - `GET /.rayfin-local/dev/session-token` and `GET /.rayfin-local/dev/session-stamp` answer without the run's secret.
   The other checks stay: loopback peers only, no `Origin` other than the backend's own (call it same-origin, or through a proxy that keeps the `Host`), and the backend's `Host` check.
   The answer is the session described above, access and refresh tokens; the page installs it with `signInWithBrokeredToken()`.
-- `developer` signs in as `developer@example.com`, never as the developer's Entra user (also for the sign-in page and `POST /token`); `user` and `none` are unchanged.
+- `developer` signs in as `developer@example.com`, never as the developer's Entra user (also for the sign-in page, `POST /token` and `POST /session`); `user` and `none` are unchanged.
 - `serve` refuses to start unless it listens on a loopback address (a fatal `config-invalid` error with `details.host`), then emits an `open-sign-in` warning, and `ready` has `openSignIn: true`.
 - It works with and without `--no-frontend`; rayfin-local's Vite keeps working as before.
 - Without rayfin-local's Vite, nothing removes a stale stored session ([stale sessions](#stale-sessions)): pages should ask again after a 401.
 - "Loopback" is every process on this machine, and anything port forwarding makes look local, as for rayfin-local's own dev server route. Functions' `ctx.Tokens` and connectors still use the developer's Azure sign-in.
 - `rayfin-local.toml` can't turn it on, so a cloned project can't.
+
+### Sessions for hosts
+
+A host that serves the app's build (`--static`) in its own window has no rayfin-local dev server to sign the page in, and needs no open sign-in: it asks the [control API](#control-api) for the session, `POST /session`, and installs it in the page itself (`signInWithBrokeredToken()`), with the stamp under `rayfin-local:session-stamp`.
+
+```sh
+RAYFIN_LOCAL_CONTROL_TOKEN=… RAYFIN_LOCAL_TOKEN_URL=http://127.0.0.1:47123/token RAYFIN_LOCAL_TOKEN_SECRET=… \
+  rayfin-local serve --json --static --token-source host
+curl -X POST -H "Authorization: Bearer $RAYFIN_LOCAL_CONTROL_TOKEN" -d "{}" \
+  http://localhost:7171/.rayfin-local/control/session   # {"accessToken",…,"refreshToken",…,"stamp","user"}
+```
+
+- The session is the one the dev server's route gives, for the same sign-in identity; `developer` is the developer's Entra user as described above (with `--token-source host`, the host's user), not `developer@example.com`, unless `--open-sign-in` is on.
+- Only the holder of the control token gets it: loopback peers without `Origin`, as for every control route.
+- After `PUT /identity` or `POST /data/reset` the session is signed out and the stamp changes: ask again and replace both.
+- Builds without the route answer 404 without an `error.code` of `auth-disabled`; `serve --help` lists `host` under `--token-source` when both are supported.
 
 ### Stale sessions
 
@@ -301,7 +321,7 @@ With `RAYFIN_LOCAL_CONTROL_TOKEN` set, the backend serves `{apiUrl}/.rayfin-loca
 - Requests with an `Origin` header (from a browser) get 403, and CORS never allows these routes.
   They need no publishable key.
 - Bodies are JSON; a route that takes one also takes an empty body, as `{}`.
-  Errors are `{"error":{"code","message","hint"}}` with a 4xx or 5xx status; `code` is stable, and is one of `unauthorized` (401), `forbidden` (403), `invalid-request` (400), `invalid-order-by` (400), `user-not-found` (404), `entity-not-found` (404), `folder-not-found` (404), `file-not-found` (404), `seed-not-found` (404), `user-exists` (409), `rows-referenced` (409), `config-invalid` (422), `analysis-failed` (422), `seed-invalid` (422), `internal` (500), `starting` (503) and `stopping` (503).
+  Errors are `{"error":{"code","message","hint"}}` with a 4xx or 5xx status; `code` is stable, and is one of `unauthorized` (401), `forbidden` (403), `invalid-request` (400), `invalid-order-by` (400), `user-not-found` (404), `auth-disabled` (404), `entity-not-found` (404), `folder-not-found` (404), `file-not-found` (404), `seed-not-found` (404), `user-exists` (409), `identity-none` (409), `rows-referenced` (409), `config-invalid` (422), `analysis-failed` (422), `seed-invalid` (422), `internal` (500), `starting` (503) and `stopping` (503).
 - Without the variable, these routes answer 404.
 - Live reload keeps them: they answer, with the same token, after every change it applies.
 
@@ -314,6 +334,7 @@ With `RAYFIN_LOCAL_CONTROL_TOKEN` set, the backend serves `{apiUrl}/.rayfin-loca
 | `POST /users` | `{"username":"ana@example.com","password":"…"}` (`password` optional: without one the user can only be signed in by rayfin-local: automatic sign-in and `POST /token`) | `user`, 201. 409 `user-exists` when the username exists (usernames are unique without regard to case). |
 | `DELETE /users/{username or id}` | | 204. Signs out the user's sessions. 404 `user-not-found`. |
 | `POST /token` | `{"user":"<username or id>","create":false}`, or `{"user":null}` (or no body) for the developer identity | `{"accessToken","tokenType":"Bearer","expiresIn","user":user}`: an access token for calls a host makes as that user (`create: true` creates a missing user, without a password). It has no refresh token; changing the identity or deleting the user ends it. |
+| `POST /session` | `{}` (or no body) | `{"accessToken","tokenType":"Bearer","expiresIn","refreshToken","scope","stamp","user":user}`: a new session (access and refresh tokens) for the sign-in identity, as `GET /.rayfin-local/dev/session-token` gives the dev server, with the stamp of the backend's sessions (`<appId>:<sessionEpoch>`, as [stale sessions](#stale-sessions)) and the [user](#users) it signs in. For [hosts that sign the app's page in themselves](#sessions-for-hosts). `developer` is the developer's Entra user when a token for it comes without a prompt (also without `--open-sign-in`, which makes it `developer@example.com`). 404 `auth-disabled` when the app's auth is off (`services.auth.enabled: false`), 409 `identity-none` when the identity is `none`, 503 `starting` before `ready`. |
 | `GET /entities` | | `{"entities":[{"name":"Note","rows":12}, …]}`, in the model's order; empty when `services.data` is off. |
 | `GET /entities/{name}/rows?offset=0&limit=50&orderBy=<field>&desc=false` | | `{"columns":[{"name","type","key":bool}],"rows":[{…}],"total":12}`. Every row, regardless of permissions; values formatted as the data API formats them. `columns` are the entity's fields with their GraphQL type (`UUID`, `String`, `Int`, `Decimal`, `Boolean` or `DateTime`); `key` marks the primary key. Rows are ordered by `orderBy`, then by the primary key. `limit` is 1 to 500 (default 50). 400 for other values or an unknown `orderBy`; 404 `entity-not-found`. |
 | `DELETE /entities/{name}/rows` | | `{"deleted":12}`. 409 `rows-referenced` when other entities' rows still refer to them; the message says which, and how many. |
@@ -341,6 +362,32 @@ A <a id="seed-problems"></a>**problem** with seed data is `{"file","row","field"
 - `row` is a JSON array's item (from 1) or a CSV file's line; `null` for a problem with a whole file.
 - `field` is the field at fault, or `null`.
 - `message` says what is wrong, as a sentence.
+
+## Host token source
+
+A host that signs the user in itself (a desktop app with the operating system's account broker, for example) can hand rayfin-local the user's tokens, so it needs neither the Azure CLI nor the Rayfin CLI:
+`serve --token-source host` (or `[tokens] source = "host"` in `rayfin-local.toml`) with `RAYFIN_LOCAL_TOKEN_URL` and `RAYFIN_LOCAL_TOKEN_SECRET` set.
+Every token then comes from the host: functions' `ctx.Tokens`, connectors, "Continue as", and the `developer` identity of [automatic sign-in](#automatic-sign-in).
+`RAYFIN_LOCAL_TOKEN_<AUDIENCE>` still wins for its audience.
+
+For each scope it needs a token for, rayfin-local asks:
+
+```http
+POST <RAYFIN_LOCAL_TOKEN_URL>
+Authorization: Bearer <RAYFIN_LOCAL_TOKEN_SECRET>
+Content-Type: application/json
+
+{"scope":"https://analysis.windows.net/powerbi/api/.default","tenant":null,"silent":true}
+```
+
+- `scope` is one OAuth scope (an audience's, or its `[tokens.scopes]` override); `tenant` is `--tenant` or `[tokens] tenant`, else `null`.
+- `silent` is `true` when the token must come without any prompt (the `developer` identity); the host should then answer only from its cache or a silent refresh. With `false` it may prompt, or refuse to.
+- The host answers 200 `{"accessToken":"<jwt>","expiresOn":<seconds since the epoch>}`, or a 4xx or 5xx `{"error":"<code>","message":"<text>"}`; `interaction_required` (the user must sign in) and `unavailable` are the codes to use.
+  Without `expiresOn`, the token's `exp` claim counts, else five minutes.
+- A refusal, a timeout (10 seconds) or an unreachable endpoint is a token that can't be had, as when the Azure CLI isn't signed in: `developer` signs in as `developer@example.com` and asks again after five minutes or a `PUT /identity`, and functions and connectors fail with an `azure-sign-in` warning.
+- Tokens are cached in memory per scope and asked for again when they have less than five minutes left.
+  Neither the tokens nor the secret are logged.
+- The endpoint must be an `http://` URL on loopback, so that the secret and the tokens never leave the machine; the host should check the bearer secret and answer only it.
 
 ## Calling the app's backend as a user
 

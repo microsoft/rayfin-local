@@ -57,21 +57,28 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with(reload: Arc<dyn ReloadTrigger>) -> Harness {
+    harness_from(reload, AuthSettings::new(APP_ID), |auth| auth).await
+}
+
+const APP_ID: &str = "6c6f6361-6c00-4000-8000-0000000000c0";
+
+/// A harness whose auth service has `settings`, then what `configure` adds.
+async fn harness_from(
+    reload: Arc<dyn ReloadTrigger>,
+    settings: AuthSettings,
+    configure: impl FnOnce(AuthService) -> AuthService,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db.sqlite")).unwrap();
     let analysis = include_str!("../../../rl-model/tests/fixtures/basic.analysis.json");
     let model =
         Arc::new(AppModel::from_analysis(&serde_json::from_str(analysis).unwrap()).unwrap());
     rl_db::apply(&db, &model, false).await.unwrap();
-    let auth = Arc::new(
-        AuthService::new(
-            db.clone(),
-            dir.path().join("keys"),
-            AuthSettings::new("6c6f6361-6c00-4000-8000-0000000000c0"),
-        )
-        .await
-        .unwrap(),
-    );
+    let auth = Arc::new(configure(
+        AuthService::new(db.clone(), dir.path().join("keys"), settings)
+            .await
+            .unwrap(),
+    ));
     let callers: Arc<dyn CallerResolver> = auth.clone();
     let data = DataApi::new(
         db.clone(),
@@ -465,6 +472,257 @@ async fn tokens_act_as_the_developer_or_a_user() {
     let carol = h.call(Method::POST, "/token", Some(created)).await;
     assert_eq!(carol.body["user"]["username"], "carol");
     assert_eq!(user_of(&carol), carol.body["user"]["id"]);
+}
+
+/// The `ready` event, after which `POST /session` answers.
+fn record_ready(live: &LiveState) {
+    live.record(&json!({
+        "v": 1, "type": "ready", "time": "2026-10-30T03:12:09.512Z",
+        "apiUrl": "http://localhost:7171", "signInAs": { "kind": "developer" },
+    }));
+}
+
+#[tokio::test]
+async fn a_host_gets_a_session_for_the_identity_with_its_stamp() {
+    let h = harness().await;
+    let starting = h.call(Method::POST, "/session", Some(json!({}))).await;
+    assert_eq!(starting.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(code(&starting), "starting");
+    record_ready(&h.live);
+
+    for (sender, status) in [
+        (
+            Sender {
+                token: None,
+                ..HOST
+            },
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Sender {
+                origin: Some("http://localhost:7171"),
+                ..HOST
+            },
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Sender {
+                peer: Some([10, 0, 0, 2]),
+                ..HOST
+            },
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let answer = h.call_as(&sender, Method::POST, "/session", None).await;
+        assert_eq!(answer.status, status, "{}", answer.body);
+        assert!(answer.body.get("accessToken").is_none());
+    }
+
+    let answer = h.call(Method::POST, "/session", Some(json!({}))).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.headers[header::CACHE_CONTROL], "no-store");
+    let keys: Vec<&str> = answer
+        .body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "accessToken",
+            "tokenType",
+            "expiresIn",
+            "refreshToken",
+            "scope",
+            "stamp",
+            "user"
+        ]
+    );
+    assert_eq!(answer.body["tokenType"], "Bearer");
+    assert!(answer.body["refreshToken"].is_string());
+    assert_eq!(answer.body["stamp"], h.auth.session_stamp().await.unwrap());
+    assert!(
+        answer.body["stamp"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{APP_ID}:"))
+    );
+    let user = &answer.body["user"];
+    assert_eq!(user["username"], rl_auth::LOCAL_DEVELOPER);
+    assert_eq!(user["developer"], true);
+    let session = h
+        .auth
+        .resolve(answer.body["accessToken"].as_str())
+        .unwrap()
+        .session
+        .unwrap();
+    assert_eq!(session.user_id, user["id"]);
+    let identity = h.call(Method::GET, "/identity", None).await;
+    assert_eq!(identity.body["user"], *user);
+    // Without a body too.
+    let again = h.call(Method::POST, "/session", None).await;
+    assert_eq!(again.body["user"]["id"], user["id"]);
+
+    let ana = json!({ "kind": "user", "user": "ana@example.com", "create": true });
+    h.call(Method::PUT, "/identity", Some(ana)).await;
+    let as_ana = h.call(Method::POST, "/session", None).await;
+    assert_eq!(as_ana.body["user"]["username"], "ana@example.com");
+    assert_ne!(as_ana.body["stamp"], answer.body["stamp"], "a new epoch");
+    h.call(Method::PUT, "/identity", Some(json!({ "kind": "none" })))
+        .await;
+    let nobody = h.call(Method::POST, "/session", None).await;
+    assert_eq!(nobody.status, StatusCode::CONFLICT);
+    assert_eq!(code(&nobody), "identity-none");
+    let wrong = h.call(Method::POST, "/session", Some(json!("x"))).await;
+    assert_eq!(code(&wrong), "invalid-request");
+
+    let mut off = AuthSettings::new(APP_ID);
+    off.enabled = false;
+    let h = harness_from(Arc::new(FakeReload::default()), off, |auth| auth).await;
+    record_ready(&h.live);
+    let answer = h.call(Method::POST, "/session", None).await;
+    assert_eq!(answer.status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&answer), "auth-disabled");
+}
+
+/// A fake host token endpoint (`--token-source host`): refuses until `online`, then answers a
+/// Power BI token of Ada's; keeps the requests' bodies.
+struct FakeTokenHost {
+    url: String,
+    online: Arc<std::sync::atomic::AtomicBool>,
+    seen: Arc<Mutex<Vec<Value>>>,
+}
+
+const HOST_SECRET: &str = "the-host's-token-secret-of-32-characters-or-more";
+
+async fn fake_token_host() -> FakeTokenHost {
+    use base64::Engine as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let online = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let encode = |value: Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string().as_bytes())
+    };
+    let exp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let jwt = format!(
+        "{}.{}.signature",
+        encode(json!({ "alg": "RS256", "typ": "JWT" })),
+        encode(json!({
+            "aud": "https://analysis.windows.net/powerbi/api",
+            "iss": "https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/",
+            "exp": exp, "name": "Ada Lovelace", "scp": "user_impersonation",
+            "oid": "00000000-0000-4000-8000-00000000ada0",
+            "tid": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+            "upn": "ada@contoso.com",
+        }))
+    );
+    let router = Router::new().route(
+        "/token",
+        post({
+            let (online, seen) = (Arc::clone(&online), Arc::clone(&seen));
+            move |headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                let authorized = headers
+                    .get(header::AUTHORIZATION)
+                    .is_some_and(|value| *value == format!("Bearer {HOST_SECRET}"));
+                seen.lock().unwrap().push(body);
+                if !authorized {
+                    return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "denied" })));
+                }
+                if !online.load(Ordering::SeqCst) {
+                    let refused = json!({ "error": "interaction_required", "message": "Offline." });
+                    return (StatusCode::BAD_REQUEST, Json(refused));
+                }
+                let granted = json!({ "accessToken": jwt, "expiresOn": exp });
+                (StatusCode::OK, Json(granted))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    FakeTokenHost {
+        url: format!("http://127.0.0.1:{port}/token"),
+        online,
+        seen,
+    }
+}
+
+/// An auth service configured as `serve` configures it on loopback, with `fake`'s tokens.
+async fn harness_with_host_tokens(fake: &FakeTokenHost, open_sign_in: bool) -> Harness {
+    let broker = rl_tokens::TokenBroker::new(rl_tokens::TokenBrokerConfig {
+        mode: rl_tokens::TokenMode::Host,
+        host: Some(rl_tokens::HostTokenConfig::new(&fake.url, HOST_SECRET).unwrap()),
+        ..Default::default()
+    });
+    let mut settings = AuthSettings::new(APP_ID);
+    settings.entra_signin.enabled = true;
+    let h = harness_from(Arc::new(FakeReload::default()), settings, |auth| {
+        let auth = auth
+            .with_entra(Arc::new(broker))
+            .with_dev_sign_in_secret("the-dev-server's-secret");
+        if open_sign_in {
+            auth.with_open_dev_sign_in()
+        } else {
+            auth
+        }
+    })
+    .await;
+    record_ready(&h.live);
+    h
+}
+
+#[tokio::test]
+async fn the_developer_is_the_entra_user_the_host_token_source_names() {
+    let fake = fake_token_host().await;
+    let h = harness_with_host_tokens(&fake, false).await;
+
+    // The host has no token without a prompt yet: the local developer account.
+    let local = h.call(Method::POST, "/session", None).await;
+    assert_eq!(local.status, StatusCode::OK, "{}", local.body);
+    assert_eq!(local.body["user"]["username"], rl_auth::LOCAL_DEVELOPER);
+    assert_eq!(local.body["user"]["signIn"], json!([]));
+    assert_eq!(
+        *fake.seen.lock().unwrap(),
+        [json!({
+            "scope": "https://analysis.windows.net/powerbi/api/.default",
+            "tenant": null,
+            "silent": true,
+        })]
+    );
+
+    // Once it has one, setting the identity again asks it at once.
+    fake.online.store(true, std::sync::atomic::Ordering::SeqCst);
+    let developer = json!({ "kind": "developer" });
+    h.call(Method::PUT, "/identity", Some(developer)).await;
+    let ada = h.call(Method::POST, "/session", None).await;
+    assert_eq!(ada.status, StatusCode::OK, "{}", ada.body);
+    let user = &ada.body["user"];
+    assert_eq!(user["email"], "ada@contoso.com");
+    assert_eq!(user["signIn"], json!(["entra"]));
+    assert_eq!(user["developer"], true);
+    assert!(ada.body["refreshToken"].is_string());
+    assert_eq!(
+        h.call(Method::GET, "/identity", None).await.body["user"],
+        *user
+    );
+    assert_eq!(fake.seen.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn with_open_sign_in_the_host_session_is_the_local_developer() {
+    let fake = fake_token_host().await;
+    fake.online.store(true, std::sync::atomic::Ordering::SeqCst);
+    let h = harness_with_host_tokens(&fake, true).await;
+    let answer = h.call(Method::POST, "/session", None).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.body["user"]["username"], rl_auth::LOCAL_DEVELOPER);
+    assert!(fake.seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

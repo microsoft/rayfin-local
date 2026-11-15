@@ -14,7 +14,10 @@ use std::{
 use tokio::sync::watch;
 
 use crate::{
-    AccessToken, Audience, BoxFuture, TokenError, TokenSource, az::AzCli, jwt,
+    AccessToken, Audience, BoxFuture, TokenError, TokenSource,
+    az::AzCli,
+    host::{HostTokenConfig, HostTokens},
+    jwt,
     rayfin_cli::RayfinCli,
 };
 
@@ -46,6 +49,9 @@ pub enum TokenMode {
     Az,
     /// Only the Rayfin CLI's login (`rayfin login`).
     Rayfin,
+    /// Only the app that runs rayfin-local, on its loopback token endpoint
+    /// ([`TokenBrokerConfig::host`]).
+    Host,
 }
 
 impl TokenMode {
@@ -54,6 +60,7 @@ impl TokenMode {
             TokenMode::Auto => "auto",
             TokenMode::Az => "az",
             TokenMode::Rayfin => "rayfin",
+            TokenMode::Host => "host",
         }
     }
 }
@@ -72,8 +79,9 @@ impl FromStr for TokenMode {
             "auto" => Ok(TokenMode::Auto),
             "az" => Ok(TokenMode::Az),
             "rayfin" => Ok(TokenMode::Rayfin),
+            "host" => Ok(TokenMode::Host),
             other => Err(format!(
-                "unknown token source `{other}`: use auto, az or rayfin"
+                "unknown token source `{other}`: use auto, az, rayfin or host"
             )),
         }
     }
@@ -102,6 +110,8 @@ pub struct TokenBrokerConfig {
     pub rayfin: Option<RayfinCliConfig>,
     /// The Azure CLI command: program and leading arguments (default: `az` from `PATH`).
     pub az_program: Option<Vec<OsString>>,
+    /// The host's token endpoint, for [`TokenMode::Host`].
+    pub host: Option<HostTokenConfig>,
 }
 
 /// Who the developer's tokens belong to, from a Power BI token's claims. Keep it out of
@@ -142,6 +152,7 @@ struct Inner {
     env_tokens: HashMap<Audience, String>,
     az: AzCli,
     rayfin: Option<RayfinCli>,
+    host: Option<HostTokens>,
     cache: Mutex<HashMap<String, Slot>>,
 }
 
@@ -153,6 +164,7 @@ type Fetch = watch::Receiver<Option<Result<AccessToken, TokenError>>>;
 enum Provider {
     AzureCli,
     RayfinCli,
+    Host,
 }
 
 impl Provider {
@@ -160,6 +172,7 @@ impl Provider {
         match self {
             Provider::AzureCli => "az",
             Provider::RayfinCli => "rayfin",
+            Provider::Host => "host",
         }
     }
 }
@@ -227,6 +240,7 @@ impl TokenBroker {
                 env_tokens,
                 az: AzCli::new(config.az_program),
                 rayfin: config.rayfin.map(RayfinCli::new),
+                host: config.host.map(HostTokens::new),
                 cache: Mutex::default(),
             }),
         }
@@ -493,6 +507,7 @@ impl Inner {
         let (provider, result) = match self.mode {
             TokenMode::Az => (Provider::AzureCli, self.az.token(scope, tenant).await),
             TokenMode::Rayfin => (Provider::RayfinCli, self.rayfin_token(scope, prompt).await),
+            TokenMode::Host => (Provider::Host, self.host_token(scope, prompt).await),
             TokenMode::Auto if self.rayfin_first(scope) => {
                 match self.rayfin_token(scope, prompt).await {
                     Ok(token) => (Provider::RayfinCli, Ok(token)),
@@ -566,6 +581,21 @@ impl Inner {
             token,
             provider: Provider::RayfinCli,
         })
+    }
+
+    async fn host_token(&self, scope: &str, prompt: Prompt) -> Result<AccessToken, TokenError> {
+        match &self.host {
+            Some(host) => host.token(scope, self.tenant.as_deref(), prompt).await,
+            None => Err(TokenError {
+                scope: scope.to_owned(),
+                message: "the host token source has no endpoint to ask".to_owned(),
+                hint: Some(
+                    "Set RAYFIN_LOCAL_TOKEN_URL and RAYFIN_LOCAL_TOKEN_SECRET, or use another \
+                     token source."
+                        .to_owned(),
+                ),
+            }),
+        }
     }
 
     async fn rayfin_token(&self, scope: &str, prompt: Prompt) -> Result<AccessToken, TokenError> {
@@ -755,5 +785,176 @@ mod tests {
         for scope in ["api://ado-proxy/.default", Audience::Ado.default_scope()] {
             assert_eq!(broker.token(scope).await.unwrap().token, "t");
         }
+    }
+
+    /// A fake host token endpoint: answers each request with the next of `answers` (the last
+    /// one again when they run out), and keeps what it was sent.
+    struct FakeHost {
+        url: String,
+        seen: Arc<Mutex<Vec<Request>>>,
+    }
+
+    /// A request's Authorization header and body.
+    type Request = (Option<String>, serde_json::Value);
+
+    async fn fake_host(answers: Vec<(u16, serde_json::Value)>) -> FakeHost {
+        use axum::{Json, Router, http::HeaderMap, http::StatusCode, routing::post};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let answers = Arc::new(Mutex::new(answers));
+        let router = Router::new().route(
+            "/token",
+            post({
+                let seen = Arc::clone(&seen);
+                move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    lock(&seen).push((auth, body));
+                    let mut answers = lock(&answers);
+                    let (status, body) = if answers.len() > 1 {
+                        answers.remove(0)
+                    } else {
+                        answers[0].clone()
+                    };
+                    (StatusCode::from_u16(status).unwrap(), Json(body))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        FakeHost {
+            url: format!("http://127.0.0.1:{port}/token"),
+            seen,
+        }
+    }
+
+    const HOST_SECRET: &str = "a-host-secret-of-more-than-32-characters";
+
+    fn host_broker(url: &str, tenant: Option<&str>, env: &[(Audience, &str)]) -> TokenBroker {
+        TokenBroker::with_env_tokens(
+            TokenBrokerConfig {
+                mode: TokenMode::Host,
+                tenant: tenant.map(str::to_owned),
+                host: Some(HostTokenConfig::new(url, HOST_SECRET).unwrap()),
+                az_program: Some(vec!["rayfin-local-test-no-such-az".into()]),
+                ..TokenBrokerConfig::default()
+            },
+            env.iter()
+                .map(|(audience, token)| (*audience, token.to_string()))
+                .collect(),
+        )
+    }
+
+    fn unix_now() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[tokio::test]
+    async fn the_host_is_asked_with_its_secret_and_its_tokens_are_cached() {
+        let expires_on = unix_now() + 3600;
+        let host = fake_host(vec![(
+            200,
+            json!({ "accessToken": "host-token", "expiresOn": expires_on }),
+        )])
+        .await;
+        let broker = host_broker(&host.url, Some("contoso.onmicrosoft.com"), &[]);
+        let power_bi = Audience::PowerBi.default_scope();
+
+        let token = broker.token(power_bi).await.unwrap();
+        assert_eq!(token.token, "host-token");
+        assert_eq!(
+            token.expires_at,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(expires_on)
+        );
+        assert_eq!(broker.token(power_bi).await.unwrap().token, "host-token");
+        assert_eq!(
+            broker.token_silently(power_bi).await.unwrap().token,
+            "host-token"
+        );
+        let fabric = Audience::Fabric.default_scope();
+        broker.token_silently(fabric).await.unwrap();
+
+        let seen = lock(&host.seen).clone();
+        assert_eq!(seen.len(), 2, "cached per scope: {seen:?}");
+        assert_eq!(
+            seen[0].0.as_deref(),
+            Some(&*format!("Bearer {HOST_SECRET}"))
+        );
+        assert_eq!(
+            seen[0].1,
+            json!({ "scope": power_bi, "tenant": "contoso.onmicrosoft.com", "silent": false })
+        );
+        assert_eq!(
+            seen[1].1,
+            json!({ "scope": fabric, "tenant": "contoso.onmicrosoft.com", "silent": true })
+        );
+        assert_eq!(broker.another_token(power_bi, "host-token").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_host_token_near_its_expiry_is_asked_for_again() {
+        let jwt = jwt::fake_jwt(&json!({ "exp": unix_now() + 3600 }));
+        let host = fake_host(vec![
+            (
+                200,
+                json!({ "accessToken": "short-lived", "expiresOn": unix_now() + 60 }),
+            ),
+            // Without `expiresOn`, the JWT's `exp`.
+            (200, json!({ "accessToken": jwt })),
+        ])
+        .await;
+        let broker = host_broker(&host.url, None, &[]);
+        let scope = Audience::Sql.default_scope();
+        assert_eq!(broker.token(scope).await.unwrap().token, "short-lived");
+        assert_eq!(broker.token(scope).await.unwrap().token, jwt);
+        assert_eq!(broker.token(scope).await.unwrap().token, jwt);
+        let seen = lock(&host.seen).clone();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].1["tenant"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn host_refusals_are_token_errors_and_env_overrides_win() {
+        let host = fake_host(vec![
+            (
+                401,
+                json!({ "error": "interaction_required", "message": "Sign in to Windows." }),
+            ),
+            (
+                503,
+                json!({ "error": "unavailable", "message": "Offline." }),
+            ),
+            (500, json!("not an error object")),
+            (200, json!({ "expiresOn": 1 })),
+        ])
+        .await;
+        let broker = host_broker(&host.url, None, &[(Audience::Ado, "from-env")]);
+        let scope = Audience::PowerBi.default_scope();
+        let error = broker.token_silently(scope).await.unwrap_err();
+        assert!(
+            error.message.contains("interaction_required") && error.message.contains("Sign in"),
+            "{error:?}"
+        );
+        assert!(error.hint.is_some());
+        let error = broker.token(scope).await.unwrap_err();
+        assert!(error.message.contains("unavailable"), "{error:?}");
+        let error = broker.token(scope).await.unwrap_err();
+        assert!(error.message.contains("HTTP 500"), "{error:?}");
+        let error = broker.token(scope).await.unwrap_err();
+        assert!(error.message.contains("accessToken"), "{error:?}");
+
+        let ado = broker.token(Audience::Ado.default_scope()).await.unwrap();
+        assert_eq!(ado.token, "from-env");
+        assert_eq!(lock(&host.seen).len(), 4, "the override needs no host");
+
+        let gone = host_broker("http://127.0.0.1:1/token", None, &[]);
+        let error = gone.token(scope).await.unwrap_err();
+        assert!(error.message.contains("could not be reached"), "{error:?}");
+        assert!(!format!("{error:?}").contains(HOST_SECRET));
     }
 }

@@ -3,16 +3,19 @@
 //! Locally, rayfin-local stands in for both identities a deployed Rayfin app uses: the app
 //! identity behind `ctx.Tokens.<Audience>` in functions, and the signed-in user behind delegated
 //! connectors. Both become the developer, through the Azure CLI (`az account get-access-token`),
-//! the Rayfin CLI's login (`@microsoft/rayfin-cli/auth`) or `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` env
-//! overrides. Consumers depend only on [`TokenSource`], so tests can use a fake; [`TokenBroker`]
-//! is the real one.
+//! the Rayfin CLI's login (`@microsoft/rayfin-cli/auth`), the app that runs rayfin-local (a
+//! loopback endpoint of a desktop host) or `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` env overrides.
+//! Consumers depend only on [`TokenSource`], so tests can use a fake; [`TokenBroker`] is the real
+//! one.
 
 mod az;
 mod broker;
+mod host;
 mod jwt;
 mod rayfin_cli;
 
 pub use broker::{DeveloperIdentity, RayfinCliConfig, TokenBroker, TokenBrokerConfig, TokenMode};
+pub use host::{HostTokenConfig, MIN_HOST_SECRET_CHARS};
 pub use jwt::jwt_claims;
 
 use std::{fmt, future::Future, pin::Pin, time::SystemTime};

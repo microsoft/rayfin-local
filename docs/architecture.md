@@ -75,7 +75,7 @@ flowchart LR
   files[(".rayfin-local/storage")]
   host["Node function host"]
   broker["rl-tokens: TokenBroker"]
-  creds["az CLI, Rayfin CLI login, RAYFIN_LOCAL_TOKEN_*"]
+  creds["az CLI, Rayfin CLI login, host endpoint, RAYFIN_LOCAL_TOKEN_*"]
   pbi["Power BI"]
   fsql[("Fabric SQL databases, warehouses, SQL endpoints")]
   azure["Fabric and Azure APIs"]
@@ -107,7 +107,7 @@ crates/
   rl-db/           SQLite, value codecs, entity DDL and migrations
   rl-graphql/      the DAB-compatible data API, and its T-SQL executor for SQL connectors
   rl-auth/         auth routes, JWTs, the sign-in portal, the Entra exchange
-  rl-tokens/       Azure tokens for the developer (az CLI, Rayfin CLI, env)
+  rl-tokens/       Azure tokens for the developer (az CLI, Rayfin CLI, host, env)
   rl-functions/    functions build, metadata, Node host and invoke routes
   rl-connectors/   /connector-invoke (semantic models), /connectors/*/graphql (SQL, over TDS)
   rl-storage/      /api/storage on local files
@@ -207,6 +207,9 @@ Programs such as Fabricator run `serve --json` as a child process; [embedding.md
   The handlers use the services' own APIs: `rl-auth` for users, sessions and the sign-in identity, `rl-graphql`'s `admin` module for rows (formatted by the data API's SQL), and `rl-storage`'s `admin` module and `rl_storage::clear` for stored files.
   The seed routes go through `seed.rs`, which reads and checks `rayfin/seed`, then writes every row (`rl_graphql::admin::replace_rows`) and stored file record (`rl_storage::admin::Replacement`) in one transaction, with the files' bytes copied before it and the replaced bytes deleted after it commits.
   `POST /reload` goes through `control::ReloadTrigger`, which `reload::ReloadHandle` implements; its failures answer with the code `errors::HostError::classify` gives them (`config-invalid`, `analysis-failed`), or `stopping` (`reload::Stopping`).
+  `POST /session` issues a session for the sign-in identity (`AuthService::sign_in_session`) for hosts that serve the app's build (`--static`) and install the session in its page themselves; unlike the dev server's route it needs neither the run's secret nor open sign-in, so `developer` stays the Entra user.
+- **Host token source.** `--token-source host` (`TokenMode::Host`, `rl-tokens`' `host.rs`) asks the program that runs rayfin-local for tokens: `POST` to `RAYFIN_LOCAL_TOKEN_URL` (loopback `http://` only) with `RAYFIN_LOCAL_TOKEN_SECRET`, which `main` takes from the environment as it takes the control token.
+  The broker caches its tokens per scope like the other providers'; `token_silently` sends `"silent": true`.
 
 ## Requests
 
@@ -242,7 +245,7 @@ Under rayfin-local, the sign-in identity answers instead:
 - Its `rayfin-local:sign-in` plugin is a `pre` plugin, so its middleware comes before `rayfinLocalDev()`'s; it applies the same checks (a loopback peer, no foreign `Origin`) and asks the backend's `GET /.rayfin-local/dev/session-token` with the secret.
 - `rl_auth::AutoSignIn` holds the identity (`--sign-in-as`, `[auth] sign_in_as`, then the control API's `PUT /identity` or a new `[auth] sign_in_as` while serving), and the route issues a session for it, as a sign-in would.
   Live reload changes the auth service's settings in place, so the identity, the secret and the developer's account stay.
-- `developer` is the Entra user of a Power BI token that the broker gets without a prompt (`TokenSource::token_silently`: the environment, its cache, the Azure CLI, or the Rayfin CLI's cache), signed in as "Continue as" does; without one, `developer@example.com`.
+- `developer` is the Entra user of a Power BI token that the broker gets without a prompt (`TokenSource::token_silently`: the environment, its cache, the Azure CLI, the Rayfin CLI's cache, or the host's endpoint with `"silent": true`), signed in as "Continue as" does; without one, `developer@example.com`.
   Without an Azure sign-in, asking takes a second or more, so after a failure it asks again only after five minutes or a switch of the identity.
 - `serve --open-sign-in` (`AuthService::with_open_dev_sign_in`) drops only the secret from the route's checks, for pages another dev server serves; the loopback peer, foreign `Origin` and server `Host` checks stay, `serve` refuses a host that isn't loopback, and `developer` is always `developer@example.com`, since any local process can then get its sessions.
   It is a flag and an environment variable, never a `rayfin-local.toml` setting, so a cloned project can't turn it on.

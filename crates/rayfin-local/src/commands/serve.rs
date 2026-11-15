@@ -190,6 +190,9 @@ async fn start(
     }));
     let control_token = check_control_token()?;
     check_open_sign_in(&project, options)?;
+    if integrations::token_source(&project, options.token_source) == TokenMode::Host {
+        crate::tokens::host_token_config()?;
+    }
     super::check_project(&project)?;
     let (mut state, serve_lock) = open_state(&project, options.reset)?;
     running.lock = Some(serve_lock);

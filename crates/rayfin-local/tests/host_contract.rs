@@ -192,6 +192,53 @@ fn fatal_errors_come_with_a_code_then_stopped() {
 }
 
 #[test]
+fn the_host_token_source_needs_a_loopback_url_and_a_long_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("rayfin")).unwrap();
+    std::fs::write(dir.path().join("rayfin").join("rayfin.yml"), "name: app\n").unwrap();
+    let secret = "a-token-secret-of-more-than-32-characters";
+    let refused = |args: &[&str], env: &[(&str, &str)]| {
+        let mut serve = Serve::start(dir.path(), args, env);
+        let error = serve.until("error", Duration::from_secs(30));
+        assert_eq!(serve.wait(Duration::from_secs(30)).code(), Some(1));
+        assert_eq!(serve.milestones(), ["starting", "stopped"], "{env:?}");
+        assert_eq!(error["code"], "config-invalid", "{env:?}");
+        assert_eq!(error["fatal"], true);
+        assert!(!error.to_string().contains(secret), "{error}");
+        error["message"].as_str().unwrap().to_owned()
+    };
+    let host = ["--token-source", "host"];
+    let message = refused(&host, &[]);
+    assert!(message.contains("RAYFIN_LOCAL_TOKEN_URL"), "{message}");
+    for url in ["http://10.0.0.5:4000/token", "https://localhost:4000/token"] {
+        let message = refused(
+            &host,
+            &[
+                ("RAYFIN_LOCAL_TOKEN_URL", url),
+                ("RAYFIN_LOCAL_TOKEN_SECRET", secret),
+            ],
+        );
+        assert!(message.starts_with("RAYFIN_LOCAL_TOKEN_URL"), "{message}");
+    }
+    let message = refused(
+        &host,
+        &[
+            ("RAYFIN_LOCAL_TOKEN_URL", "http://127.0.0.1:4000/token"),
+            ("RAYFIN_LOCAL_TOKEN_SECRET", "short"),
+        ],
+    );
+    assert!(message.contains("RAYFIN_LOCAL_TOKEN_SECRET"), "{message}");
+    // `[tokens] source` too.
+    std::fs::write(
+        dir.path().join("rayfin-local.toml"),
+        "[tokens]\nsource = \"host\"\n",
+    )
+    .unwrap();
+    let message = refused(&[], &[("RAYFIN_LOCAL_TOKEN_URL", "http://example.com/")]);
+    assert!(message.contains("RAYFIN_LOCAL_TOKEN"), "{message}");
+}
+
+#[test]
 fn open_sign_in_needs_a_loopback_host_and_warns() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("rayfin")).unwrap();

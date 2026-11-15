@@ -4,12 +4,68 @@
 //! since it signs in as the local developer account without a token.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use rl_tokens::{AccessToken, Audience, BoxFuture, TokenBroker, TokenError, TokenSource};
+use anyhow::anyhow;
+use rl_tokens::{
+    AccessToken, Audience, BoxFuture, HostTokenConfig, TokenBroker, TokenError, TokenSource,
+};
 use serde_json::json;
 
-use crate::events::{self, WarningCode};
+use crate::errors::coded;
+use crate::events::{self, ErrorCode, WarningCode};
+
+/// Where the `host` token source asks for tokens.
+pub const TOKEN_URL_VAR: &str = "RAYFIN_LOCAL_TOKEN_URL";
+/// The secret the `host` token source sends the host.
+pub const TOKEN_SECRET_VAR: &str = "RAYFIN_LOCAL_TOKEN_SECRET";
+
+/// `RAYFIN_LOCAL_TOKEN_SECRET` as `rayfin-local` started ([`take_token_secret`]).
+static TOKEN_SECRET: OnceLock<Option<OsString>> = OnceLock::new();
+
+/// Takes `RAYFIN_LOCAL_TOKEN_SECRET` out of the environment, so that no child process (Vite, the
+/// function host, the app's code) can ask the host for the user's tokens. Call it first in
+/// `main`, while no other thread runs.
+pub fn take_token_secret() {
+    let secret = std::env::var_os(TOKEN_SECRET_VAR);
+    if secret.is_some() {
+        // SAFETY: `main` calls this before it starts any thread.
+        unsafe { std::env::remove_var(TOKEN_SECRET_VAR) };
+    }
+    let _ = TOKEN_SECRET.set(secret);
+}
+
+/// The `host` token source's endpoint: `RAYFIN_LOCAL_TOKEN_URL`, an `http://` URL on loopback,
+/// and `RAYFIN_LOCAL_TOKEN_SECRET`, at least 32 characters. A `config-invalid` error otherwise.
+pub fn host_token_config() -> anyhow::Result<HostTokenConfig> {
+    let invalid = |message: String| {
+        coded(
+            ErrorCode::ConfigInvalid,
+            events::no_details(),
+            anyhow!(message),
+        )
+    };
+    let url = std::env::var(TOKEN_URL_VAR).unwrap_or_default();
+    let secret = TOKEN_SECRET
+        .get_or_init(|| std::env::var_os(TOKEN_SECRET_VAR))
+        .as_ref()
+        .map(|secret| secret.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if url.trim().is_empty() || secret.is_empty() {
+        return Err(invalid(format!(
+            "The host token source (--token-source host) needs {TOKEN_URL_VAR} and \
+             {TOKEN_SECRET_VAR}: the endpoint of the app that runs rayfin-local, and its secret."
+        )));
+    }
+    HostTokenConfig::new(&url, &secret).map_err(|error| {
+        invalid(if error.contains("secret") {
+            format!("{TOKEN_SECRET_VAR} is too short for the host token source: {error}.")
+        } else {
+            format!("{TOKEN_URL_VAR} {error}.")
+        })
+    })
+}
 
 /// [`TokenBroker`]'s tokens, reporting failures as `azure-sign-in` warnings.
 pub fn reporting(broker: Arc<TokenBroker>) -> Arc<dyn TokenSource> {
@@ -87,4 +143,52 @@ fn report(audience: Option<Audience>, scope: &str, err: &TokenError) {
         err.hint.clone(),
         json!({ "audience": name, "scope": scope }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    /// Set for the copy of this test binary that takes the secret.
+    const TAKING: &str = "RAYFIN_LOCAL_TEST_TAKES_THE_TOKEN_SECRET";
+    const SECRET: &str = "a-token-secret-of-more-than-32-characters";
+
+    /// In a process of its own (this test binary again), since it changes the environment.
+    #[test]
+    fn the_token_secret_is_taken_out_of_the_environment() {
+        let name = "tokens::tests::the_token_secret_is_taken_out_of_the_environment";
+        if std::env::var_os(TAKING).is_some() {
+            take_token_secret();
+            assert_eq!(std::env::var_os(TOKEN_SECRET_VAR), None);
+            let config = host_token_config().unwrap();
+            assert_eq!(config.url(), "http://127.0.0.1:4000/token");
+            // Nor do the processes it starts see it.
+            let mut child = if cfg!(windows) {
+                let mut cmd = Command::new("cmd");
+                cmd.args([
+                    "/C",
+                    "if defined RAYFIN_LOCAL_TOKEN_SECRET (exit 1) else (exit 0)",
+                ]);
+                cmd
+            } else {
+                let mut sh = Command::new("sh");
+                sh.args(["-c", "test -z \"${RAYFIN_LOCAL_TOKEN_SECRET+set}\""]);
+                sh
+            };
+            assert!(child.status().unwrap().success());
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--test-threads=1"])
+            .env(TAKING, "1")
+            .env(TOKEN_URL_VAR, "http://127.0.0.1:4000/token")
+            .env(TOKEN_SECRET_VAR, SECRET)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(stdout.contains("1 passed"), "{stdout}");
+    }
 }

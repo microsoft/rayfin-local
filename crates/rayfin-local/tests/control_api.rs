@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::{Method, StatusCode};
@@ -48,17 +49,37 @@ struct Serve {
 
 impl Serve {
     fn start(project: &Path) -> Self {
+        // No Azure sign-in, whatever this machine has: the developer identity signs in as the
+        // local developer account.
+        Self::start_with(
+            project,
+            &[
+                "--no-functions",
+                "--frontend-port",
+                "0",
+                "--token-source",
+                "az",
+            ],
+            &[],
+        )
+    }
+
+    /// `serve --json --reset --port 0` with the control API on, `args` and `env`.
+    fn start_with(project: &Path, args: &[&str], env: &[(&str, &str)]) -> Self {
         let no_azure = tempfile::tempdir().unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_rayfin-local"))
-            .args(["serve", "--json", "--reset", "--no-functions"])
-            .args(["--port", "0", "--frontend-port", "0", "-C"])
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rayfin-local"));
+        command
+            .args(["serve", "--json", "--reset", "--port", "0"])
+            .args(args)
+            .arg("-C")
             .arg(project)
             .env("RAYFIN_LOCAL_CONTROL_TOKEN", TOKEN)
-            // No Azure sign-in, whatever this machine has: the developer identity signs in as the
-            // local developer account.
-            .args(["--token-source", "az"])
-            .env("AZURE_CONFIG_DIR", no_azure.path())
-            .env_remove("RAYFIN_LOCAL_TOKEN_POWERBI")
+            .env("AZURE_CONFIG_DIR", no_azure.path());
+        for audience in ["SQL", "STORAGE", "FABRIC", "AZUREAI", "ADO", "POWERBI"] {
+            command.env_remove(format!("RAYFIN_LOCAL_TOKEN_{audience}"));
+        }
+        command.envs(env.iter().copied());
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -350,6 +371,177 @@ async fn a_host_drives_the_app_and_signs_it_in_as_anyone() {
     );
     let (_, users) = host.call(Method::GET, "/users", None).await;
     assert_eq!(users, json!({ "users": [] }));
+
+    assert_eq!(serve.stop(), Some(0));
+}
+
+/// The secret a desktop host shares with `serve --token-source host`.
+const HOST_SECRET: &str = "the-desktop-host's-token-secret-of-32-characters";
+
+/// A desktop host's token endpoint: answers every scope with a token of Ada's (a fake JWT) with
+/// the scope's audience; keeps the requests' bodies.
+async fn fake_token_host() -> (String, Arc<Mutex<Vec<Value>>>) {
+    use axum::http::HeaderMap;
+    use base64::Engine as _;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let encode = |value: Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string().as_bytes())
+    };
+    let router = axum::Router::new().route(
+        "/token",
+        axum::routing::post({
+            let seen = Arc::clone(&seen);
+            move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| async move {
+                seen.lock().unwrap().push(body.clone());
+                let expected = format!("Bearer {HOST_SECRET}");
+                if headers
+                    .get("authorization")
+                    .is_none_or(|value| *value != *expected)
+                {
+                    let denied = json!({ "error": "denied", "message": "Wrong secret." });
+                    return (axum::http::StatusCode::UNAUTHORIZED, axum::Json(denied));
+                }
+                let exp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 3600;
+                let audience = body["scope"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end_matches("/.default");
+                let token = format!(
+                    "{}.{}.signature",
+                    encode(json!({ "alg": "RS256", "typ": "JWT" })),
+                    encode(json!({
+                        "aud": audience,
+                        "iss": "https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/",
+                        "exp": exp, "name": "Ada Lovelace", "scp": "user_impersonation",
+                        "oid": "00000000-0000-4000-8000-00000000ada0",
+                        "tid": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+                        "upn": "ada@contoso.com",
+                    }))
+                );
+                let granted = json!({ "accessToken": token, "expiresOn": exp });
+                (axum::http::StatusCode::OK, axum::Json(granted))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    (format!("http://127.0.0.1:{port}/token"), seen)
+}
+
+/// A desktop host: the app's build (`--static`, no Vite), the user's tokens from the host
+/// (`--token-source host`), and sessions from the control API, with neither the Azure CLI nor
+/// open sign-in.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_desktop_host_signs_the_app_in_as_its_user_with_its_tokens() {
+    let Some(project) = fixture() else {
+        return;
+    };
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (token_url, seen) = fake_token_host().await;
+    let state = tempfile::tempdir().unwrap();
+    let state_dir = state.path().to_str().unwrap();
+    let mut serve = Serve::start_with(
+        &project,
+        &[
+            "--static",
+            "--token-source",
+            "host",
+            "--state-dir",
+            state_dir,
+        ],
+        &[
+            ("RAYFIN_LOCAL_TOKEN_URL", &token_url),
+            ("RAYFIN_LOCAL_TOKEN_SECRET", HOST_SECRET),
+        ],
+    );
+    let ready = serve.until("ready");
+    assert_eq!(ready["signInAs"], json!({ "kind": "developer" }));
+    assert_eq!(ready["openSignIn"], false);
+    assert_eq!(ready["features"]["functions"]["enabled"], true, "{ready}");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let host = Host {
+        client: client.clone(),
+        api_url: api_url.clone(),
+    };
+
+    let (status, session) = host.call(Method::POST, "/session", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    assert_eq!(session["tokenType"], "Bearer");
+    assert!(session["refreshToken"].is_string(), "{session}");
+    let user = &session["user"];
+    assert_eq!(user["email"], "ada@contoso.com", "{session}");
+    assert_eq!(user["developer"], true);
+    assert!(
+        user["signIn"].as_array().unwrap().contains(&json!("entra")),
+        "{user}"
+    );
+    let stamp = session["stamp"].as_str().unwrap();
+    assert!(stamp.contains(':'), "{stamp}");
+    let (_, identity) = host.call(Method::GET, "/identity", None).await;
+    assert_eq!(identity["user"]["id"], user["id"]);
+    let power_bi = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|body| body["scope"] == "https://analysis.windows.net/powerbi/api/.default")
+        .cloned();
+    assert_eq!(
+        power_bi.as_ref().map(|body| &body["silent"]),
+        Some(&json!(true)),
+        "{power_bi:?}"
+    );
+    // The page's session works with the app's own routes.
+    let config: Value = client
+        .get(format!("{api_url}/rayfin.config.json"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let key = config["publishableKey"].as_str().unwrap().to_owned();
+    let (status, listed) = answer(
+        client
+            .post(format!("{api_url}/graphql"))
+            .bearer_auth(session["accessToken"].as_str().unwrap())
+            .header("x-publishable-key", key.as_str())
+            .json(&json!({ "query": "{ categories { items { name } } }" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+
+    // A function's `ctx.Tokens` come from the host.
+    let (status, invoked) = answer(
+        client
+            .post(format!("{api_url}/functions/tokenInfo/invoke"))
+            .bearer_auth(session["accessToken"].as_str().unwrap())
+            .header("x-publishable-key", key.as_str())
+            .json(&json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{invoked}");
+    assert!(
+        invoked["output"]["fabricTokenLength"].as_u64().unwrap() > 0,
+        "{invoked}"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|body| body["scope"] == "https://api.fabric.microsoft.com/.default"),
+        "{seen:?}"
+    );
+    let events = serve.seen();
+    assert!(
+        !events.iter().any(|event| event["code"] == "azure-sign-in"),
+        "{events:?}"
+    );
 
     assert_eq!(serve.stop(), Some(0));
 }
