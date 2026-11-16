@@ -142,7 +142,7 @@ The official release pipeline submits Windows x64, Linux x64 and Apple Silicon b
 It requires Windows Authenticode, detached Microsoft PGP signing for Linux archives, and Apple Developer ID signing/notarization before publication.
 Those guarantees apply to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
-Standard hosted Ubuntu and Intel macOS agents build and verify the Unix artifacts; no Apple Silicon signing VM is needed.
+Managed Ubuntu and hosted Intel macOS agents build and verify the Unix artifacts; no Apple Silicon signing VM is needed.
 The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) tracks end-to-end validation and deferred native ARM64 execution testing.
 
 **macOS and Linux (existing unsigned `0.2.8` release):**

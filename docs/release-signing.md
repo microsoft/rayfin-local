@@ -14,7 +14,8 @@ It publishes only if the workspace version increases relative to the commit's fi
 PR and tag triggers are disabled; manually queued artifact builds and labelled PR alpha tests remain available.
 It extends `v1/1ES.Official.PipelineTemplate.yml`, keeps the template's
 security checks enabled, and submits all ESRP signing/notarization requests from the existing `1ES-AppDev/windows-2022` infrastructure.
-Standard hosted `Azure Pipelines` Ubuntu and Intel macOS agents build and independently verify Unix artifacts.
+Managed Ubuntu and hosted Intel macOS agents build and independently verify Unix artifacts.
+Linux still requires pipeline-scoped authorization for `PowerBI-Managed-Ubuntu-Pool`; submitting ESRP from Windows does not remove that build requirement.
 The [platform section](#linux-and-apple-silicon) describes the keys, verification and outstanding end-to-end validation.
 
 The job verifies the checkout against `Build.SourceVersion`, installs Rust 1.96.0
@@ -99,7 +100,7 @@ The existing AppDev definition uses:
 | YAML path | `/.azure-pipelines/rayfin-local.official.yml` |
 | Triggers | Root `Cargo.toml` changes on `main`; no PR or tag triggers; no UI override |
 | Windows pool / image | `1ES-AppDev` / `windows-2022` |
-| Linux build/verification pool / image | `Azure Pipelines` / `ubuntu-24.04` |
+| Linux build/verification pool / image | `PowerBI-Managed-Ubuntu-Pool` / pool default |
 | Apple build/verification pool / image | `Azure Pipelines` / `macos-15`, `hostArchitecture: amd64`; cross-compiles `aarch64-apple-darwin` |
 | Unix ESRP submission pool / image | `1ES-AppDev` / `windows-2022`; no signing credentials on Unix agents |
 | Template repository | `1ESPipelineTemplates/1ESPipelineTemplates`, `refs/tags/release` |
@@ -142,7 +143,8 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   the pool's **User / Use** permission if missing.
 - If an additional grant is required, authorize `Azure Pipelines` for definition 20870 only; do not broaden the queue's existing access configuration.
   Queue 11640 already has hosted-pool authorization; its existing permissions were not changed.
-  The blocked `PowerBI-Managed-Ubuntu-Pool` queue 15067 is no longer used.
+- Authorize `PowerBI-Managed-Ubuntu-Pool` (queue 15067) for definition 20870 only, and grant the queueing identity **User / Use** permission if missing.
+  The current operator cannot authorize it; pipeline permissions still do not show a grant for this definition.
 - Keep the job authorization scope project-scoped where supported, granting any
   cross-project template access explicitly.
 - Grant the pipeline's build identity **Feed and Upstream Reader (Collaborator)**
@@ -168,7 +170,7 @@ Suggested approval-request text:
 > Please authorize the cross-platform signing phase of `rayfin-local` (20870) in powerbi/AppDev using
 > `microsoft/rayfin-local` and `/.azure-pipelines/rayfin-local.official.yml`.
 > This is a 1ES official signing pipeline using `1ES-AppDev/windows-2022` for every ESRP submission,
-> and existing standard hosted `Azure Pipelines/ubuntu-24.04` and `Azure Pipelines/macos-15` images for Unix builds and signature verification.
+> and `PowerBI-Managed-Ubuntu-Pool` plus existing hosted `Azure Pipelines/macos-15` agents for Unix builds and signature verification.
 > ESRP registration-owner approval has been confirmed for reusing
 > `Fabric-ESRP-Secure-AppDev` with `CP-231522`, `CP-450779-Pgp` and `CP-401337-Apple`, including Apple notarization.
 > Please authorize that connection for this pipeline only and configure its
@@ -237,11 +239,11 @@ falling back to crates.io.
 
 ## Linux and Apple Silicon
 
-`BuildUnix` and `VerifyUnix` use the existing standard hosted queue, avoiding the blocked managed Linux pool.
+`BuildUnix` and `VerifyUnix` use the managed Linux pool and existing Intel macOS hosted queue.
 `SignUnix` explicitly runs on `1ES-AppDev/windows-2022`; ESRP signing and notarization do not require Unix-hosted signing credentials.
 The final Windows release job attaches only verified exact-build platform artifacts.
 
-- [ ] TODO: Validate standard hosted Linux/macOS builds, Windows-submitted ESRP signing/notarization, independent platform verification and all public release assets in a real three-platform run.
+- [ ] TODO: Authorize managed Linux queue 15067 for pipeline 20870, then validate Linux/macOS builds, Windows-submitted ESRP signing/notarization, independent platform verification and all public release assets in a real three-platform run.
 
 The user confirmed ESRP-owner approval for the additional platform signing operations.
 The shared connection alone was not treated as approval.
@@ -249,7 +251,7 @@ The keys and operations follow the maintained [VS Code ESRP implementation](http
 All ESRP submissions run on the Windows signing pool with the existing managed identity and certificate references.
 Native build and verification jobs share `.azure-pipelines/templates/unix-job.yml`.
 
-Linux x64 builds and tests on `Azure Pipelines/ubuntu-24.04`, using the same authenticated Cargo feed as Windows.
+Linux x64 builds and tests on `PowerBI-Managed-Ubuntu-Pool`, using the same authenticated Cargo feed as Windows.
 `LinuxSign` signs a scratch copy of the `.tar.gz` with `CP-450779-Pgp`.
 The original archive is preserved because the detached-signature operation replaces its input with signature content; see [.NET Arcade's handling](https://github.com/dotnet/arcade/blob/28463b67ff4f7c01701c2a24fb23d36af978923c/src/Microsoft.DotNet.SignTool/src/SignTool.cs).
 That response becomes `<archive>.sig`, not a replacement tarball.
@@ -278,7 +280,8 @@ Local template references use absolute repository paths with `@self`, because re
 The [first cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21427060) failed at agent allocation, before either Unix build or ESRP submission.
 `1ES-AppDev` rejected the requested `ubuntu-2204` image; a subsequent attempt used the managed Ubuntu pool.
 That queue required pool-admin authorization; no global access or broader role was granted.
-The current configuration instead uses standard hosted `Azure Pipelines/ubuntu-24.04`.
+An attempt to use already-authorized standard hosted `Azure Pipelines/ubuntu-24.04` in [run 21429587](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21429587) started an agent but failed the mandatory 1ES pre-job check: `Using a non 1ESHostedPool with 1ES PT is not allowed`.
+The current configuration retains the managed Linux pool and its authorization prerequisite rather than bypassing that check.
 The Apple job failed with `No agent found in pool GitHub-hosted Agents which satisfies the specified demands: Agent.Version -gtVersion 5.281.1`.
 That minimum comes from the required `CodeQL3000Init` / `CodeQL3000Finalize` tasks, not an optional demand added by this repository.
 That failure motivated using the standard Intel image instead of depending on Apple Silicon capacity.

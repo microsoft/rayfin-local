@@ -185,9 +185,9 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
 It submits all three platforms to ESRP from the existing `1ES-AppDev/windows-2022` infrastructure.
-Standard hosted `Azure Pipelines/ubuntu-24.04` agents build/verify Linux x64, and `Azure Pipelines/macos-15` Intel agents cross-compile/verify Apple Silicon.
+`PowerBI-Managed-Ubuntu-Pool` agents build/verify Linux x64, and `Azure Pipelines/macos-15` Intel agents cross-compile/verify Apple Silicon.
 Publication requires the verified `windows-signed`, `linux-signed` and `macos-signed` artifacts and all official output/source-security checks.
-The [signing runbook](release-signing.md#linux-and-apple-silicon) tracks end-to-end validation; a missing or invalid platform blocks publication rather than uploading unsigned files.
+The [signing runbook](release-signing.md#linux-and-apple-silicon) tracks pending managed Linux pool authorization and end-to-end validation; a missing or invalid platform blocks publication rather than uploading unsigned files.
 To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
 It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
 GitHub Actions release publishing is removed: there is no unsigned fallback.
