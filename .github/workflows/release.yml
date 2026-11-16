@@ -3,9 +3,10 @@ name: release
 # Pushing a version tag (`v0.2.0`) builds rayfin-local for each platform, publishes the archives,
 # their SHA-256 checksums and the install scripts as a GitHub Release, then installs the release
 # with the install scripts on each platform. The tag must match the version in Cargo.toml.
+# On-demand alpha releases are built and published only by the PR-gated official ADO pipeline.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "!v*-alpha.*"]
 
 permissions:
   contents: read

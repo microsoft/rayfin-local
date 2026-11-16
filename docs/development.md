@@ -183,10 +183,10 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 ## Releasing
 
-The manual-only [official ADO pipeline](release-signing.md) builds and signs the
-Windows binary through ESRP, then verifies its signature.
-It publishes metadata only and does not replace or gate the GitHub release
-workflow below.
+The manual-only [official ADO pipeline](release-signing.md) builds and signs the Windows binary through ESRP, verifies its signature, and outputs a `windows-signed` artifact containing its release ZIP and signing metadata.
+To publish a signed Windows-only test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
+It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
+The normal multi-platform GitHub release workflow below remains separate and does not sign its Windows output.
 
 1. Set the new version in `[workspace.package]` of the root `Cargo.toml`, and commit (with the updated `Cargo.lock`).
 2. Tag the commit `v<version>` (for example `v0.2.0`, or `v0.2.0-rc.1` for a prerelease) and push the tag.
@@ -201,6 +201,8 @@ The [release workflow](../.github/workflows/release.yml) then:
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.
 Keep the scripts compatible with the releases they may install: they expect the archive names above and `SHA256SUMS.txt`.
+
+The `v*-alpha.*` tags are excluded from this workflow so it cannot replace the signed PR-test assets with an unsigned build.
 
 To try the scripts before a release, run them against an existing one: `RAYFIN_LOCAL_VERSION=<version> RAYFIN_LOCAL_INSTALL_DIR=/tmp/rl sh install.sh`, or in PowerShell set `$env:RAYFIN_LOCAL_VERSION`, `$env:RAYFIN_LOCAL_INSTALL_DIR` and `$env:RAYFIN_LOCAL_NO_MODIFY_PATH = '1'`, then run `./install.ps1`.
 Lint them with `shellcheck --shell=sh install.sh` and [actionlint](https://github.com/rhysd/actionlint) for the workflows.
