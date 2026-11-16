@@ -1,6 +1,6 @@
 # Official binary-signing pipeline
 
-`.azure-pipelines/rayfin-local.official.yml` is the official cross-platform signing
+`.azure-pipelines/rayfin-local.official.yml` is the official binary-signing
 pipeline for [powerbi/AppDev](https://dev.azure.com/powerbi/AppDev/_build).
 The registered definition is
 [`rayfin-local` (20870)](https://dev.azure.com/powerbi/AppDev/_build?definitionId=20870).
@@ -13,11 +13,10 @@ Changes to root `Cargo.toml` on `main` automatically queue the pipeline.
 It publishes only if the workspace version increases relative to the commit's first parent, the previous `main` tip.
 PR and tag triggers are disabled; manually queued artifact builds and labelled PR alpha tests remain available.
 It extends `v1/1ES.Official.PipelineTemplate.yml`, keeps the template's
-security checks enabled, and submits all ESRP signing/notarization requests from the existing `1ES-AppDev/windows-2022` infrastructure.
-Linux x64 is cross-compiled and its detached signature independently verified on Windows.
-Hosted Intel macOS agents cross-compile and verify Apple Silicon.
-No Linux build/verification pool is requested.
-The [platform section](#linux-and-apple-silicon) describes the keys, verification and outstanding end-to-end validation.
+security checks enabled, and signs Windows x64 on the existing `1ES-AppDev/windows-2022` infrastructure.
+Linux/macOS build, signing, verification and publication paths are commented out.
+They will be re-enabled in a separate PR after consulting the ESRP team about key authorization and completing validation.
+The [platform section](#linux-and-apple-silicon) retains the deferred design and outstanding TODOs.
 
 The job verifies the checkout against `Build.SourceVersion`, installs Rust 1.96.0
 and Node.js 22, runs the workspace tests with the lockfile, and builds the Windows
@@ -61,10 +60,10 @@ Do not enable global service-connection access if publishing needs an additional
 crates.io and npm publishing remain out of scope.
 
 An on-demand PR test release uses the `testReleasePr` queue parameter and requires the PR's explicit `release-test` label.
-That mode publishes a three-platform prerelease named `v<base version>-alpha.<ADO build ID>` directly, never marking it latest.
+That mode publishes a Windows-only prerelease named `v<base version>-alpha.<ADO build ID>` directly, never marking it latest.
 The current base version produces names such as `v0.2.8-alpha.21422341`.
 GitHub Actions release publishing has been removed; there is no unsigned publishing path.
-New releases require verified Windows x64, Linux x64 and Apple Silicon artifacts; a failed platform blocks the whole release.
+New releases require a verified signed Windows x64 artifact; no Unix assets are published while those paths are disabled.
 Stable main releases become latest; prerelease versions and PR-test alphas never do.
 
 The [unsigned validation run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21383235&view=results)
@@ -101,17 +100,17 @@ The existing AppDev definition uses:
 | YAML path | `/.azure-pipelines/rayfin-local.official.yml` |
 | Triggers | Root `Cargo.toml` changes on `main`; no PR or tag triggers; no UI override |
 | Windows pool / image | `1ES-AppDev` / `windows-2022` |
-| Linux cross-build/verification pool / image | `1ES-AppDev` / `windows-2022`; pinned Zig 0.14.1 and cargo-zigbuild 0.24.1 |
-| Apple build/verification pool / image | `Azure Pipelines` / `macos-15`, `hostArchitecture: amd64`; cross-compiles `aarch64-apple-darwin` |
-| Unix ESRP submission pool / image | `1ES-AppDev` / `windows-2022`; no signing credentials on Unix agents |
+| Deferred Linux cross-build/verification | Commented out; `1ES-AppDev/windows-2022`, pinned Zig 0.14.1 and cargo-zigbuild 0.24.1 |
+| Deferred Apple build/verification | Commented out; `Azure Pipelines/macos-15`, `hostArchitecture: amd64`; cross-compiles `aarch64-apple-darwin` |
+| Deferred Unix ESRP submission | Commented out; `1ES-AppDev/windows-2022`; no signing credentials on Unix agents |
 | Template repository | `1ESPipelineTemplates/1ESPipelineTemplates`, `refs/tags/release` |
 | Template | `v1/1ES.Official.PipelineTemplate.yml` |
 | ESRP connection | `Fabric-ESRP-Secure-AppDev` |
 | Windows signing keycode | `CP-231522` (OSS/component signing) |
-| Linux signing keycode | `CP-450779-Pgp` (`LinuxSign`) |
-| Apple signing keycode | `CP-401337-Apple` (`MacAppDeveloperSign`, then `MacAppNotarize`) |
-| Published output | Signed Windows ZIP, Linux/Apple tarballs, signatures, signing metadata, checksums, installers, and pipeline SBOM/provenance |
-| PR test release | Explicit positive `testReleasePr`, same-repository open PR targeting main, exact head commit, `release-test` label; publishes three-platform alpha |
+| Deferred Linux signing keycode | `CP-450779-Pgp` (`LinuxSign`); service denied client access in run 21430420 |
+| Deferred Apple signing keycode | `CP-401337-Apple` (`MacAppDeveloperSign`, then `MacAppNotarize`); not runtime-validated |
+| Published output | Signed Windows ZIP, signing metadata, checksums, `install.ps1`, and pipeline SBOM/provenance |
+| PR test release | Explicit positive `testReleasePr`, same-repository open PR targeting main, exact head commit, `release-test` label; publishes Windows-only alpha |
 | Main release | Version increase against first parent; creates matching tag/release; stable versions become latest |
 
 Configure these pipeline variables from the approved AppDev ESRP registration.
@@ -142,7 +141,7 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   required read access.
 - Authorize `1ES-AppDev` for the pipeline, and grant the registering/queueing user
   the pool's **User / Use** permission if missing.
-- If an additional grant is required, authorize `Azure Pipelines` for definition 20870 only; do not broaden the queue's existing access configuration.
+- When restoring Apple builds in the separate PR, if an additional grant is required, authorize `Azure Pipelines` for definition 20870 only; do not broaden the queue's existing access configuration.
   Queue 11640 already has hosted-pool authorization; its existing permissions were not changed.
 - Keep the job authorization scope project-scoped where supported, granting any
   cross-project template access explicitly.
@@ -152,7 +151,8 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   Do not grant feed publishing or owner access.
 - Authorize `Fabric-ESRP-Secure-AppDev` for definition 20870 only. Confirm that the
   approved identity can use the configured request-signing certificate and the
-  ESRP client can use the three owner-approved keycodes and operations listed above.
+  ESRP client can use `CP-231522`.
+  The separate Unix PR must establish effective access to its additional keycodes and operations before re-enabling those paths.
   Do not grant global pipeline access, broader
   vault roles, or additional keycodes to work around an authorization failure.
 
@@ -166,16 +166,16 @@ a real signing run.
 
 Suggested approval-request text:
 
-> Please authorize the cross-platform signing phase of `rayfin-local` (20870) in powerbi/AppDev using
+> Please authorize the Windows signing phase of `rayfin-local` (20870) in powerbi/AppDev using
 > `microsoft/rayfin-local` and `/.azure-pipelines/rayfin-local.official.yml`.
-> This is a 1ES official signing pipeline using `1ES-AppDev/windows-2022` for every ESRP submission,
-> including Linux cross-compilation and GPG verification, plus existing hosted `Azure Pipelines/macos-15` agents for Apple builds and signature verification.
+> This is a 1ES official signing pipeline using `1ES-AppDev/windows-2022`.
 > ESRP registration-owner approval has been confirmed for reusing
-> `Fabric-ESRP-Secure-AppDev` with `CP-231522`, `CP-450779-Pgp` and `CP-401337-Apple`, including Apple notarization.
+> `Fabric-ESRP-Secure-AppDev` with `CP-231522`.
 > Please authorize that connection for this pipeline only and configure its
 > approved identity/vault/certificate references.
-> It builds/tests and signs rayfin-local and independently verifies all three platforms.
-> Its production release job publishes all three platforms automatically for version increases on main, or alpha prereleases for explicitly queued, release-test-labelled same-repository PRs.
+> It builds/tests and signs rayfin-local and independently verifies Windows Authenticode.
+> Its production release job publishes Windows assets automatically for version increases on main, or alpha prereleases for explicitly queued, release-test-labelled same-repository PRs.
+> Linux and Apple Silicon paths are commented out and deferred to a separate PR.
 > No crates.io or npm publishing permission is requested.
 
 After authorization, queue a reviewed commit and confirm the signing task,
@@ -184,7 +184,6 @@ artifact succeed. Download `windows-validation` and verify `source.json` matches
 the queued commit, records `signed: true` and `signingKeyCode: CP-231522`, and has
 `distribution: pipeline-artifact`.
 Download `windows-signed` and check its archive and executable hashes against the metadata.
-Also require `linux-signed` and `macos-signed`, and verify their detached signature or notarization as described below.
 Retain the run link; do not claim signing succeeded merely
 because the service connection is ready or the unsigned pilot passed.
 
@@ -193,14 +192,14 @@ because the service connection is ready or the unsigned pilot passed.
 1. Add the exact `release-test` label to a trusted same-repository PR targeting `main`.
 2. Queue definition 20870 manually from that PR's head branch at its current head commit, setting `testReleasePr` to the PR number.
 3. The pipeline checks the live PR/label/commit before building, changes the workspace version and lockfile only in its build checkout to `<base version>-alpha.<Build.BuildId>`, and builds/tests/signs that version.
-4. After all three platform verifiers and all official output/source-security checks succeed, the production release job rechecks the live PR/label/commit before creating the GitHub prerelease.
+4. After Windows signature verification and all official output/source-security checks succeed, the production release job rechecks the live PR/label/commit before creating the GitHub prerelease.
 
 There are no automatic PR triggers and no fork support.
 Without the label, or if the PR is closed or its head changes while the build runs, no test release is published.
 Removing the label revokes publication for queued/in-flight test builds.
 The PR's committed Cargo files and existing public releases are not changed.
 Existing `v0.2.8` assets are not replaced.
-The prerelease includes all three signed archives, three `*-signing.json` files, the Linux `.sig` and public key, combined `SHA256SUMS.txt`, `install.sh`, and `install.ps1`.
+The prerelease includes the signed Windows ZIP, `windows-signing.json`, `SHA256SUMS.txt`, and `install.ps1`.
 To install it explicitly, set `RAYFIN_LOCAL_VERSION` to its alpha version before running the appropriate installer.
 There is no GitHub Actions release publisher.
 
@@ -219,7 +218,7 @@ For an external failure, manually requeue the same main version-bump commit with
 The create-only GitHub task refuses an existing release rather than replacing published assets.
 A source correction must use a new version.
 Intel macOS and Linux ARM64 are not built by this pipeline; those users must pin the existing unsigned `0.2.8` release or build from source.
-Until a three-platform release is validated, Apple Silicon and Linux x64 users must also pin that legacy release.
+While Unix releases are deferred, Apple Silicon and Linux x64 users must also pin that legacy release.
 
 ### Dependency restore failures
 
@@ -238,11 +237,22 @@ falling back to crates.io.
 
 ## Linux and Apple Silicon
 
+**Deferred to a separate PR.**
+The Linux cross-build steps, `BuildUnix`, `SignUnix`, `VerifyUnix`, Unix artifact inputs, and three-platform assembly/publication are commented out in the pipeline.
+The templates, cross-build script, public key and verification helpers are retained for that follow-up; they are not part of the active release path.
+The design below describes the deferred implementation, not currently published Unix signing guarantees.
+
+The [Windows cross-build run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21430420) successfully built Linux x64 on Windows and Apple Silicon on Intel macOS, and signed Windows.
+ESRP `LinuxSign` then returned `FailDoNotRetry`: client `f351681f-63af-4d0a-80b2-80bc2ec5cbb2` is unauthorized for `CP-450779-Pgp`.
+Apple signing/notarization, Unix signature verification and release publication were skipped.
+Owner approval did not establish effective service-side key access.
+Consult the ESRP team before re-enabling these paths; do not bypass the checks or broaden unrelated permissions.
+
 `ValidateWindows` also cross-compiles Linux; `BuildUnix` and `VerifyUnix` use only the existing Intel macOS hosted queue.
 `SignUnix` explicitly runs on `1ES-AppDev/windows-2022`; ESRP signing and notarization do not require Unix-hosted signing credentials.
 The final Windows release job attaches only verified exact-build platform artifacts.
 
-- [ ] TODO: Validate Windows-to-Linux cross-compilation, Intel-to-Apple-Silicon cross-compilation, ESRP signing/notarization, independent platform verification and all public release assets in a real three-platform run.
+- [ ] TODO: In a separate PR, confirm ESRP key access with the ESRP team, restore the commented Unix paths and all-platform publication gate, and validate signing/notarization, independent platform verification and every public release asset end to end.
 
 The user confirmed ESRP-owner approval for the additional platform signing operations.
 The shared connection alone was not treated as approval.
@@ -286,14 +296,15 @@ The [first cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/resul
 `1ES-AppDev` rejected the requested `ubuntu-2204` image; a subsequent attempt used the managed Ubuntu pool.
 That queue required pool-admin authorization; no global access or broader role was granted.
 An attempt to use already-authorized standard hosted `Azure Pipelines/ubuntu-24.04` in [run 21429587](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21429587) started an agent but failed the mandatory 1ES pre-job check: `Using a non 1ESHostedPool with 1ES PT is not allowed`.
-The current configuration instead performs Linux cross-compilation on the existing approved Windows pool; no official security task is disabled or downgraded.
+The deferred configuration instead performs Linux cross-compilation on the existing approved Windows pool; no official security task is disabled or downgraded.
 The Apple job failed with `No agent found in pool GitHub-hosted Agents which satisfies the specified demands: Agent.Version -gtVersion 5.281.1`.
 That minimum comes from the required `CodeQL3000Init` / `CodeQL3000Finalize` tasks, not an optional demand added by this repository.
 That failure motivated using the standard Intel image instead of depending on Apple Silicon capacity.
-The Intel job still must satisfy every official task's minimum agent version; it has not yet been validated in an actual official run.
+The Intel job still must satisfy every official task's minimum agent version; its build succeeded in run 21430420.
 The [next cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21427733) reached the Unix resource-authorization checkpoint but could not start those jobs.
 Do not downgrade or remove security tasks to bypass agent selection.
-Actual Linux build/restore, Intel-hosted cross-compilation and notarization assessment, ESRP archive/CLI handling and successful public assets remain unverified.
+Linux build/restore and Intel-hosted cross-compilation succeeded in run 21430420.
+Unix signing/notarization assessment, ESRP archive/CLI response handling and successful public Unix assets remain unverified.
 Do not treat template compilation or owner approval as evidence that those runtime operations have passed.
 
 ### Deferred native Linux testing
@@ -318,5 +329,6 @@ Until native execution testing is restored, keep the metadata and release-note d
   before adding its build/signing stage. It is not part of this pilot.
 - crates.io publishing remains out of scope.
 
-Both main releases and PR-test releases require all three verified signed platform archives.
+Both main releases and PR-test releases currently publish only the verified signed Windows archive.
+The separate Unix PR must restore the all-three-platform gate before enabling Unix publication.
 The old `.github/workflows/release.yml` publisher is removed.

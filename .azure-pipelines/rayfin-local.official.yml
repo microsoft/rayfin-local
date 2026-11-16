@@ -98,10 +98,11 @@ extends:
                   displayName: Publish signed Windows release archive
                   targetPath: $(Build.ArtifactStagingDirectory)/windows-signed
                   artifactName: windows-signed
-                - output: pipelineArtifact
-                  displayName: Publish Windows-cross-compiled Linux archive for ESRP
-                  targetPath: $(Build.ArtifactStagingDirectory)/unsigned-linux
-                  artifactName: unsigned-linux
+                # TODO: Restore in a separate PR after ESRP key authorization and validation.
+                # - output: pipelineArtifact
+                #   displayName: Publish Windows-cross-compiled Linux archive for ESRP
+                #   targetPath: $(Build.ArtifactStagingDirectory)/unsigned-linux
+                #   artifactName: unsigned-linux
             steps:
               - checkout: self
                 clean: true
@@ -349,144 +350,149 @@ extends:
                   RUST_TARGET: $(Target)
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
-              - task: UsePythonVersion@0
-                inputs:
-                  versionSpec: '3.13'
-              - pwsh: ./.azure-pipelines/scripts/Build-LinuxOnWindows.ps1
-                displayName: Cross-compile Linux x64 and package executable Unix permissions on Windows
-                env:
-                  RUSTUP_TOOLCHAIN: $(RustVersion)
-                  RUSTFLAGS: ''
+              # TODO: Restore Linux cross-compilation with the deferred Unix release stages.
+              # - task: UsePythonVersion@0
+              #   inputs:
+              #     versionSpec: '3.13'
+              # - pwsh: ./.azure-pipelines/scripts/Build-LinuxOnWindows.ps1
+              #   displayName: Cross-compile Linux x64 and package executable Unix permissions on Windows
+              #   env:
+              #     RUSTUP_TOOLCHAIN: $(RustVersion)
+              #     RUSTFLAGS: ''
 
-      - stage: BuildUnix
-        displayName: Cross-compile Apple Silicon on Intel macOS
-        dependsOn: DetermineRelease
-        condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
-        jobs:
-          - template: /.azure-pipelines/templates/unix-job.yml@self
-            parameters:
-              platform: macos
-              action: package
-              testReleasePr: ${{ parameters.testReleasePr }}
-              pool:
-                name: Azure Pipelines
-                image: macos-15
-                hostArchitecture: amd64
-                os: macOS
-
-      - stage: SignUnix
-        displayName: Submit Linux signing and Apple signing/notarization from Windows
-        dependsOn: [ValidateWindows, BuildUnix]
-        pool:
-          name: 1ES-AppDev
-          image: windows-2022
-          os: windows
-        jobs:
-          - job: SignUnix
-            timeoutInMinutes: 240
-            templateContext:
-              inputs:
-                - input: pipelineArtifact
-                  artifactName: unsigned-linux
-                  targetPath: $(Pipeline.Workspace)/unsigned-linux
-                - input: pipelineArtifact
-                  artifactName: unsigned-macos
-                  targetPath: $(Pipeline.Workspace)/unsigned-macos
-              outputs:
-                - output: pipelineArtifact
-                  artifactName: unix-signing
-                  targetPath: $(Build.ArtifactStagingDirectory)/unix-signing
-                - output: pipelineArtifact
-                  artifactName: linux-signed
-                  targetPath: $(Build.ArtifactStagingDirectory)/linux-signed
-            steps:
-              - checkout: self
-                clean: true
-                persistCredentials: false
-              - pwsh: |
-                  $ErrorActionPreference = 'Stop'
-                  $output = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'unix-signing'
-                  $linuxSign = Join-Path $env:AGENT_TEMPDIRECTORY 'linux-sign'
-                  New-Item -ItemType Directory -Path $output, $linuxSign | Out-Null
-                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $output
-                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $linuxSign
-                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/linux-source.json" -Destination $output
-                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/*.zip" -Destination $output
-                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/macos-source.json" -Destination $output
-                displayName: Preserve original Linux archive before detached signing replaces its input
-              - template: /.azure-pipelines/templates/sign-unix.yml@self
-                parameters:
-                  folder: $(Agent.TempDirectory)/linux-sign
-                  pattern: '*.tar.gz'
-                  keyCode: CP-450779-Pgp
-                  operation: LinuxSign
-              - pwsh: |
-                  $ErrorActionPreference = 'Stop'
-                  $files = @(Get-ChildItem "$env:AGENT_TEMPDIRECTORY/linux-sign/*.tar.gz" -File)
-                  if ($files.Count -ne 1) { throw 'Expected exactly one ESRP Linux detached signature response.' }
-                  Copy-Item -LiteralPath $files[0].FullName `
-                    -Destination "$env:BUILD_ARTIFACTSTAGINGDIRECTORY/unix-signing/$($files[0].Name).sig"
-                displayName: Keep detached signature alongside unchanged Linux archive
-              - template: /.azure-pipelines/templates/sign-unix.yml@self
-                parameters:
-                  folder: $(Build.ArtifactStagingDirectory)/unix-signing
-                  pattern: '*.zip'
-                  keyCode: CP-401337-Apple
-                  operation: MacAppDeveloperSign
-                  operationParameters:
-                    - parameterName: Hardening
-                      parameterValue: --options=runtime
-              - template: /.azure-pipelines/templates/sign-unix.yml@self
-                parameters:
-                  folder: $(Build.ArtifactStagingDirectory)/unix-signing
-                  pattern: '*.zip'
-                  keyCode: CP-401337-Apple
-                  operation: MacAppNotarize
-              - task: UseNode@1
-                inputs:
-                  version: $(NodeVersion)
-              - task: UsePythonVersion@0
-                inputs:
-                  versionSpec: '3.13'
-              - pwsh: |
-                  $ErrorActionPreference = 'Stop'
-                  $env:GPG = Join-Path $env:ProgramFiles 'Git/usr/bin/gpg.exe'
-                  if (-not (Test-Path -LiteralPath $env:GPG -PathType Leaf)) {
-                    throw 'Git for Windows GPG is missing; install an approved GPG before Linux signature verification.'
-                  }
-                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
-                    & node --input-type=module -e '
-                      import { readFileSync, writeFileSync } from "node:fs";
-                      import { alphaManifest } from "./.github/scripts/set-alpha-version.mjs";
-                      const result = alphaManifest(readFileSync("Cargo.toml", "utf8"), process.env.BUILD_BUILDID);
-                      writeFileSync("Cargo.toml", result.manifest);
-                    '
-                    if ($LASTEXITCODE -ne 0) { throw 'Cannot match the build-only alpha version.' }
-                  }
-                  & node .github/scripts/unix-release.mjs verify linux
-                  if ($LASTEXITCODE -ne 0) { throw 'Linux archive GPG/source/hash/ELF verification failed.' }
-                displayName: Independently verify Linux PGP signature and archive integrity on Windows
-                env:
-                  TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
-
-      - stage: VerifyUnix
-        displayName: Verify Apple Developer ID/notarization on Intel macOS
-        dependsOn: SignUnix
-        jobs:
-          - template: /.azure-pipelines/templates/unix-job.yml@self
-            parameters:
-              platform: macos
-              action: verify
-              testReleasePr: ${{ parameters.testReleasePr }}
-              pool:
-                name: Azure Pipelines
-                image: macos-15
-                hostArchitecture: amd64
-                os: macOS
+      # TODO: Restore Unix releases in a separate PR after consulting the ESRP team.
+      # Run 21430420 built both targets, but CP-450779-Pgp denied this ESRP client.
+      # Apple signing/notarization and end-to-end Unix verification remain unvalidated.
+      # - stage: BuildUnix
+      #   displayName: Cross-compile Apple Silicon on Intel macOS
+      #   dependsOn: DetermineRelease
+      #   condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
+      #   jobs:
+      #     - template: /.azure-pipelines/templates/unix-job.yml@self
+      #       parameters:
+      #         platform: macos
+      #         action: package
+      #         testReleasePr: ${{ parameters.testReleasePr }}
+      #         pool:
+      #           name: Azure Pipelines
+      #           image: macos-15
+      #           hostArchitecture: amd64
+      #           os: macOS
+      #
+      # - stage: SignUnix
+      #   displayName: Submit Linux signing and Apple signing/notarization from Windows
+      #   dependsOn: [ValidateWindows, BuildUnix]
+      #   pool:
+      #     name: 1ES-AppDev
+      #     image: windows-2022
+      #     os: windows
+      #   jobs:
+      #     - job: SignUnix
+      #       timeoutInMinutes: 240
+      #       templateContext:
+      #         inputs:
+      #           - input: pipelineArtifact
+      #             artifactName: unsigned-linux
+      #             targetPath: $(Pipeline.Workspace)/unsigned-linux
+      #           - input: pipelineArtifact
+      #             artifactName: unsigned-macos
+      #             targetPath: $(Pipeline.Workspace)/unsigned-macos
+      #         outputs:
+      #           - output: pipelineArtifact
+      #             artifactName: unix-signing
+      #             targetPath: $(Build.ArtifactStagingDirectory)/unix-signing
+      #           - output: pipelineArtifact
+      #             artifactName: linux-signed
+      #             targetPath: $(Build.ArtifactStagingDirectory)/linux-signed
+      #       steps:
+      #         - checkout: self
+      #           clean: true
+      #           persistCredentials: false
+      #         - pwsh: |
+      #             $ErrorActionPreference = 'Stop'
+      #             $output = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'unix-signing'
+      #             $linuxSign = Join-Path $env:AGENT_TEMPDIRECTORY 'linux-sign'
+      #             New-Item -ItemType Directory -Path $output, $linuxSign | Out-Null
+      #             Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $output
+      #             Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $linuxSign
+      #             Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/linux-source.json" -Destination $output
+      #             Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/*.zip" -Destination $output
+      #             Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/macos-source.json" -Destination $output
+      #           displayName: Preserve original Linux archive before detached signing replaces its input
+      #         - template: /.azure-pipelines/templates/sign-unix.yml@self
+      #           parameters:
+      #             folder: $(Agent.TempDirectory)/linux-sign
+      #             pattern: '*.tar.gz'
+      #             keyCode: CP-450779-Pgp
+      #             operation: LinuxSign
+      #         - pwsh: |
+      #             $ErrorActionPreference = 'Stop'
+      #             $files = @(Get-ChildItem "$env:AGENT_TEMPDIRECTORY/linux-sign/*.tar.gz" -File)
+      #             if ($files.Count -ne 1) { throw 'Expected exactly one ESRP Linux detached signature response.' }
+      #             Copy-Item -LiteralPath $files[0].FullName `
+      #               -Destination "$env:BUILD_ARTIFACTSTAGINGDIRECTORY/unix-signing/$($files[0].Name).sig"
+      #           displayName: Keep detached signature alongside unchanged Linux archive
+      #         - template: /.azure-pipelines/templates/sign-unix.yml@self
+      #           parameters:
+      #             folder: $(Build.ArtifactStagingDirectory)/unix-signing
+      #             pattern: '*.zip'
+      #             keyCode: CP-401337-Apple
+      #             operation: MacAppDeveloperSign
+      #             operationParameters:
+      #               - parameterName: Hardening
+      #                 parameterValue: --options=runtime
+      #         - template: /.azure-pipelines/templates/sign-unix.yml@self
+      #           parameters:
+      #             folder: $(Build.ArtifactStagingDirectory)/unix-signing
+      #             pattern: '*.zip'
+      #             keyCode: CP-401337-Apple
+      #             operation: MacAppNotarize
+      #         - task: UseNode@1
+      #           inputs:
+      #             version: $(NodeVersion)
+      #         - task: UsePythonVersion@0
+      #           inputs:
+      #             versionSpec: '3.13'
+      #         - pwsh: |
+      #             $ErrorActionPreference = 'Stop'
+      #             $env:GPG = Join-Path $env:ProgramFiles 'Git/usr/bin/gpg.exe'
+      #             if (-not (Test-Path -LiteralPath $env:GPG -PathType Leaf)) {
+      #               throw 'Git for Windows GPG is missing; install an approved GPG before Linux signature verification.'
+      #             }
+      #             if ([int]$env:TEST_RELEASE_PR -gt 0) {
+      #               & node --input-type=module -e '
+      #                 import { readFileSync, writeFileSync } from "node:fs";
+      #                 import { alphaManifest } from "./.github/scripts/set-alpha-version.mjs";
+      #                 const result = alphaManifest(readFileSync("Cargo.toml", "utf8"), process.env.BUILD_BUILDID);
+      #                 writeFileSync("Cargo.toml", result.manifest);
+      #               '
+      #               if ($LASTEXITCODE -ne 0) { throw 'Cannot match the build-only alpha version.' }
+      #             }
+      #             & node .github/scripts/unix-release.mjs verify linux
+      #             if ($LASTEXITCODE -ne 0) { throw 'Linux archive GPG/source/hash/ELF verification failed.' }
+      #           displayName: Independently verify Linux PGP signature and archive integrity on Windows
+      #           env:
+      #             TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+      #
+      # - stage: VerifyUnix
+      #   displayName: Verify Apple Developer ID/notarization on Intel macOS
+      #   dependsOn: SignUnix
+      #   jobs:
+      #     - template: /.azure-pipelines/templates/unix-job.yml@self
+      #       parameters:
+      #         platform: macos
+      #         action: verify
+      #         testReleasePr: ${{ parameters.testReleasePr }}
+      #         pool:
+      #           name: Azure Pipelines
+      #           image: macos-15
+      #           hostArchitecture: amd64
+      #           os: macOS
 
       - stage: StageGitHubRelease
-        displayName: Publish verified signed platform releases
-        dependsOn: [DetermineRelease, ValidateWindows, VerifyUnix, SDLSources]
+        displayName: Publish verified signed Windows releases
+        # TODO: Restore VerifyUnix as a required dependency with Unix releases.
+        dependsOn: [DetermineRelease, ValidateWindows, SDLSources]
         condition: and(succeeded(), or(eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true'), gt(${{ parameters.testReleasePr }}, 0)))
         variables:
           ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
@@ -495,7 +501,7 @@ extends:
           MainRelease: $[stageDependencies.DetermineRelease.Version.outputs['detect.PublishRelease']]
         jobs:
           - job: UploadSignedPlatforms
-            displayName: Upload verified signed platform release assets
+            displayName: Upload verified signed Windows release assets
             templateContext:
               type: releaseJob
               isProduction: true
@@ -503,12 +509,12 @@ extends:
                 - input: pipelineArtifact
                   artifactName: windows-signed
                   targetPath: $(Pipeline.Workspace)/windows-signed
-                - input: pipelineArtifact
-                  artifactName: linux-signed
-                  targetPath: $(Pipeline.Workspace)/linux-signed
-                - input: pipelineArtifact
-                  artifactName: macos-signed
-                  targetPath: $(Pipeline.Workspace)/macos-signed
+                # - input: pipelineArtifact
+                #   artifactName: linux-signed
+                #   targetPath: $(Pipeline.Workspace)/linux-signed
+                # - input: pipelineArtifact
+                #   artifactName: macos-signed
+                #   targetPath: $(Pipeline.Workspace)/macos-signed
             steps:
               - checkout: none
               - pwsh: |
@@ -550,17 +556,17 @@ extends:
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
                   RELEASE_TAG: $(ReleaseTag)
                   MAIN_RELEASE: $(MainRelease)
-              - task: UseNode@1
-                inputs:
-                  version: $(NodeVersion)
-              - pwsh: |
-                  & node "$env:PIPELINE_WORKSPACE/windows-signed/_release/assemble-release.mjs"
-                  if ($LASTEXITCODE -ne 0) { throw 'Cannot assemble an exact-build release with all three verified platforms.' }
-                displayName: Require every signed platform and assemble combined release checksums
-                env:
-                  RELEASE_TAG: $(ReleaseTag)
+              # - task: UseNode@1
+              #   inputs:
+              #     version: $(NodeVersion)
+              # - pwsh: |
+              #     & node "$env:PIPELINE_WORKSPACE/windows-signed/_release/assemble-release.mjs"
+              #     if ($LASTEXITCODE -ne 0) { throw 'Cannot assemble an exact-build release with all three verified platforms.' }
+              #   displayName: Require every signed platform and assemble combined release checksums
+              #   env:
+              #     RELEASE_TAG: $(ReleaseTag)
               - task: GitHubRelease@1
-                displayName: Create GitHub release with all verified signed platforms
+                displayName: Create GitHub release with verified signed Windows assets
                 inputs:
                   gitHubConnection: github.com_christopheranderson
                   repositoryName: microsoft/rayfin-local
@@ -570,22 +576,16 @@ extends:
                   tag: $(ReleaseTag)
                   releaseNotesSource: inline
                   releaseNotesInline: |
-                    Signed platform assets from official AppDev build $(Build.BuildId).
+                    Signed Windows x64 assets from official AppDev build $(Build.BuildId).
                     Source: $(Build.SourceVersion).
                     Windows x64: ESRP Authenticode signature.
-                    Linux x64: detached Microsoft PGP signature (.tar.gz.sig).
-                    Apple Silicon: Developer ID signature, hardened runtime, and Apple notarization.
-                    Native Linux and Apple Silicon execution testing is deferred; both are cross-compiled.
+                    Linux and Apple Silicon releases are deferred to a separate PR pending ESRP authorization and validation.
                     Prereleases are never marked latest.
                   assets: |
-                    $(Pipeline.Workspace)/release/*.zip
-                    $(Pipeline.Workspace)/release/*.tar.gz
-                    $(Pipeline.Workspace)/release/*.sig
-                    $(Pipeline.Workspace)/release/*-signing.json
-                    $(Pipeline.Workspace)/release/microsoft.asc
-                    $(Pipeline.Workspace)/release/SHA256SUMS.txt
-                    $(Pipeline.Workspace)/release/install.sh
-                    $(Pipeline.Workspace)/release/install.ps1
+                    $(Pipeline.Workspace)/windows-signed/*.zip
+                    $(Pipeline.Workspace)/windows-signed/windows-signing.json
+                    $(Pipeline.Workspace)/windows-signed/SHA256SUMS.txt
+                    $(Pipeline.Workspace)/windows-signed/install.ps1
                   isDraft: false
                   isPreRelease: $(ReleaseIsPrerelease)
                   makeLatest: $(ReleaseMakeLatest)
