@@ -350,7 +350,7 @@ extends:
         dependsOn: DetermineRelease
         condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
         jobs:
-          - template: templates/unix-job.yml
+          - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: linux
               action: package
@@ -359,7 +359,7 @@ extends:
                 name: 1ES-AppDev
                 image: ubuntu-2204
                 os: linux
-          - template: templates/unix-job.yml
+          - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: macos
               action: package
@@ -403,7 +403,7 @@ extends:
                   Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/*.zip" -Destination $output
                   Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/macos-source.json" -Destination $output
                 displayName: Preserve original Linux archive before detached signing replaces its input
-              - template: templates/sign-unix.yml
+              - template: /.azure-pipelines/templates/sign-unix.yml@self
                 parameters:
                   folder: $(Agent.TempDirectory)/linux-sign
                   pattern: '*.tar.gz'
@@ -416,7 +416,7 @@ extends:
                   Copy-Item -LiteralPath $files[0].FullName `
                     -Destination "$env:BUILD_ARTIFACTSTAGINGDIRECTORY/unix-signing/$($files[0].Name).sig"
                 displayName: Keep detached signature alongside unchanged Linux archive
-              - template: templates/sign-unix.yml
+              - template: /.azure-pipelines/templates/sign-unix.yml@self
                 parameters:
                   folder: $(Build.ArtifactStagingDirectory)/unix-signing
                   pattern: '*.zip'
@@ -425,7 +425,7 @@ extends:
                   operationParameters:
                     - parameterName: Hardening
                       parameterValue: --options=runtime
-              - template: templates/sign-unix.yml
+              - template: /.azure-pipelines/templates/sign-unix.yml@self
                 parameters:
                   folder: $(Build.ArtifactStagingDirectory)/unix-signing
                   pattern: '*.zip'
@@ -436,7 +436,7 @@ extends:
         displayName: Verify Linux PGP and Apple Developer ID/notarization
         dependsOn: SignUnix
         jobs:
-          - template: templates/unix-job.yml
+          - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: linux
               action: verify
@@ -445,7 +445,7 @@ extends:
                 name: 1ES-AppDev
                 image: ubuntu-2204
                 os: linux
-          - template: templates/unix-job.yml
+          - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: macos
               action: verify

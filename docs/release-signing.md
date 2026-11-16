@@ -259,7 +259,8 @@ No Gatekeeper bypass or unsigned fallback is used.
 The final release job downloads only verified platform artifacts, matches their versions/targets/commit/build IDs and archive hashes, and assembles combined checksums.
 A missing platform, wrong signer, invalid signature, missing notarization, or mismatched artifact blocks publication.
 The Linux key fingerprint and Apple identity above are pinned verifier expectations, not claims about a completed Unix signing run.
-The main and alpha paths compile through the live official template when the uncommitted local templates are materialized for preview.
+The main and alpha paths compile through the live official template with the checked-in job and signing templates.
+Local template references use absolute repository paths with `@self`, because relative references inside the official template's parameters resolve against the 1ES template repository.
 The first actual cross-platform run is still required to establish Linux image capacity, Apple native tool availability, ESRP archive/CLI handling, and successful public assets.
 Do not treat template compilation or owner approval as evidence that those runtime operations have passed.
 
