@@ -138,15 +138,15 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 
 ## Install
 
-The official release pipeline signs Windows x64 with Authenticode, Linux x64 archives with Microsoft's PGP key, and Apple Silicon binaries with Developer ID and Apple notarization.
+The official release pipeline currently publishes only Windows x64 binaries signed with Authenticode.
 Those guarantees apply to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
-Apple Silicon releases are cross-compiled on Intel macOS; [native ARM64 execution testing is deferred](docs/release-signing.md#deferred-native-apple-silicon-testing).
+Linux and Apple Silicon signing stages are commented out pending infrastructure access and end-to-end validation; see the [signing TODOs](docs/release-signing.md#linux-and-apple-silicon).
 
-**Apple Silicon and Linux x64:**
+**macOS and Linux (existing unsigned `0.2.8` release):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.2.8 sh
 ```
 
 **Windows (PowerShell):**
@@ -175,18 +175,17 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Platform | Release build |
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
-| macOS on Apple Silicon | `aarch64-apple-darwin` |
-| Linux x64 with glibc | `x86_64-unknown-linux-gnu` |
+| macOS on Apple Silicon (existing unsigned `0.2.8` release only) | `aarch64-apple-darwin` |
+| Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
 | Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
 
-For Intel macOS or Linux ARM64, set `RAYFIN_LOCAL_VERSION=0.2.8` in the Unix installation command, or build from source.
-The installers check archive checksums; Linux releases also include a detached `.tar.gz.sig` and `microsoft.asc` for independent PGP verification.
-See the [signing runbook](docs/release-signing.md#linux-and-apple-silicon) for the pinned fingerprint and platform verification requirements.
+For all macOS and Linux platforms, pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+The installers check archive checksums; that is not signature verification.
 
 Other ways to install:
 
 - **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
-  New official Apple Silicon binaries are notarized; legacy `0.2.8` macOS binaries are not.
+  The existing `0.2.8` macOS binaries are not notarized.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
   `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
