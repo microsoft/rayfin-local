@@ -1,6 +1,6 @@
 // analyze.mjs: compile a Rayfin project's `rayfin/data` (and `rayfin/storage`) entities and run
 // the project's own `@microsoft/rayfin-core` analyzer over them, the way `rayfin dev db apply`
-// (CLI 1.36.2, utils/dab-config-generator.js and utils/storage-config-generator.js) does.
+// (CLI 2.0.0, utils/dab-config-generator.js and utils/storage-config-generator.js) does.
 //
 // One-shot helper (js/README.md): `node analyze.mjs --input <in.json> --output <out.json>`.
 //
@@ -30,7 +30,7 @@
 //   and the modules imported at run time, such as a data package's build output) and diagnostics.
 //
 // Connectors mode (`mode: "connectors"`): the entity classes of Category A connectors
-// (`rayfin/connectors/<name>/*.ts`), analyzed the way `rayfin up connector apply` does (CLI 1.36.2,
+// (`rayfin/connectors/<name>/*.ts`), analyzed the way `rayfin up connector apply` does (CLI 2.0.0,
 // services/connector-generator.js): ConnectorSchemaAnalyzer, then ConnectorConfigGenerator.
 //   Input: projectRoot, tsconfigPath (the project's rayfin/tsconfig.json, or null), outDir, stateDir,
 //   connectors ([{name, dir, dialect}]: dialect is the connector type's analyzer dialect, `mssql`,
@@ -261,7 +261,7 @@ async function analyzeConnectors(input) {
   if (typeof analysis.ConnectorSchemaAnalyzer !== 'function' || typeof analysis.ConnectorConfigGenerator !== 'function') {
     throw new Error(
       `@microsoft/rayfin-core ${coreVersion ?? '(unknown version)'} has no connector analyzer ` +
-        `(ConnectorSchemaAnalyzer); upgrade the app's @microsoft/rayfin-* packages to 1.36.`,
+        `(ConnectorSchemaAnalyzer); upgrade the app's @microsoft/rayfin-* packages to 2.0.`,
     );
   }
 
@@ -461,14 +461,14 @@ async function importedModules() {
 /**
  * `@microsoft/rayfin-core`'s `schema` or `analysis` module, which SDK 1.37 moved under
  * `_internal/` (`@microsoft/rayfin-core/_internal/schema`) with the same exports. When neither
- * loads, the error is the one for the 1.36 path.
+ * loads, the error is the one for the `_internal/` path.
  */
 async function coreModule(name) {
   try {
-    return await import(`@microsoft/rayfin-core/${name}`);
+    return await import(`@microsoft/rayfin-core/_internal/${name}`);
   } catch (error) {
     try {
-      return await import(`@microsoft/rayfin-core/_internal/${name}`);
+      return await import(`@microsoft/rayfin-core/${name}`);
     } catch {
       throw error;
     }

@@ -3,7 +3,7 @@
 //! Locally, rayfin-local stands in for both identities a deployed Rayfin app uses: the app
 //! identity behind `ctx.Tokens.<Audience>` in functions, and the signed-in user behind delegated
 //! connectors. Both become the developer, through the Azure CLI (`az account get-access-token`),
-//! the Rayfin CLI's login (`@microsoft/rayfin-cli/auth`) or `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` env
+//! the Rayfin CLI's login (`@microsoft/rayfin-cli/_internal/auth`) or `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` env
 //! overrides. Consumers depend only on [`TokenSource`], so tests can use a fake; [`TokenBroker`]
 //! is the real one.
 
@@ -74,7 +74,7 @@ pub trait TokenSource: Send + Sync + 'static {
 }
 
 /// The resources rayfin-local mints tokens for: the `AudienceType` members functions declare on
-/// `RayfinContext` (`@microsoft/fabric-user-data-functions` 1.36), and Power BI for
+/// `RayfinContext` (`@microsoft/fabric-user-data-functions` 2.0.0), and Power BI for
 /// `fabric-semanticmodel` connectors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Audience {

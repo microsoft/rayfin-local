@@ -2,7 +2,7 @@
 
 Drives rayfin-local's sign-in portal (the popup `ensureSignedInWithFabric` opens, and the local
 Fabric host for apps using `initEmbeddedAuth`) with a real browser and the real Rayfin SDK
-1.36.2. `crates/rl-auth/tests/portal_e2e.rs` starts the auth routes behind `rl-server` and runs
+2.0.0. `crates/rl-auth/tests/portal_e2e.rs` starts the auth routes behind `rl-server` and runs
 `run.mjs`, which:
 
 1. bundles `app.js` (a Sign in button calling `ensureSignedInWithFabric`, or `initEmbeddedAuth`
@@ -30,8 +30,8 @@ cd ../../..
 cargo test -p rl-auth --test portal_e2e -- --ignored --nocapture
 ```
 
-The SDK comes from `RAYFIN_SDK_NODE_MODULES`; the default is the explorer app checked out next to
-this repository (`../fabric-apps/apps/explorer/node_modules`). The test prints `SKIPPED` and
+The SDK comes from `RAYFIN_SDK_NODE_MODULES`; the default is the basic fixture's installed packages
+(`tests/fixtures/apps/basic/node_modules`). The test prints `SKIPPED` and
 passes when Playwright or the SDK is missing.
 
 `node_modules/` and the `.build/` bundle are not committed.

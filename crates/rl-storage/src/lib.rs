@@ -1,7 +1,7 @@
 //! Rayfin storage (`/api/storage/*`) on the local file system (`.rayfin-local/storage`), with the
 //! app's `@blob` folder rules.
 //!
-//! The routes are the ones the 1.36.2 `StorageFolderClient` calls (`@microsoft/rayfin-storage`
+//! The routes are the ones the 2.0.0 `StorageFolderClient` calls (`@microsoft/rayfin-storage`
 //! `dist/StorageFolderClient.js`):
 //!
 //! | Request | Answer |

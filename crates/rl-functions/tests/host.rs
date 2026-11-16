@@ -401,25 +401,26 @@ async fn failures_keep_the_deployed_or_local_status_mapping() {
     assert_eq!(envelope(&rejected)["errors"][0]["errorCode"], "UserThrown");
     assert!(
         output
-            .wait_for(Stream::Stderr, "fail: Error during function invoke")
+            .wait_for(
+                Stream::Stderr,
+                "fail: [UserDataFunctions] Error during function invoke"
+            )
             .await
     );
 
-    match host.invoke(call("bigint", json!({})), TIMEOUT).await {
-        Err(HostError::Failed {
-            function,
-            error_type,
-            message,
-            ..
-        }) => {
-            assert_eq!(
-                (function.as_str(), error_type.as_str()),
-                ("bigint", "TypeError")
-            );
-            assert!(message.contains("BigInt"), "{message}");
-        }
-        other => panic!("expected a failure, got {other:?}"),
-    }
+    let bigint = host
+        .invoke(call("bigint", json!({})), TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!((bigint.status, bigint.udf_status()), (200, Some("Failed")));
+    let error = &envelope(&bigint)["errors"][0];
+    assert_eq!(error["properties"]["error_type"], "TypeError");
+    assert!(
+        error["properties"]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("BigInt")
+    );
     assert!(matches!(
         host.invoke(call("missing", json!({})), TIMEOUT).await,
         Err(HostError::NotFound(name)) if name == "missing"
@@ -504,20 +505,14 @@ async fn invocations_run_concurrently_and_log_to_the_sink() {
     output_of(&host, call("logs", json!({"message": marker}))).await;
     assert!(
         output
-            .wait_for(
-                Stream::Stdout,
-                &format!("logs: [UserDataFunctions] log: {marker}")
-            )
+            .wait_for(Stream::Stdout, &format!("logs: log: {marker}"))
             .await,
         "{}",
         output.text()
     );
     assert!(
         output
-            .wait_for(
-                Stream::Stderr,
-                &format!("logs: [UserDataFunctions] error: {marker}")
-            )
+            .wait_for(Stream::Stderr, &format!("logs: error: {marker}"))
             .await
     );
     host.stop(Duration::from_secs(5)).await;

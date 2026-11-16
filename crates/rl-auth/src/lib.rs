@@ -6,7 +6,7 @@
 //! Auth-user insert/update triggers atomically maintain the data API's `Users(Id, Email)` mirror.
 //! [`prepare_database`] backfills older accounts before app foreign-key migrations.
 //!
-//! The wire contract is the real Rayfin auth service's, as the SDK 1.36.2 sees it: see
+//! The wire contract is the real Rayfin auth service's, as the SDK 2.0.0 sees it: see
 //! [`AuthService::router`] for the routes.
 
 mod entra;

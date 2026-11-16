@@ -1,9 +1,9 @@
-//! The real Rayfin SDK 1.36.2 (`fabricSemanticModel()` on `createConnectorsApi`, as the reference
+//! The real Rayfin SDK 2.0.0 (`fabricSemanticModel()` on `createConnectorsApi`, as the reference
 //! app wires it) against rayfin-local's routes, compared with the SDK's own direct path to the
 //! same mock Power BI (`tests/sdk/decode.mjs`).
 //!
-//! Needs Node and the reference app's node_modules (`RAYFIN_SDK_NODE_MODULES`, or
-//! `fabric-apps/apps/explorer` next to this repository); skipped without them.
+//! Needs Node and the basic fixture's node_modules (`RAYFIN_SDK_NODE_MODULES`, or
+//! `tests/fixtures/apps/basic`); skipped without them.
 
 mod common;
 
@@ -20,7 +20,7 @@ const TOKEN_HINT: &str = "Run `az login`, then retry.";
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sdk_normalizes_rayfin_local_answers_as_its_direct_path() {
     let Some(node_modules) = sdk_node_modules() else {
-        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 2.0.0 node_modules aren't installed");
         return;
     };
     if Command::new("node")

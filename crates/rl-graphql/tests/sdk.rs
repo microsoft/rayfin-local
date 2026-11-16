@@ -1,8 +1,8 @@
-//! The real Rayfin SDK 1.36.2 data client (`client.data.<Entity>`) against rl-graphql behind
+//! The real Rayfin SDK 2.0.0 data client (`client.data.<Entity>`) against rl-graphql behind
 //! rl-server, signed in through rl-auth, on the explorer app's model (`tests/sdk/data.mjs`).
 //!
-//! Needs Node and the SDK's node_modules: `RAYFIN_SDK_NODE_MODULES`, or the explorer app checked
-//! out next to this repository (`../fabric-apps/apps/explorer/node_modules`); skipped without them.
+//! Needs Node and the SDK's node_modules: `RAYFIN_SDK_NODE_MODULES`, or the basic fixture's
+//! installed packages; skipped without them.
 
 mod common;
 
@@ -20,7 +20,7 @@ fn sdk_node_modules() -> Option<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../fabric-apps/apps/explorer/node_modules")
+                .join("../../tests/fixtures/apps/basic/node_modules")
         });
     let marker = path.join("@microsoft/rayfin-data/package.json");
     marker.is_file().then_some(path)
@@ -33,7 +33,7 @@ fn id(n: u32) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sdk_data_client_reads_and_writes_through_rayfin_local() {
     let Some(node_modules) = sdk_node_modules() else {
-        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 2.0.0 node_modules aren't installed");
         return;
     };
     let node = tokio::process::Command::new("node")
@@ -195,7 +195,7 @@ async fn the_sdk_data_client_aggregates_through_rayfin_local() {
 /// `settings` plus the server's; returns its `RESULT`, or `None` (skipped) without Node or the SDK.
 async fn run_sdk_script(app: &App, script: &str, mut settings: Value) -> Option<Value> {
     let Some(node_modules) = sdk_node_modules() else {
-        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 2.0.0 node_modules aren't installed");
         return None;
     };
     let node = tokio::process::Command::new("node")

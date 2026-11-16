@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@azure/functions": "^4.16.2",
-    "@microsoft/fabric-user-data-functions": "1.36.2"
+    "@microsoft/fabric-user-data-functions": "2.0.0"
   },
   "devDependencies": {
     "typescript": "~5.9.3"

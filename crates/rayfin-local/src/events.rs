@@ -882,7 +882,7 @@ mod tests {
             )
         );
         let sdk = Sdk {
-            version: Some("1.36.2".into()),
+            version: Some("2.0.0".into()),
             supported: true,
         };
         let analysis = Event::Analysis(Analysis {
@@ -895,7 +895,7 @@ mod tests {
         assert_eq!(
             line(analysis),
             parse(
-                r#"{"v":1,"type":"analysis","time":"2026-10-30T03:12:09.512Z","ok":true,"sdk":{"version":"1.36.2","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}"#
+                r#"{"v":1,"type":"analysis","time":"2026-10-30T03:12:09.512Z","ok":true,"sdk":{"version":"2.0.0","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}"#
             )
         );
         let schema = Event::Schema(Schema {
@@ -1002,7 +1002,7 @@ mod tests {
                   "dataDir": "C:\\apps\\notes\\.rayfin-local",
                   "signInAs": {"kind": "developer"},
                   "openSignIn": false,
-                  "sdk": {"version": "1.36.2", "supported": true},
+                  "sdk": {"version": "2.0.0", "supported": true},
                   "features": {
                     "data": {"enabled": true, "entities": ["Note", "Tag"]},
                     "functions": {"enabled": true, "names": ["getBacklog"]},
@@ -1038,7 +1038,7 @@ mod tests {
             sign_in_as: SignInAs::Developer,
             open_sign_in: false,
             sdk: Sdk {
-                version: Some("1.36.2".into()),
+                version: Some("2.0.0".into()),
                 supported: true,
             },
             features: Features {

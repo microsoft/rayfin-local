@@ -10,7 +10,7 @@
 //! Deployed, Rayfin runs a semantic-model query as the signed-in user (on-behalf-of). Locally it
 //! runs as the developer, with a token from [`TokenSource`], calling Power BI the way
 //! `rayfin connector invoke` does (the SDK's direct path, `directExecute.js`). The answers are
-//! shaped so the SDK's `fabricSemanticModel()` runtime (1.36.2) normalizes them exactly as it
+//! shaped so the SDK's `fabricSemanticModel()` runtime (2.0.0) normalizes them exactly as it
 //! normalizes that direct path:
 //!
 //! - A query Power BI answers streams its Apache Arrow body back unchanged. DAX errors and

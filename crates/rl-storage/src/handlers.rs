@@ -1,4 +1,4 @@
-//! The routes the 1.36.2 `StorageFolderClient` calls, and the signed-URL routes it calls without
+//! The routes the 2.0.0 `StorageFolderClient` calls, and the signed-URL routes it calls without
 //! credentials.
 
 use std::{

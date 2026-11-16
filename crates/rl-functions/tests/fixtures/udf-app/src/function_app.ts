@@ -2,6 +2,7 @@ import {
   AudienceType,
   type FabricItem,
   type RayfinContext,
+  type WithSql,
 } from '@microsoft/fabric-user-data-functions';
 import * as rayfin from '@microsoft/fabric-user-data-functions';
 
@@ -10,6 +11,7 @@ import { udf } from './udf.js';
 
 type AppSchema = { notes: { id: string; text: string } };
 type AdoAccess = AudienceType.ADO;
+type SqlContext = RayfinContext<AppSchema, AudienceType.Sql> & WithSql;
 
 // No parameters.
 udf.func('ping', async () => 'pong');
@@ -87,6 +89,10 @@ udf.func(
 
 // A context that declares no audiences explicitly.
 udf.func('nothingDeclared', async (ctx: RayfinContext<AppSchema, never>) => typeof ctx);
+
+// SQL access, written literally and through an alias.
+udf.func('report', async (ctx: RayfinContext<AppSchema> & WithSql) => typeof ctx);
+udf.func('aliasedReport', async (ctx: SqlContext) => typeof ctx);
 
 // A destructured parameter.
 udf.func('destructured', async ({ a, b }: { a: string; b: number }) => `${a}${b}`);
