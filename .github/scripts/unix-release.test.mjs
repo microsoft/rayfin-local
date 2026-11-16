@@ -7,7 +7,27 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { assemble } from './assemble-release.mjs';
-import { verifyAppleIdentity, verifyGpgStatus, linuxFingerprint, targets } from './unix-release.mjs';
+import { verifyAppleIdentity, verifyGpgStatus, verifyLinuxElf, linuxFingerprint, targets } from './unix-release.mjs';
+
+function elfFixture() {
+  const binary = Buffer.alloc(64);
+  binary.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+  binary.writeUInt16LE(3, 16);
+  binary.writeUInt16LE(62, 18);
+  binary.writeUInt32LE(1, 20);
+  return binary;
+}
+
+test('Linux cross-compiled executables must be x86-64 ELF64, not host binaries', () => {
+  const binary = elfFixture();
+  verifyLinuxElf(binary);
+  assert.throws(() => verifyLinuxElf(binary.subarray(0, 63)));
+  for (const [offset, value] of [[0, 0x4d], [4, 1], [5, 2], [6, 0], [16, 1], [18, 183], [20, 0]]) {
+    const invalid = Buffer.from(binary);
+    invalid[offset] = value;
+    assert.throws(() => verifyLinuxElf(invalid));
+  }
+});
 
 test('Linux requires the pinned valid signing key and a modern digest', () => {
   const status = `[GNUPG:] VALIDSIG ${linuxFingerprint} 2026-11-16 1794787200 0 4 0 1 8 00 ${linuxFingerprint}`;
@@ -44,15 +64,10 @@ test('Apple identity must have expected Developer ID, team, hardened runtime and
   ]) assert.throws(() => verifyAppleIdentity(invalid));
 });
 
-test('archive packaging preserves target contents and defers Apple Silicon execution without skipping signature checks', {
-  skip: !((process.platform === 'darwin' && ['x64', 'arm64'].includes(process.arch)) ||
-    (process.platform === 'linux' && process.arch === 'x64')),
-}, () => {
+function checkPackaging(platform) {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-package-'));
-  const platform = process.platform === 'darwin' ? 'macos' : 'linux';
   const target = targets[platform];
   const version = '0.2.9';
-  const program = `#!/bin/sh\n[ -z "$RAYFIN_EXECUTION_MARKER" ] || touch "$RAYFIN_EXECUTION_MARKER"\necho rayfin-local ${version}\n`;
   const script = fileURLToPath(new URL('./unix-release.mjs', import.meta.url));
   const marker = join(root, 'target-executed');
   const env = { ...process.env, RAYFIN_EXECUTION_MARKER: marker,
@@ -72,7 +87,7 @@ test('archive packaging preserves target contents and defers Apple Silicon execu
       const compilation = spawnSync('xcrun', ['--sdk', 'macosx', 'clang',
         '-target', 'arm64-apple-macos11', cSource, '-o', builtBinary], { encoding: 'utf8' });
       assert.equal(compilation.status, 0, compilation.stderr);
-    } else writeFileSync(builtBinary, program, { mode: 0o755 });
+    } else writeFileSync(builtBinary, elfFixture(), { mode: 0o644 });
     const contents = readFileSync(builtBinary);
     writeFileSync(join(root, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`);
     for (const file of ['LICENSE', 'README.md']) writeFileSync(join(root, file), 'packaging fixture');
@@ -90,9 +105,23 @@ test('archive packaging preserves target contents and defers Apple Silicon execu
     assert.equal(extraction.status, 0);
     const binary = join(extract, `rayfin-local-${version}-${target}`, 'rayfin-local');
     assert.deepEqual(readFileSync(binary), contents);
-    assert.equal(statSync(binary).mode & 0o111, 0o111);
+    if (process.platform !== 'win32') assert.equal(statSync(binary).mode & 0o111, 0o111);
+    assert.equal(metadata.nativeExecutionTested, false);
     assert.equal(createHash('sha256').update(readFileSync(binary)).digest('hex'), metadata.binarySha256);
     assert.equal(createHash('sha256').update(readFileSync(archive)).digest('hex'), metadata.archiveSha256);
+    if (platform === 'linux') {
+      const modes = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c',
+        'import sys,tarfile; t=tarfile.open(sys.argv[1]); ' +
+        'assert t.getmember(sys.argv[2]+"/rayfin-local").mode == 0o755; ' +
+        'assert t.getmember(sys.argv[2]+"/README.md").mode == 0o644',
+        archive, `rayfin-local-${version}-${target}`], { encoding: 'utf8' });
+      assert.equal(modes.status, 0, modes.stderr);
+      writeFileSync(builtBinary, '#!/bin/sh\necho not-an-ELF\n');
+      const wrongTarget = spawnSync(process.execPath, [script, 'package', platform],
+        { cwd: root, encoding: 'utf8', env });
+      assert.notEqual(wrongTarget.status, 0);
+      assert.match(wrongTarget.stderr, /ELF64/);
+    }
     if (platform === 'macos') {
       assert.equal(metadata.nativeExecutionTested, false);
       assert.equal(existsSync(marker), false, 'Packaging must not execute the ARM64 target');
@@ -119,7 +148,14 @@ test('archive packaging preserves target contents and defers Apple Silicon execu
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}
+
+for (const platform of process.platform === 'darwin' ? ['macos', 'linux'] : ['linux']) {
+  test(`archive packaging preserves ${platform} contents and discloses deferred target execution`, {
+    skip: !((process.platform === 'darwin' && ['x64', 'arm64'].includes(process.arch)) ||
+      (['win32', 'linux'].includes(process.platform) && process.arch === 'x64')),
+  }, () => checkPackaging(platform));
+}
 
 test('publication requires all three exact-build signed artifacts and matching hashes', () => {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-assemble-'));
@@ -145,6 +181,7 @@ test('publication requires all three exact-build signed artifacts and matching h
         Object.assign(metadata, { signatureSha256: hash('signature'), fingerprint: linuxFingerprint });
       } else if (platform === 'macos') Object.assign(metadata, { notarized: true, teamId: 'UBF8T346G9' });
       else writeFileSync(join(directory, 'install.ps1'), 'installer-fixture');
+      if (platform !== 'windows') metadata.nativeExecutionTested = false;
       records[platform] = metadata;
       record(platform, metadata);
     }
@@ -152,7 +189,8 @@ test('publication requires all three exact-build signed artifacts and matching h
     assert.equal(readFileSync(join(root, 'release', 'SHA256SUMS.txt'), 'utf8').trim().split('\n').length, 4);
     assert.equal(existsSync(join(root, 'release', records.macos.archiveFile)), true);
     for (const [field, value] of [['commit', 'b'.repeat(40)], ['version', '0.2.10'],
-      ['signed', false], ['notarized', false], ['teamId', 'WRONGTEAM0'], ['archiveSha256', '0'.repeat(64)]]) {
+      ['signed', false], ['notarized', false], ['teamId', 'WRONGTEAM0'],
+      ['nativeExecutionTested', undefined], ['archiveSha256', '0'.repeat(64)]]) {
       record('macos', { ...records.macos, [field]: value });
       assert.throws(() => assemble(root, join(root, `bad-${field}`), expected), field);
     }

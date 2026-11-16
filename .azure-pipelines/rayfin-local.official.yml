@@ -98,6 +98,10 @@ extends:
                   displayName: Publish signed Windows release archive
                   targetPath: $(Build.ArtifactStagingDirectory)/windows-signed
                   artifactName: windows-signed
+                - output: pipelineArtifact
+                  displayName: Publish Windows-cross-compiled Linux archive for ESRP
+                  targetPath: $(Build.ArtifactStagingDirectory)/unsigned-linux
+                  artifactName: unsigned-linux
             steps:
               - checkout: self
                 clean: true
@@ -345,19 +349,20 @@ extends:
                   RUST_TARGET: $(Target)
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
+              - task: UsePythonVersion@0
+                inputs:
+                  versionSpec: '3.13'
+              - pwsh: ./.azure-pipelines/scripts/Build-LinuxOnWindows.ps1
+                displayName: Cross-compile Linux x64 and package executable Unix permissions on Windows
+                env:
+                  RUSTUP_TOOLCHAIN: $(RustVersion)
+                  RUSTFLAGS: ''
+
       - stage: BuildUnix
-        displayName: Build Linux and cross-compile Apple Silicon binaries
+        displayName: Cross-compile Apple Silicon on Intel macOS
         dependsOn: DetermineRelease
         condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
         jobs:
-          - template: /.azure-pipelines/templates/unix-job.yml@self
-            parameters:
-              platform: linux
-              action: package
-              testReleasePr: ${{ parameters.testReleasePr }}
-              pool:
-                name: PowerBI-Managed-Ubuntu-Pool
-                os: linux
           - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: macos
@@ -371,7 +376,7 @@ extends:
 
       - stage: SignUnix
         displayName: Submit Linux signing and Apple signing/notarization from Windows
-        dependsOn: BuildUnix
+        dependsOn: [ValidateWindows, BuildUnix]
         pool:
           name: 1ES-AppDev
           image: windows-2022
@@ -391,6 +396,9 @@ extends:
                 - output: pipelineArtifact
                   artifactName: unix-signing
                   targetPath: $(Build.ArtifactStagingDirectory)/unix-signing
+                - output: pipelineArtifact
+                  artifactName: linux-signed
+                  targetPath: $(Build.ArtifactStagingDirectory)/linux-signed
             steps:
               - checkout: self
                 clean: true
@@ -434,19 +442,37 @@ extends:
                   pattern: '*.zip'
                   keyCode: CP-401337-Apple
                   operation: MacAppNotarize
+              - task: UseNode@1
+                inputs:
+                  version: $(NodeVersion)
+              - task: UsePythonVersion@0
+                inputs:
+                  versionSpec: '3.13'
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $env:GPG = Join-Path $env:ProgramFiles 'Git/usr/bin/gpg.exe'
+                  if (-not (Test-Path -LiteralPath $env:GPG -PathType Leaf)) {
+                    throw 'Git for Windows GPG is missing; install an approved GPG before Linux signature verification.'
+                  }
+                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
+                    & node --input-type=module -e '
+                      import { readFileSync, writeFileSync } from "node:fs";
+                      import { alphaManifest } from "./.github/scripts/set-alpha-version.mjs";
+                      const result = alphaManifest(readFileSync("Cargo.toml", "utf8"), process.env.BUILD_BUILDID);
+                      writeFileSync("Cargo.toml", result.manifest);
+                    '
+                    if ($LASTEXITCODE -ne 0) { throw 'Cannot match the build-only alpha version.' }
+                  }
+                  & node .github/scripts/unix-release.mjs verify linux
+                  if ($LASTEXITCODE -ne 0) { throw 'Linux archive GPG/source/hash/ELF verification failed.' }
+                displayName: Independently verify Linux PGP signature and archive integrity on Windows
+                env:
+                  TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
       - stage: VerifyUnix
-        displayName: Verify Linux PGP and Apple Developer ID/notarization
+        displayName: Verify Apple Developer ID/notarization on Intel macOS
         dependsOn: SignUnix
         jobs:
-          - template: /.azure-pipelines/templates/unix-job.yml@self
-            parameters:
-              platform: linux
-              action: verify
-              testReleasePr: ${{ parameters.testReleasePr }}
-              pool:
-                name: PowerBI-Managed-Ubuntu-Pool
-                os: linux
           - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
               platform: macos
@@ -549,7 +575,7 @@ extends:
                     Windows x64: ESRP Authenticode signature.
                     Linux x64: detached Microsoft PGP signature (.tar.gz.sig).
                     Apple Silicon: Developer ID signature, hardened runtime, and Apple notarization.
-                    Native Apple Silicon execution testing is deferred.
+                    Native Linux and Apple Silicon execution testing is deferred; both are cross-compiled.
                     Prereleases are never marked latest.
                   assets: |
                     $(Pipeline.Workspace)/release/*.zip

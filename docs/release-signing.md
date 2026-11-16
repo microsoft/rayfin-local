@@ -14,8 +14,9 @@ It publishes only if the workspace version increases relative to the commit's fi
 PR and tag triggers are disabled; manually queued artifact builds and labelled PR alpha tests remain available.
 It extends `v1/1ES.Official.PipelineTemplate.yml`, keeps the template's
 security checks enabled, and submits all ESRP signing/notarization requests from the existing `1ES-AppDev/windows-2022` infrastructure.
-Managed Ubuntu and hosted Intel macOS agents build and independently verify Unix artifacts.
-Linux still requires pipeline-scoped authorization for `PowerBI-Managed-Ubuntu-Pool`; submitting ESRP from Windows does not remove that build requirement.
+Linux x64 is cross-compiled and its detached signature independently verified on Windows.
+Hosted Intel macOS agents cross-compile and verify Apple Silicon.
+No Linux build/verification pool is requested.
 The [platform section](#linux-and-apple-silicon) describes the keys, verification and outstanding end-to-end validation.
 
 The job verifies the checkout against `Build.SourceVersion`, installs Rust 1.96.0
@@ -100,7 +101,7 @@ The existing AppDev definition uses:
 | YAML path | `/.azure-pipelines/rayfin-local.official.yml` |
 | Triggers | Root `Cargo.toml` changes on `main`; no PR or tag triggers; no UI override |
 | Windows pool / image | `1ES-AppDev` / `windows-2022` |
-| Linux build/verification pool / image | `PowerBI-Managed-Ubuntu-Pool` / pool default |
+| Linux cross-build/verification pool / image | `1ES-AppDev` / `windows-2022`; pinned Zig 0.14.1 and cargo-zigbuild 0.24.1 |
 | Apple build/verification pool / image | `Azure Pipelines` / `macos-15`, `hostArchitecture: amd64`; cross-compiles `aarch64-apple-darwin` |
 | Unix ESRP submission pool / image | `1ES-AppDev` / `windows-2022`; no signing credentials on Unix agents |
 | Template repository | `1ESPipelineTemplates/1ESPipelineTemplates`, `refs/tags/release` |
@@ -143,8 +144,6 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   the pool's **User / Use** permission if missing.
 - If an additional grant is required, authorize `Azure Pipelines` for definition 20870 only; do not broaden the queue's existing access configuration.
   Queue 11640 already has hosted-pool authorization; its existing permissions were not changed.
-- Authorize `PowerBI-Managed-Ubuntu-Pool` (queue 15067) for definition 20870 only, and grant the queueing identity **User / Use** permission if missing.
-  The current operator cannot authorize it; pipeline permissions still do not show a grant for this definition.
 - Keep the job authorization scope project-scoped where supported, granting any
   cross-project template access explicitly.
 - Grant the pipeline's build identity **Feed and Upstream Reader (Collaborator)**
@@ -170,7 +169,7 @@ Suggested approval-request text:
 > Please authorize the cross-platform signing phase of `rayfin-local` (20870) in powerbi/AppDev using
 > `microsoft/rayfin-local` and `/.azure-pipelines/rayfin-local.official.yml`.
 > This is a 1ES official signing pipeline using `1ES-AppDev/windows-2022` for every ESRP submission,
-> and `PowerBI-Managed-Ubuntu-Pool` plus existing hosted `Azure Pipelines/macos-15` agents for Unix builds and signature verification.
+> including Linux cross-compilation and GPG verification, plus existing hosted `Azure Pipelines/macos-15` agents for Apple builds and signature verification.
 > ESRP registration-owner approval has been confirmed for reusing
 > `Fabric-ESRP-Secure-AppDev` with `CP-231522`, `CP-450779-Pgp` and `CP-401337-Apple`, including Apple notarization.
 > Please authorize that connection for this pipeline only and configure its
@@ -239,11 +238,11 @@ falling back to crates.io.
 
 ## Linux and Apple Silicon
 
-`BuildUnix` and `VerifyUnix` use the managed Linux pool and existing Intel macOS hosted queue.
+`ValidateWindows` also cross-compiles Linux; `BuildUnix` and `VerifyUnix` use only the existing Intel macOS hosted queue.
 `SignUnix` explicitly runs on `1ES-AppDev/windows-2022`; ESRP signing and notarization do not require Unix-hosted signing credentials.
 The final Windows release job attaches only verified exact-build platform artifacts.
 
-- [ ] TODO: Authorize managed Linux queue 15067 for pipeline 20870, then validate Linux/macOS builds, Windows-submitted ESRP signing/notarization, independent platform verification and all public release assets in a real three-platform run.
+- [ ] TODO: Validate Windows-to-Linux cross-compilation, Intel-to-Apple-Silicon cross-compilation, ESRP signing/notarization, independent platform verification and all public release assets in a real three-platform run.
 
 The user confirmed ESRP-owner approval for the additional platform signing operations.
 The shared connection alone was not treated as approval.
@@ -251,13 +250,19 @@ The keys and operations follow the maintained [VS Code ESRP implementation](http
 All ESRP submissions run on the Windows signing pool with the existing managed identity and certificate references.
 Native build and verification jobs share `.azure-pipelines/templates/unix-job.yml`.
 
-Linux x64 builds and tests on `PowerBI-Managed-Ubuntu-Pool`, using the same authenticated Cargo feed as Windows.
+Linux x64 cross-compiles in the Windows build job after its native Windows workspace tests and Authenticode packaging.
+`Build-LinuxOnWindows.ps1` downloads Zig 0.14.1 from the official site, checks its pinned SHA-256 before execution, and installs cargo-zigbuild 0.24.1 through the authenticated Cargo feed.
+It targets `x86_64-unknown-linux-gnu.2.28`; both Rust and bundled C dependencies (`ring` and SQLite) must compile successfully.
+Python 3.13's tar writer explicitly preserves executable mode `0755`, even when packaging on Windows.
+Packaging rejects non-x86-64 ELF64 files rather than attempting to execute foreign binaries.
+Native Linux release-binary execution and Linux-targeted workspace tests do not run in the official Windows job; public GitHub CI's Linux tests are not a substitute for testing that exact cross-compiled artifact.
 `LinuxSign` signs a scratch copy of the `.tar.gz` with `CP-450779-Pgp`.
 The original archive is preserved because the detached-signature operation replaces its input with signature content; see [.NET Arcade's handling](https://github.com/dotnet/arcade/blob/28463b67ff4f7c01701c2a24fb23d36af978923c/src/Microsoft.DotNet.SignTool/src/SignTool.cs).
 That response becomes `<archive>.sig`, not a replacement tarball.
-The native Linux verifier requires GPG success, SHA-256 or stronger, and exactly the pinned Microsoft public-key fingerprint `BC528686B50D79E339D3721CEB3E94ADBE1229CF`.
+The Windows verifier uses Git for Windows GPG and requires success, SHA-256 or stronger, and exactly the pinned Microsoft public-key fingerprint `BC528686B50D79E339D3721CEB3E94ADBE1229CF`.
 The checked-in public key comes from [packages.microsoft.com](https://packages.microsoft.com/keys/microsoft.asc); no private key is checked in.
-It also verifies the unchanged archive hash, extracted executable hash, version, commit and build ID.
+It also verifies the unchanged archive hash, extracted executable hash/ELF architecture, version metadata, commit and build ID.
+It requires the expected archive layout and Unix executable mode, but does not execute the Linux binary.
 The release includes the detached signature and `microsoft.asc`; users can import the key, check its fingerprint against the pin above, and run `gpg --verify <archive>.sig <archive>`.
 The install script's checksum verification is not a substitute for this PGP check.
 
@@ -269,7 +274,7 @@ This change does not enable PAYG billing or broaden pool permissions.
 The build produces a ZIP for ESRP `MacAppDeveloperSign` with `Hardening: --options=runtime`, followed by `MacAppNotarize`, both using `CP-401337-Apple`.
 The Intel macOS verifier extracts the returned ZIP and requires ARM64, strict `codesign` verification, `Developer ID Application: Microsoft Corporation (UBF8T346G9)`, Team ID `UBF8T346G9`, hardened runtime, a timestamp, and `spctl` acceptance with `source=Notarized Developer ID`.
 Only after these checks does it produce the installer-compatible `.tar.gz`, preserving the signed executable.
-Apple source and signing metadata explicitly record `nativeExecutionTested: false`, and release notes disclose the deferred ARM64 execution testing.
+Linux and Apple source/signing metadata explicitly record `nativeExecutionTested: false`, and release notes disclose both deferred execution checks.
 No Gatekeeper bypass or unsigned fallback is used.
 
 The three-platform assembler requires verified platform artifacts, matches their versions/targets/commit/build IDs and archive hashes, and assembles combined checksums.
@@ -281,7 +286,7 @@ The [first cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/resul
 `1ES-AppDev` rejected the requested `ubuntu-2204` image; a subsequent attempt used the managed Ubuntu pool.
 That queue required pool-admin authorization; no global access or broader role was granted.
 An attempt to use already-authorized standard hosted `Azure Pipelines/ubuntu-24.04` in [run 21429587](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21429587) started an agent but failed the mandatory 1ES pre-job check: `Using a non 1ESHostedPool with 1ES PT is not allowed`.
-The current configuration retains the managed Linux pool and its authorization prerequisite rather than bypassing that check.
+The current configuration instead performs Linux cross-compilation on the existing approved Windows pool; no official security task is disabled or downgraded.
 The Apple job failed with `No agent found in pool GitHub-hosted Agents which satisfies the specified demands: Agent.Version -gtVersion 5.281.1`.
 That minimum comes from the required `CodeQL3000Init` / `CodeQL3000Finalize` tasks, not an optional demand added by this repository.
 That failure motivated using the standard Intel image instead of depending on Apple Silicon capacity.
@@ -290,6 +295,13 @@ The [next cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/result
 Do not downgrade or remove security tasks to bypass agent selection.
 Actual Linux build/restore, Intel-hosted cross-compilation and notarization assessment, ESRP archive/CLI handling and successful public assets remain unverified.
 Do not treat template compilation or owner approval as evidence that those runtime operations have passed.
+
+### Deferred native Linux testing
+
+- [ ] TODO: Run Linux-targeted workspace tests and smoke-test the exact cross-compiled, signed release on native Linux, including `--version`, before claiming Linux runtime validation.
+
+Until that testing is restored, retain `nativeExecutionTested: false` in Linux metadata and the release-note disclosure.
+ELF architecture, archive permissions, pinned GPG identity, modern digest, source identity and hash checks remain mandatory.
 
 ### Deferred native Apple Silicon testing
 

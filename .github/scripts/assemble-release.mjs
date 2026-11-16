@@ -25,6 +25,9 @@ export function assemble(workspace, destination, { commit, buildId, tag }) {
     assert.equal(metadata.signingKeyCode, {
       windows: 'CP-231522', linux: 'CP-450779-Pgp', macos: 'CP-401337-Apple',
     }[platform]);
+    if (platform !== 'windows') {
+      assert.equal(metadata.nativeExecutionTested, false, 'Cross-compiled artifacts must disclose deferred native execution');
+    }
     if (platform === 'macos') {
       assert.equal(metadata.notarized, true);
       assert.equal(metadata.teamId, appleTeam);

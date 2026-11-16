@@ -185,9 +185,11 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
 It submits all three platforms to ESRP from the existing `1ES-AppDev/windows-2022` infrastructure.
-`PowerBI-Managed-Ubuntu-Pool` agents build/verify Linux x64, and `Azure Pipelines/macos-15` Intel agents cross-compile/verify Apple Silicon.
+The Windows job cross-compiles Linux x64 with pinned Zig/cargo-zigbuild; Windows GPG verifies the archive without executing the Linux binary.
+`Azure Pipelines/macos-15` Intel agents cross-compile/verify Apple Silicon.
 Publication requires the verified `windows-signed`, `linux-signed` and `macos-signed` artifacts and all official output/source-security checks.
-The [signing runbook](release-signing.md#linux-and-apple-silicon) tracks pending managed Linux pool authorization and end-to-end validation; a missing or invalid platform blocks publication rather than uploading unsigned files.
+The [signing runbook](release-signing.md#linux-and-apple-silicon) tracks cross-compilation and end-to-end validation; no Linux pool is used.
+A missing or invalid platform blocks publication rather than uploading unsigned files.
 To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
 It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
 GitHub Actions release publishing is removed: there is no unsigned fallback.
@@ -205,9 +207,9 @@ The official pipeline then:
 - waits for every platform's verification, build/output and source-security checks, then creates `v<version>` and its GitHub Release at the exact source commit;
 - attaches all three archives and signing metadata, Linux `.sig`/public key, combined `SHA256SUMS.txt`, `install.sh` and `install.ps1`; stable versions become latest, while prereleases never do.
 
-Native Apple Silicon execution tests are deferred; the [signing runbook TODO](release-signing.md#deferred-native-apple-silicon-testing) tracks restoring them.
+Native release-binary execution tests for Linux and Apple Silicon are deferred; the signing runbook tracks [Linux](release-signing.md#deferred-native-linux-testing) and [Apple Silicon](release-signing.md#deferred-native-apple-silicon-testing) TODOs.
 Intel macOS workspace tests and all signing/notarization checks remain required.
-Until native testing is restored, Apple release metadata must record `nativeExecutionTested: false`; signature verification is not a native execution test.
+Until native testing is restored, both Unix platforms' release metadata must record `nativeExecutionTested: false`; signature verification is not a native execution test.
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.
 Keep the scripts compatible with the releases they may install: they expect the archive names above and `SHA256SUMS.txt`.
