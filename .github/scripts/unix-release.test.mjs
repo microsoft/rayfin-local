@@ -1,0 +1,144 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { test } from 'node:test';
+import { assemble } from './assemble-release.mjs';
+import { verifyAppleIdentity, verifyGpgStatus, linuxFingerprint, targets } from './unix-release.mjs';
+
+test('Linux requires the pinned valid signing key and a modern digest', () => {
+  const status = `[GNUPG:] VALIDSIG ${linuxFingerprint} 2026-11-16 1794787200 0 4 0 1 8 00 ${linuxFingerprint}`;
+  verifyGpgStatus(status);
+  assert.throws(() => verifyGpgStatus('[GNUPG:] BADSIG EB3E94ADBE1229CF'));
+  assert.throws(() => verifyGpgStatus(status.replaceAll(linuxFingerprint, 'A'.repeat(40))));
+  assert.throws(() => verifyGpgStatus(status.replace(' 1 8 00 ', ' 1 2 00 ')));
+  assert.throws(() => verifyGpgStatus(`${status}\n${status}`));
+  for (const invalid of ['EXPKEYSIG', 'REVKEYSIG', 'EXPSIG']) {
+    assert.throws(() => verifyGpgStatus(`${status}\n[GNUPG:] ${invalid} EB3E94ADBE1229CF`));
+  }
+});
+
+test('checked-in official public key matches pinned fingerprint', () => {
+  const text = readFileSync(new URL('../../.azure-pipelines/keys/microsoft.asc', import.meta.url), 'utf8');
+  const packet = Buffer.from(text.split('\n').filter(line => /^[a-zA-Z0-9+/]/.test(line) &&
+    !line.startsWith('Version:')).join(''), 'base64');
+  assert.equal(packet[0], 0x99);
+  const length = packet.readUInt16BE(1);
+  assert.equal(createHash('sha1').update(packet.subarray(0, length + 3)).digest('hex').toUpperCase(), linuxFingerprint);
+});
+
+test('Apple identity must have expected Developer ID, team, hardened runtime and timestamp', () => {
+  const details = 'CodeDirectory v=20500 size=123 flags=0x10000(runtime) hashes=1\n' +
+    'Authority=Developer ID Application: Microsoft Corporation (UBF8T346G9)\n' +
+    'TeamIdentifier=UBF8T346G9\nTimestamp=Nov 16, 2026\n';
+  verifyAppleIdentity(details);
+  for (const invalid of [
+    details.replaceAll('UBF8T346G9', 'WRONGTEAM0'),
+    details.replace('Timestamp=Nov 16, 2026\n', ''),
+    details.replace('Timestamp=Nov 16, 2026', 'Timestamp=none'),
+    details.replace('0x10000(runtime)', '0x0(none)'),
+    details.replace('Developer ID Application: Microsoft Corporation', 'Apple Development: Microsoft Corporation'),
+  ]) assert.throws(() => verifyAppleIdentity(invalid));
+});
+
+test('native archive packaging preserves executable contents, permissions and installer layout', {
+  skip: !((process.platform === 'darwin' && process.arch === 'arm64') ||
+    (process.platform === 'linux' && process.arch === 'x64')),
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'rayfin-package-'));
+  const platform = process.platform === 'darwin' ? 'macos' : 'linux';
+  const target = targets[platform];
+  const version = '0.2.9';
+  const program = `#!/bin/sh\n[ -z "$RAYFIN_EXECUTION_MARKER" ] || touch "$RAYFIN_EXECUTION_MARKER"\necho rayfin-local ${version}\n`;
+  const script = fileURLToPath(new URL('./unix-release.mjs', import.meta.url));
+  const env = { ...process.env, RAYFIN_EXECUTION_MARKER: '',
+    BUILD_ARTIFACTSTAGINGDIRECTORY: root, AGENT_TEMPDIRECTORY: root,
+    BUILD_SOURCEVERSION: 'a'.repeat(40), BUILD_BUILDID: '123',
+  };
+  try {
+    const binaryDirectory = join(root, 'target', target, 'release');
+    mkdirSync(binaryDirectory, { recursive: true });
+    writeFileSync(join(binaryDirectory, 'rayfin-local'), program, { mode: 0o755 });
+    writeFileSync(join(root, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`);
+    for (const file of ['LICENSE', 'README.md']) writeFileSync(join(root, file), 'packaging fixture');
+    const result = spawnSync(process.execPath, [script, 'package', platform],
+      { cwd: root, encoding: 'utf8', env });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const output = join(root, `unsigned-${platform}`);
+    const metadata = JSON.parse(readFileSync(join(output, `${platform}-source.json`), 'utf8'));
+    const archive = join(output, metadata.archiveFile);
+    const extract = join(root, 'extract');
+    mkdirSync(extract);
+    const extraction = platform === 'macos'
+      ? spawnSync('ditto', ['-x', '-k', archive, extract])
+      : spawnSync('tar', ['-xzf', archive, '-C', extract]);
+    assert.equal(extraction.status, 0);
+    const binary = join(extract, `rayfin-local-${version}-${target}`, 'rayfin-local');
+    assert.equal(readFileSync(binary, 'utf8'), program);
+    assert.equal(statSync(binary).mode & 0o111, 0o111);
+    assert.equal(createHash('sha256').update(readFileSync(binary)).digest('hex'), metadata.binarySha256);
+    assert.equal(createHash('sha256').update(readFileSync(archive)).digest('hex'), metadata.archiveSha256);
+    if (platform === 'macos') {
+      const input = join(root, 'unix-signing');
+      mkdirSync(input);
+      for (const file of [metadata.archiveFile, 'macos-source.json']) {
+        copyFileSync(join(output, file), join(input, file));
+      }
+      const marker = join(root, 'unverified-executed');
+      const verification = spawnSync(process.execPath, [script, 'verify', platform], {
+        cwd: root, encoding: 'utf8', env: { ...env, PIPELINE_WORKSPACE: root, RAYFIN_EXECUTION_MARKER: marker },
+      });
+      assert.notEqual(verification.status, 0, 'Unsigned shell fixture must fail native executable verification');
+      assert.match(verification.stderr, /lipo failed/);
+      assert.equal(existsSync(marker), false, 'Never execute the returned payload before native verification');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publication requires all three exact-build signed artifacts and matching hashes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rayfin-assemble-'));
+  const source = { commit: 'a'.repeat(40), buildId: '123', version: '0.2.9' };
+  const expected = { commit: source.commit, buildId: source.buildId, tag: 'v0.2.9' };
+  const hash = data => createHash('sha256').update(data).digest('hex');
+  const records = {};
+  function record(platform, value) {
+    writeFileSync(join(root, `${platform}-signed`, `${platform}-signing.json`), JSON.stringify(value));
+  }
+  try {
+    for (const [platform, target] of Object.entries({ windows: 'x86_64-pc-windows-msvc', ...targets })) {
+      const directory = join(root, `${platform}-signed`);
+      mkdirSync(directory);
+      const archive = `rayfin-local-0.2.9-${target}${platform === 'windows' ? '.zip' : '.tar.gz'}`;
+      writeFileSync(join(directory, archive), platform);
+      const metadata = { ...source, target, signed: true, archiveFile: archive, archiveSha256: hash(platform),
+        signingKeyCode: { windows: 'CP-231522', linux: 'CP-450779-Pgp', macos: 'CP-401337-Apple' }[platform] };
+      if (platform === 'linux') {
+        writeFileSync(join(directory, `${archive}.sig`), 'signature');
+        writeFileSync(join(directory, 'microsoft.asc'), 'public-key-fixture');
+        writeFileSync(join(directory, 'install.sh'), 'installer-fixture');
+        Object.assign(metadata, { signatureSha256: hash('signature'), fingerprint: linuxFingerprint });
+      } else if (platform === 'macos') Object.assign(metadata, { notarized: true, teamId: 'UBF8T346G9' });
+      else writeFileSync(join(directory, 'install.ps1'), 'installer-fixture');
+      records[platform] = metadata;
+      record(platform, metadata);
+    }
+    assemble(root, join(root, 'release'), expected);
+    assert.equal(readFileSync(join(root, 'release', 'SHA256SUMS.txt'), 'utf8').trim().split('\n').length, 4);
+    assert.equal(existsSync(join(root, 'release', records.macos.archiveFile)), true);
+    for (const [field, value] of [['commit', 'b'.repeat(40)], ['version', '0.2.10'],
+      ['signed', false], ['notarized', false], ['teamId', 'WRONGTEAM0'], ['archiveSha256', '0'.repeat(64)]]) {
+      record('macos', { ...records.macos, [field]: value });
+      assert.throws(() => assemble(root, join(root, `bad-${field}`), expected), field);
+    }
+    record('macos', records.macos);
+    rmSync(join(root, 'linux-signed', `${records.linux.archiveFile}.sig`));
+    assert.throws(() => assemble(root, join(root, 'missing-signature'), expected));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

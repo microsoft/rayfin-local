@@ -1,6 +1,11 @@
 name: rayfin-local-official-$(Date:yyyyMMdd).$(Rev:r)
 
-trigger: none
+trigger:
+  batch: false
+  branches:
+    include: [main]
+  paths:
+    include: [Cargo.toml]
 pr: none
 
 parameters:
@@ -42,8 +47,43 @@ extends:
         enabled: true
 
     stages:
+      - stage: DetermineRelease
+        displayName: Detect a version increase on main
+        jobs:
+          - job: Version
+            displayName: Compare the version with the previous main commit
+            steps:
+              - checkout: self
+                clean: true
+                fetchDepth: 0
+                persistCredentials: false
+              - task: UseNode@1
+                inputs:
+                  version: $(NodeVersion)
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  if ($env:TEST_RELEASE_PR -notmatch '^\d+$') {
+                    throw 'testReleasePr must be zero or a positive PR number.'
+                  }
+                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
+                    if ($env:BUILD_REASON -ne 'Manual' -or
+                        -not $env:BUILD_SOURCEBRANCH.StartsWith('refs/heads/')) {
+                      throw 'PR release tests must be manually queued from the PR head branch.'
+                    }
+                    & ./.azure-pipelines/scripts/Test-ReleasePullRequest.ps1 `
+                      -PullRequest ([int]$env:TEST_RELEASE_PR) -Commit $env:BUILD_SOURCEVERSION
+                  }
+                  & node .github/scripts/main-release.mjs
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot determine whether this main commit increases the release version.' }
+                name: detect
+                displayName: Determine automatic signed release eligibility
+                env:
+                  TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+
       - stage: ValidateWindows
         displayName: Build, sign, and package Windows binary
+        dependsOn: DetermineRelease
+        condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
         jobs:
           - job: BuildWindows
             displayName: Build and test Windows x64
@@ -69,7 +109,7 @@ extends:
                     throw 'This validation job requires a Windows x64 agent.'
                   }
                   if ($env:BUILD_REASON -eq 'PullRequest') {
-                    throw 'The official pipeline must be queued manually, not from a pull request.'
+                    throw 'The official pipeline must not run from an automatic pull-request trigger.'
                   }
                   if ($env:TEST_RELEASE_PR -notmatch '^\d+$') { throw 'testReleasePr must be zero or a positive integer.' }
                   if ([int]$env:TEST_RELEASE_PR -lt 0) { throw 'testReleasePr must be zero or a positive PR number.' }
@@ -286,13 +326,18 @@ extends:
                   } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $output 'source.json')
                   Copy-Item -LiteralPath (Join-Path $output 'source.json') `
                     -Destination (Join-Path $releaseOutput 'windows-signing.json')
-                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
-                    $scripts = Join-Path $releaseOutput '_release'
-                    New-Item -ItemType Directory -Path $scripts | Out-Null
-                    Copy-Item -LiteralPath "$env:BUILD_SOURCESDIRECTORY/.azure-pipelines/scripts/Test-ReleasePullRequest.ps1" `
-                      -Destination $scripts
-                  }
+                  $scripts = Join-Path $releaseOutput '_release'
+                  New-Item -ItemType Directory -Path $scripts | Out-Null
+                  Copy-Item -LiteralPath "$env:BUILD_SOURCESDIRECTORY/.azure-pipelines/scripts/Test-ReleasePullRequest.ps1" `
+                    -Destination $scripts
+                  Copy-Item -LiteralPath "$env:BUILD_SOURCESDIRECTORY/.github/scripts/assemble-release.mjs",
+                    "$env:BUILD_SOURCESDIRECTORY/.github/scripts/unix-release.mjs",
+                    "$env:BUILD_SOURCESDIRECTORY/.github/scripts/main-release.mjs" -Destination $scripts
+                  $isPrerelease = $version.Contains('-').ToString().ToLowerInvariant()
+                  $makeLatest = (-not $version.Contains('-')).ToString().ToLowerInvariant()
                   Write-Host "##vso[task.setvariable variable=ReleaseTag;isOutput=true]$releaseTag"
+                  Write-Host "##vso[task.setvariable variable=IsPrerelease;isOutput=true]$isPrerelease"
+                  Write-Host "##vso[task.setvariable variable=MakeLatest;isOutput=true]$makeLatest"
                 name: packageWindows
                 displayName: Verify signed binary, package release archive, and record metadata
                 env:
@@ -300,77 +345,219 @@ extends:
                   RUST_TARGET: $(Target)
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
-      - ${{ if gt(parameters.testReleasePr, 0) }}:
-        - stage: StageGitHubRelease
-          displayName: Publish signed Windows release assets
-          dependsOn: [ValidateWindows, SDLSources]
-          condition: succeeded()
-          variables:
-            ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
-          jobs:
-            - job: UploadSignedWindows
-              displayName: Upload verified signed Windows release assets
-              templateContext:
-                type: releaseJob
-                isProduction: true
-                inputs:
-                  - input: pipelineArtifact
-                    artifactName: windows-signed
-                    targetPath: $(Pipeline.Workspace)/windows-signed
-              steps:
-                - checkout: none
-                - pwsh: |
-                    $ErrorActionPreference = 'Stop'
-                    $output = Join-Path $env:PIPELINE_WORKSPACE 'windows-signed'
-                    $metadata = Get-Content -Raw -LiteralPath (Join-Path $output 'windows-signing.json') |
-                      ConvertFrom-Json
-                    if ($metadata.commit -cne $env:BUILD_SOURCEVERSION -or
-                        $metadata.buildId -cne $env:BUILD_BUILDID -or
-                        $metadata.testReleasePr -ne [int]$env:TEST_RELEASE_PR -or
-                        $metadata.signed -ne $true -or
-                        $metadata.signingKeyCode -cne 'CP-231522' -or
-                        $env:RELEASE_TAG -cne "v$($metadata.version)" -or
-                        $metadata.version -cnotmatch "^\d+\.\d+\.\d+-alpha\.$env:BUILD_BUILDID$") {
-                      throw 'Signed artifact metadata must match this exact PR test release and build.'
+      - stage: BuildUnix
+        displayName: Build native Linux and Apple Silicon binaries
+        dependsOn: DetermineRelease
+        condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
+        jobs:
+          - template: templates/unix-job.yml
+            parameters:
+              platform: linux
+              action: package
+              testReleasePr: ${{ parameters.testReleasePr }}
+              pool:
+                name: 1ES-AppDev
+                image: ubuntu-2204
+                os: linux
+          - template: templates/unix-job.yml
+            parameters:
+              platform: macos
+              action: package
+              testReleasePr: ${{ parameters.testReleasePr }}
+              pool:
+                name: GitHub-hosted Agents
+                vmImage: macos-26-arm64
+                hostArchitecture: arm64
+                os: macOS
+
+      - stage: SignUnix
+        displayName: ESRP-sign Linux archive and sign/notarize Apple binary
+        dependsOn: BuildUnix
+        jobs:
+          - job: SignUnix
+            timeoutInMinutes: 240
+            templateContext:
+              inputs:
+                - input: pipelineArtifact
+                  artifactName: unsigned-linux
+                  targetPath: $(Pipeline.Workspace)/unsigned-linux
+                - input: pipelineArtifact
+                  artifactName: unsigned-macos
+                  targetPath: $(Pipeline.Workspace)/unsigned-macos
+              outputs:
+                - output: pipelineArtifact
+                  artifactName: unix-signing
+                  targetPath: $(Build.ArtifactStagingDirectory)/unix-signing
+            steps:
+              - checkout: self
+                clean: true
+                persistCredentials: false
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $output = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'unix-signing'
+                  $linuxSign = Join-Path $env:AGENT_TEMPDIRECTORY 'linux-sign'
+                  New-Item -ItemType Directory -Path $output, $linuxSign | Out-Null
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $output
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $linuxSign
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/linux-source.json" -Destination $output
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/*.zip" -Destination $output
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/macos-source.json" -Destination $output
+                displayName: Preserve original Linux archive before detached signing replaces its input
+              - template: templates/sign-unix.yml
+                parameters:
+                  folder: $(Agent.TempDirectory)/linux-sign
+                  pattern: '*.tar.gz'
+                  keyCode: CP-450779-Pgp
+                  operation: LinuxSign
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $files = @(Get-ChildItem "$env:AGENT_TEMPDIRECTORY/linux-sign/*.tar.gz" -File)
+                  if ($files.Count -ne 1) { throw 'Expected exactly one ESRP Linux detached signature response.' }
+                  Copy-Item -LiteralPath $files[0].FullName `
+                    -Destination "$env:BUILD_ARTIFACTSTAGINGDIRECTORY/unix-signing/$($files[0].Name).sig"
+                displayName: Keep detached signature alongside unchanged Linux archive
+              - template: templates/sign-unix.yml
+                parameters:
+                  folder: $(Build.ArtifactStagingDirectory)/unix-signing
+                  pattern: '*.zip'
+                  keyCode: CP-401337-Apple
+                  operation: MacAppDeveloperSign
+                  operationParameters:
+                    - parameterName: Hardening
+                      parameterValue: --options=runtime
+              - template: templates/sign-unix.yml
+                parameters:
+                  folder: $(Build.ArtifactStagingDirectory)/unix-signing
+                  pattern: '*.zip'
+                  keyCode: CP-401337-Apple
+                  operation: MacAppNotarize
+
+      - stage: VerifyUnix
+        displayName: Verify Linux PGP and Apple Developer ID/notarization
+        dependsOn: SignUnix
+        jobs:
+          - template: templates/unix-job.yml
+            parameters:
+              platform: linux
+              action: verify
+              testReleasePr: ${{ parameters.testReleasePr }}
+              pool:
+                name: 1ES-AppDev
+                image: ubuntu-2204
+                os: linux
+          - template: templates/unix-job.yml
+            parameters:
+              platform: macos
+              action: verify
+              testReleasePr: ${{ parameters.testReleasePr }}
+              pool:
+                name: GitHub-hosted Agents
+                vmImage: macos-26-arm64
+                hostArchitecture: arm64
+                os: macOS
+
+      - stage: StageGitHubRelease
+        displayName: Publish verified signed platform releases
+        dependsOn: [DetermineRelease, ValidateWindows, VerifyUnix, SDLSources]
+        condition: and(succeeded(), or(eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true'), gt(${{ parameters.testReleasePr }}, 0)))
+        variables:
+          ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
+          ReleaseIsPrerelease: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.IsPrerelease']]
+          ReleaseMakeLatest: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.MakeLatest']]
+          MainRelease: $[stageDependencies.DetermineRelease.Version.outputs['detect.PublishRelease']]
+        jobs:
+          - job: UploadSignedPlatforms
+            displayName: Upload verified signed platform release assets
+            templateContext:
+              type: releaseJob
+              isProduction: true
+              inputs:
+                - input: pipelineArtifact
+                  artifactName: windows-signed
+                  targetPath: $(Pipeline.Workspace)/windows-signed
+                - input: pipelineArtifact
+                  artifactName: linux-signed
+                  targetPath: $(Pipeline.Workspace)/linux-signed
+                - input: pipelineArtifact
+                  artifactName: macos-signed
+                  targetPath: $(Pipeline.Workspace)/macos-signed
+            steps:
+              - checkout: none
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $output = Join-Path $env:PIPELINE_WORKSPACE 'windows-signed'
+                  $metadata = Get-Content -Raw -LiteralPath (Join-Path $output 'windows-signing.json') |
+                    ConvertFrom-Json
+                  if ($metadata.commit -cne $env:BUILD_SOURCEVERSION -or
+                      $metadata.buildId -cne $env:BUILD_BUILDID -or
+                      $metadata.testReleasePr -ne [int]$env:TEST_RELEASE_PR -or
+                      $metadata.signed -ne $true -or
+                      $metadata.signingKeyCode -cne 'CP-231522' -or
+                      $env:RELEASE_TAG -cne "v$($metadata.version)") {
+                    throw 'Signed artifact metadata must match this exact release and build.'
+                  }
+                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
+                    if ($metadata.version -cnotmatch "^\d+\.\d+\.\d+-alpha\.$env:BUILD_BUILDID$") {
+                      throw 'PR test release version must use this build ID.'
                     }
-                    $archive = "rayfin-local-$($metadata.version)-x86_64-pc-windows-msvc.zip"
-                    foreach ($file in @($archive, 'SHA256SUMS.txt', 'install.ps1')) {
-                      if (-not (Test-Path -LiteralPath (Join-Path $output $file) -PathType Leaf)) {
-                        throw "Signed release asset $file is missing; refusing an incomplete release."
-                      }
-                    }
-                    $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $output $archive)).Hash.ToLowerInvariant()
-                    $checksum = (Get-Content -Raw -LiteralPath (Join-Path $output 'SHA256SUMS.txt')).Trim()
-                    if ($metadata.archiveFile -cne $archive -or $metadata.archiveSha256 -cne $hash -or
-                        $checksum -cne "$hash  $archive") {
-                      throw 'Signed release archive does not match its metadata and checksum.'
-                    }
-                    & "$env:PIPELINE_WORKSPACE/windows-signed/_release/Test-ReleasePullRequest.ps1" `
+                    & "$output/_release/Test-ReleasePullRequest.ps1" `
                       -PullRequest ([int]$env:TEST_RELEASE_PR) -Commit $env:BUILD_SOURCEVERSION
-                  displayName: Verify downloaded assets and recheck PR release-test opt-in before publishing
-                  env:
-                    TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
-                    RELEASE_TAG: $(ReleaseTag)
-                - task: GitHubRelease@1
-                  displayName: Create GitHub release with verified signed Windows assets
-                  inputs:
-                    gitHubConnection: github.com_christopheranderson
-                    repositoryName: microsoft/rayfin-local
-                    action: create
-                    target: $(Build.SourceVersion)
-                    tagSource: userSpecifiedTag
-                    tag: $(ReleaseTag)
-                    releaseNotesSource: inline
-                    releaseNotesInline: |
-                      Signed Windows assets from official AppDev build $(Build.BuildId).
-                      Source: $(Build.SourceVersion).
-                      Windows-only alpha builds are test prereleases, not latest releases.
-                    assets: |
-                      $(Pipeline.Workspace)/windows-signed/*.zip
-                      $(Pipeline.Workspace)/windows-signed/windows-signing.json
-                      $(Pipeline.Workspace)/windows-signed/SHA256SUMS.txt
-                      $(Pipeline.Workspace)/windows-signed/install.ps1
-                    isDraft: false
-                    isPreRelease: true
-                    makeLatest: 'false'
-                    addChangeLog: false
+                  } elseif ($env:MAIN_RELEASE -ne 'true' -or $env:BUILD_SOURCEBRANCH -cne 'refs/heads/main') {
+                    throw 'Normal releases require a verified version increase from main.'
+                  }
+                  $archive = "rayfin-local-$($metadata.version)-x86_64-pc-windows-msvc.zip"
+                  foreach ($file in @($archive, 'SHA256SUMS.txt', 'install.ps1')) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $output $file) -PathType Leaf)) {
+                      throw "Signed release asset $file is missing; refusing an incomplete release."
+                    }
+                  }
+                  $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $output $archive)).Hash.ToLowerInvariant()
+                  $checksum = (Get-Content -Raw -LiteralPath (Join-Path $output 'SHA256SUMS.txt')).Trim()
+                  if ($metadata.archiveFile -cne $archive -or $metadata.archiveSha256 -cne $hash -or
+                      $checksum -cne "$hash  $archive") {
+                    throw 'Signed release archive does not match its metadata and checksum.'
+                  }
+                displayName: Verify downloaded assets and release authorization before publishing
+                env:
+                  TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+                  RELEASE_TAG: $(ReleaseTag)
+                  MAIN_RELEASE: $(MainRelease)
+              - task: UseNode@1
+                inputs:
+                  version: $(NodeVersion)
+              - pwsh: |
+                  & node "$env:PIPELINE_WORKSPACE/windows-signed/_release/assemble-release.mjs"
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot assemble an exact-build release with all three verified platforms.' }
+                displayName: Require every signed platform and assemble combined release checksums
+                env:
+                  RELEASE_TAG: $(ReleaseTag)
+              - task: GitHubRelease@1
+                displayName: Create GitHub release with all verified signed platforms
+                inputs:
+                  gitHubConnection: github.com_christopheranderson
+                  repositoryName: microsoft/rayfin-local
+                  action: create
+                  target: $(Build.SourceVersion)
+                  tagSource: userSpecifiedTag
+                  tag: $(ReleaseTag)
+                  releaseNotesSource: inline
+                  releaseNotesInline: |
+                    Signed platform assets from official AppDev build $(Build.BuildId).
+                    Source: $(Build.SourceVersion).
+                    Windows x64: ESRP Authenticode signature.
+                    Linux x64: detached Microsoft PGP signature (.tar.gz.sig).
+                    Apple Silicon: Developer ID signature, hardened runtime, and Apple notarization.
+                    Prereleases are never marked latest.
+                  assets: |
+                    $(Pipeline.Workspace)/release/*.zip
+                    $(Pipeline.Workspace)/release/*.tar.gz
+                    $(Pipeline.Workspace)/release/*.sig
+                    $(Pipeline.Workspace)/release/*-signing.json
+                    $(Pipeline.Workspace)/release/microsoft.asc
+                    $(Pipeline.Workspace)/release/SHA256SUMS.txt
+                    $(Pipeline.Workspace)/release/install.sh
+                    $(Pipeline.Workspace)/release/install.ps1
+                  isDraft: false
+                  isPreRelease: $(ReleaseIsPrerelease)
+                  makeLatest: $(ReleaseMakeLatest)
+                  addChangeLog: false

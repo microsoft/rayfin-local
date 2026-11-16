@@ -35,8 +35,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Check alpha release version generation
-        run: node --test .github/scripts/set-alpha-version.test.mjs
+      - name: Check release routing, platform verification and packaging
+        run: node --test .github/scripts/set-alpha-version.test.mjs .github/scripts/main-release.test.mjs .github/scripts/unix-release.test.mjs
       - name: Check PR test-release opt-in
         if: runner.os == 'Windows'
         shell: pwsh

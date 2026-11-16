@@ -138,11 +138,11 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 
 ## Install
 
-Prebuilt releases from the original repository are not included in the Git history migration.
-Until a release is published in this repository, [build from source](#requirements) with
-`cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
+The official release pipeline signs Windows x64 with Authenticode, Linux x64 archives with Microsoft's PGP key, and Apple Silicon binaries with Developer ID and Apple notarization.
+Those guarantees apply to new official releases, not the existing unsigned multi-platform `0.2.8` release.
+Existing release assets are not retroactively signed.
 
-**macOS and Linux:**
+**Apple Silicon and Linux x64:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
@@ -154,7 +154,7 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install
 irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 ```
 
-The script downloads the latest [release](https://github.com/microsoft/rayfin-local/releases) for your platform, checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
+The script downloads the requested [release](https://github.com/microsoft/rayfin-local/releases) (latest when no version is set), checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
 
 - **macOS and Linux:** into `~/.local/bin`. If that folder isn't on your `PATH`, the script prints the line to add to your shell's profile.
 - **Windows:** into `%LOCALAPPDATA%\Programs\rayfin-local`, which it adds to your user `PATH`. Open a new terminal to pick it up there.
@@ -174,13 +174,18 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Platform | Release build |
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
-| macOS on Apple silicon or Intel | `aarch64-apple-darwin`, `x86_64-apple-darwin` |
-| Linux x64 or ARM64 with glibc 2.34 or later (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 or newer) | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` |
+| macOS on Apple Silicon | `aarch64-apple-darwin` |
+| Linux x64 with glibc (built on Ubuntu 22.04) | `x86_64-unknown-linux-gnu` |
+| Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
+
+For Intel macOS or Linux ARM64, set `RAYFIN_LOCAL_VERSION=0.2.8` in the Unix installation command, or build from source.
+The installers check archive checksums; Linux releases also include a detached `.tar.gz.sig` and `microsoft.asc` for independent PGP verification.
+See the [signing runbook](docs/release-signing.md#linux-and-apple-silicon) for the pinned fingerprint and platform verification requirements.
 
 Other ways to install:
 
 - **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
-  The macOS binaries are not notarized: if Gatekeeper blocks one you downloaded with a browser, run `xattr -d com.apple.quarantine rayfin-local`.
+  New official Apple Silicon binaries are notarized; legacy `0.2.8` macOS binaries are not.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
   `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 

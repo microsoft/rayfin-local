@@ -183,26 +183,32 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 ## Releasing
 
-The manual-only [official ADO pipeline](release-signing.md) builds and signs the Windows binary through ESRP, verifies its signature, and outputs a `windows-signed` artifact containing its release ZIP and signing metadata.
-To publish a signed Windows-only test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
+The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
+It builds Windows x64, Linux x64 and Apple Silicon binaries natively and signs through ESRP.
+Independent platform verifiers produce `windows-signed`, `linux-signed` and `macos-signed` artifacts; publication requires all three.
+To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
 It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
-The normal multi-platform GitHub release workflow below remains separate and does not sign its Windows output.
+GitHub Actions release publishing is removed: there is no unsigned fallback.
+Intel macOS and Linux ARM64 remain available only in the existing unsigned `0.2.8` release or from source.
 
-1. Set the new version in `[workspace.package]` of the root `Cargo.toml`, and commit (with the updated `Cargo.lock`).
-2. Tag the commit `v<version>` (for example `v0.2.0`, or `v0.2.0-rc.1` for a prerelease) and push the tag.
+1. Increase `[workspace.package].version` in the root `Cargo.toml`, and update `Cargo.lock` with `cargo update --workspace`.
+2. Merge that change into `main`; no tag push or manual queue is required.
 
-The [release workflow](../.github/workflows/release.yml) then:
+The official pipeline then:
 
-- checks that the tag matches the crate version;
-- builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin` (the Linux builds run on Ubuntu 22.04, which sets their glibc requirement, and print it);
-- packages each binary with `README.md` and `LICENSE` as `rayfin-local-<version>-<target>.zip` (Windows) or `.tar.gz`;
-- publishes a GitHub Release with the archives, `SHA256SUMS.txt`, `install.sh` and `install.ps1`, marked as a prerelease when the tag has a `-` suffix;
-- installs the published release with `install.sh` on Linux (x64 and ARM64) and macOS, and with `install.ps1` on Windows (PowerShell 7, and Windows PowerShell 5.1 through `irm | iex`), and checks the installed version. For a final release, it also checks that the scripts install it as the latest release.
+- compares the version with the commit's first parent (the previous `main` tip); unchanged or decreased versions do not release;
+- tests and builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`;
+- verifies Windows Authenticode, the Linux archive's detached Microsoft PGP signature, and Apple Developer ID/hardened runtime/timestamp/notarization;
+- packages the binaries with `README.md` and `LICENSE` as a Windows ZIP and Unix `.tar.gz` archives;
+- waits for every platform's verification, build/output and source-security checks, then creates `v<version>` and its GitHub Release at the exact source commit;
+- includes three archives and signing metadata, Linux `.sig`/public key, combined `SHA256SUMS.txt`, `install.sh` and `install.ps1`; stable versions become latest, while prereleases never do.
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.
 Keep the scripts compatible with the releases they may install: they expect the archive names above and `SHA256SUMS.txt`.
 
-The `v*-alpha.*` tags are excluded from this workflow so it cannot replace the signed PR-test assets with an unsigned build.
+If a run fails, manually queue the same version-bump commit from `main` after fixing the external failure.
+Existing releases are never edited or overwritten; a source fix needs a new version bump.
+The pipeline compares semantic versions, including prerelease precedence, and rejects malformed versions.
 
 To try the scripts before a release, run them against an existing one: `RAYFIN_LOCAL_VERSION=<version> RAYFIN_LOCAL_INSTALL_DIR=/tmp/rl sh install.sh`, or in PowerShell set `$env:RAYFIN_LOCAL_VERSION`, `$env:RAYFIN_LOCAL_INSTALL_DIR` and `$env:RAYFIN_LOCAL_NO_MODIFY_PATH = '1'`, then run `./install.ps1`.
 Lint them with `shellcheck --shell=sh install.sh` and [actionlint](https://github.com/rhysd/actionlint) for the workflows.
