@@ -175,7 +175,7 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
 | macOS on Apple Silicon | `aarch64-apple-darwin` |
-| Linux x64 with glibc (built on Ubuntu 22.04) | `x86_64-unknown-linux-gnu` |
+| Linux x64 with glibc | `x86_64-unknown-linux-gnu` |
 | Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
 
 For Intel macOS or Linux ARM64, set `RAYFIN_LOCAL_VERSION=0.2.8` in the Unix installation command, or build from source.

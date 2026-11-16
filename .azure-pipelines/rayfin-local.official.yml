@@ -356,8 +356,7 @@ extends:
               action: package
               testReleasePr: ${{ parameters.testReleasePr }}
               pool:
-                name: 1ES-AppDev
-                image: ubuntu-2204
+                name: PowerBI-Managed-Ubuntu-Pool
                 os: linux
           - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
@@ -442,8 +441,7 @@ extends:
               action: verify
               testReleasePr: ${{ parameters.testReleasePr }}
               pool:
-                name: 1ES-AppDev
-                image: ubuntu-2204
+                name: PowerBI-Managed-Ubuntu-Pool
                 os: linux
           - template: /.azure-pipelines/templates/unix-job.yml@self
             parameters:
