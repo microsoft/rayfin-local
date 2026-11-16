@@ -13,7 +13,7 @@ Changes to root `Cargo.toml` on `main` automatically queue the pipeline.
 It publishes only if the workspace version increases relative to the commit's first parent, the previous `main` tip.
 PR and tag triggers are disabled; manually queued artifact builds and labelled PR alpha tests remain available.
 It extends `v1/1ES.Official.PipelineTemplate.yml`, keeps the template's
-security checks enabled, and uses `1ES-AppDev` for Windows, `PowerBI-Managed-Ubuntu-Pool` for Linux, and the existing `GitHub-hosted Agents` pool for Apple Silicon.
+security checks enabled, and uses `1ES-AppDev` for Windows, `PowerBI-Managed-Ubuntu-Pool` for Linux, and the standard Intel `Azure Pipelines` macOS image to cross-compile Apple Silicon.
 The [platform section](#linux-and-apple-silicon) describes the additional keys, native verification and validation status.
 
 The job verifies the checkout against `Build.SourceVersion`, installs Rust 1.96.0
@@ -99,7 +99,7 @@ The existing AppDev definition uses:
 | Triggers | Root `Cargo.toml` changes on `main`; no PR or tag triggers; no UI override |
 | Windows pool / image | `1ES-AppDev` / `windows-2022` |
 | Linux pool / image | `PowerBI-Managed-Ubuntu-Pool` / pool default |
-| Apple Silicon pool / image | `GitHub-hosted Agents` / `macos-26-arm64`, `hostArchitecture: arm64` |
+| Apple build/verification pool / image | `Azure Pipelines` / `macos-15`, `hostArchitecture: amd64`; cross-compiles `aarch64-apple-darwin` |
 | Template repository | `1ESPipelineTemplates/1ESPipelineTemplates`, `refs/tags/release` |
 | Template | `v1/1ES.Official.PipelineTemplate.yml` |
 | ESRP connection | `Fabric-ESRP-Secure-AppDev` |
@@ -141,7 +141,7 @@ Request these permissions **only for this pipeline**, not for all pipelines:
 - Authorize `PowerBI-Managed-Ubuntu-Pool` for definition 20870 only.
   The current operator cannot authorize AppDev queue 15067: the API returns `The resource doesn't exist or the user doesn't have use permission`.
   A pool administrator must verify/grant the necessary **User / Use** permission and pipeline-scoped authorization; ESRP-owner approval does not grant agent-pool access.
-- If an additional grant is required, authorize `GitHub-hosted Agents` for definition 20870 only; do not broaden the queue's existing access configuration.
+- If an additional grant is required, authorize `Azure Pipelines` for definition 20870 only; do not broaden the queue's existing access configuration.
 - Keep the job authorization scope project-scoped where supported, granting any
   cross-project template access explicitly.
 - Grant the pipeline's build identity **Feed and Upstream Reader (Collaborator)**
@@ -167,7 +167,7 @@ Suggested approval-request text:
 > Please authorize the cross-platform signing phase of `rayfin-local` (20870) in powerbi/AppDev using
 > `microsoft/rayfin-local` and `/.azure-pipelines/rayfin-local.official.yml`.
 > This is a 1ES official signing pipeline using `1ES-AppDev` for Windows, `PowerBI-Managed-Ubuntu-Pool` for Linux, and
-> the existing `GitHub-hosted Agents/macos-26-arm64` pool for native Apple Silicon builds and verification.
+> the existing `Azure Pipelines/macos-15` Intel image for Apple Silicon cross-compilation and signature verification.
 > ESRP registration-owner approval has been confirmed for reusing
 > `Fabric-ESRP-Secure-AppDev` with `CP-231522`, `CP-450779-Pgp` and `CP-401337-Apple`, including Apple notarization.
 > Please authorize that connection for this pipeline only and configure its
@@ -251,12 +251,15 @@ It also verifies the unchanged archive hash, extracted executable hash, version,
 The release includes the detached signature and `microsoft.asc`; users can import the key, check its fingerprint against the pin above, and run `gpg --verify <archive>.sig <archive>`.
 The install script's checksum verification is not a substitute for this PGP check.
 
-Apple Silicon builds/tests and verifies natively on AppDev queue 22798, the existing `GitHub-hosted Agents` pool, with `vmImage: macos-26-arm64` and `hostArchitecture: arm64`.
-This is the documented [PAYG Apple Silicon image](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/github-hosted); usage is billed per minute, with no free tier.
-The pool already exists; this change does not enable billing or broaden its permissions.
+Apple Silicon cross-compiles on AppDev queue 11640, the existing `Azure Pipelines` pool, using the [standard Intel macOS 15 image](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/hosted) and `hostArchitecture: amd64`.
+The job installs the `aarch64-apple-darwin` Rust target and uses Apple's SDK/linker from the Intel host.
+It runs workspace tests for the Intel host, but does not execute the ARM64 release binary or run ARM64-targeted tests.
+There is no Apple Silicon VM requirement for the ESRP signing/notarization submissions.
+This change does not enable PAYG billing or broaden pool permissions.
 The build produces a ZIP for ESRP `MacAppDeveloperSign` with `Hardening: --options=runtime`, followed by `MacAppNotarize`, both using `CP-401337-Apple`.
-The native verifier extracts the returned ZIP and requires ARM64, strict `codesign` verification, `Developer ID Application: Microsoft Corporation (UBF8T346G9)`, Team ID `UBF8T346G9`, hardened runtime, a timestamp, and `spctl` acceptance with `source=Notarized Developer ID`.
+The Intel macOS verifier extracts the returned ZIP and requires ARM64, strict `codesign` verification, `Developer ID Application: Microsoft Corporation (UBF8T346G9)`, Team ID `UBF8T346G9`, hardened runtime, a timestamp, and `spctl` acceptance with `source=Notarized Developer ID`.
 Only after these checks does it produce the installer-compatible `.tar.gz`, preserving the signed executable.
+Apple source and signing metadata explicitly record `nativeExecutionTested: false`, and release notes disclose the deferred ARM64 execution testing.
 No Gatekeeper bypass or unsigned fallback is used.
 
 The final release job downloads only verified platform artifacts, matches their versions/targets/commit/build IDs and archive hashes, and assembles combined checksums.
@@ -269,10 +272,19 @@ The [first cross-platform run](https://dev.azure.com/powerbi/AppDev/_build/resul
 Authorizing that replacement queue is blocked on pool-admin permission as described above; no global access or broader role was granted.
 The Apple job failed with `No agent found in pool GitHub-hosted Agents which satisfies the specified demands: Agent.Version -gtVersion 5.281.1`.
 That minimum comes from the required `CodeQL3000Init` / `CodeQL3000Finalize` tasks, not an optional demand added by this repository.
-An eligible Apple Silicon agent/pool must satisfy that requirement before a cross-platform release can complete.
+That failure motivated using the standard Intel image instead of depending on Apple Silicon capacity.
+The Intel job still must satisfy every official task's minimum agent version; it has not yet been validated in an actual official run.
 Do not downgrade or remove security tasks to bypass agent selection.
-Actual Linux build/restore, Apple native tools, ESRP archive/CLI handling and successful public assets remain unverified.
+Actual Linux build/restore, Intel-hosted cross-compilation and notarization assessment, ESRP archive/CLI handling and successful public assets remain unverified.
 Do not treat template compilation or owner approval as evidence that those runtime operations have passed.
+
+### Deferred native Apple Silicon testing
+
+- [ ] TODO: Once an approved Apple Silicon runner is available, run the workspace tests with `--target aarch64-apple-darwin` and smoke-test the final signed/notarized release executable on ARM64, including its `--version` output.
+
+This TODO does not defer architecture, Developer ID, hardened-runtime, timestamp or notarization verification.
+Those checks remain mandatory before publishing an Apple artifact.
+Until native execution testing is restored, keep the metadata and release-note disclosure above.
 
 ## Subsequent phases
 

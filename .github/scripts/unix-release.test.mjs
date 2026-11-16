@@ -44,8 +44,8 @@ test('Apple identity must have expected Developer ID, team, hardened runtime and
   ]) assert.throws(() => verifyAppleIdentity(invalid));
 });
 
-test('native archive packaging preserves executable contents, permissions and installer layout', {
-  skip: !((process.platform === 'darwin' && process.arch === 'arm64') ||
+test('archive packaging preserves target contents and defers Apple Silicon execution without skipping signature checks', {
+  skip: !((process.platform === 'darwin' && ['x64', 'arm64'].includes(process.arch)) ||
     (process.platform === 'linux' && process.arch === 'x64')),
 }, () => {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-package-'));
@@ -54,14 +54,26 @@ test('native archive packaging preserves executable contents, permissions and in
   const version = '0.2.9';
   const program = `#!/bin/sh\n[ -z "$RAYFIN_EXECUTION_MARKER" ] || touch "$RAYFIN_EXECUTION_MARKER"\necho rayfin-local ${version}\n`;
   const script = fileURLToPath(new URL('./unix-release.mjs', import.meta.url));
-  const env = { ...process.env, RAYFIN_EXECUTION_MARKER: '',
+  const marker = join(root, 'target-executed');
+  const env = { ...process.env, RAYFIN_EXECUTION_MARKER: marker,
     BUILD_ARTIFACTSTAGINGDIRECTORY: root, AGENT_TEMPDIRECTORY: root,
     BUILD_SOURCEVERSION: 'a'.repeat(40), BUILD_BUILDID: '123',
   };
   try {
     const binaryDirectory = join(root, 'target', target, 'release');
     mkdirSync(binaryDirectory, { recursive: true });
-    writeFileSync(join(binaryDirectory, 'rayfin-local'), program, { mode: 0o755 });
+    const builtBinary = join(binaryDirectory, 'rayfin-local');
+    const cSource = join(root, 'fixture.c');
+    if (platform === 'macos') {
+      writeFileSync(cSource, '#include <stdio.h>\n#include <stdlib.h>\n' +
+        'int main(void) { const char *p = getenv("RAYFIN_EXECUTION_MARKER"); ' +
+        'if (p && *p) { FILE *f = fopen(p, "w"); if (!f) return 1; fclose(f); } ' +
+        `puts("rayfin-local ${version}"); return 0; }\n`);
+      const compilation = spawnSync('xcrun', ['--sdk', 'macosx', 'clang',
+        '-target', 'arm64-apple-macos11', cSource, '-o', builtBinary], { encoding: 'utf8' });
+      assert.equal(compilation.status, 0, compilation.stderr);
+    } else writeFileSync(builtBinary, program, { mode: 0o755 });
+    const contents = readFileSync(builtBinary);
     writeFileSync(join(root, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`);
     for (const file of ['LICENSE', 'README.md']) writeFileSync(join(root, file), 'packaging fixture');
     const result = spawnSync(process.execPath, [script, 'package', platform],
@@ -77,23 +89,32 @@ test('native archive packaging preserves executable contents, permissions and in
       : spawnSync('tar', ['-xzf', archive, '-C', extract]);
     assert.equal(extraction.status, 0);
     const binary = join(extract, `rayfin-local-${version}-${target}`, 'rayfin-local');
-    assert.equal(readFileSync(binary, 'utf8'), program);
+    assert.deepEqual(readFileSync(binary), contents);
     assert.equal(statSync(binary).mode & 0o111, 0o111);
     assert.equal(createHash('sha256').update(readFileSync(binary)).digest('hex'), metadata.binarySha256);
     assert.equal(createHash('sha256').update(readFileSync(archive)).digest('hex'), metadata.archiveSha256);
     if (platform === 'macos') {
+      assert.equal(metadata.nativeExecutionTested, false);
+      assert.equal(existsSync(marker), false, 'Packaging must not execute the ARM64 target');
       const input = join(root, 'unix-signing');
       mkdirSync(input);
       for (const file of [metadata.archiveFile, 'macos-source.json']) {
         copyFileSync(join(output, file), join(input, file));
       }
-      const marker = join(root, 'unverified-executed');
       const verification = spawnSync(process.execPath, [script, 'verify', platform], {
         cwd: root, encoding: 'utf8', env: { ...env, PIPELINE_WORKSPACE: root, RAYFIN_EXECUTION_MARKER: marker },
       });
-      assert.notEqual(verification.status, 0, 'Unsigned shell fixture must fail native executable verification');
-      assert.match(verification.stderr, /lipo failed/);
-      assert.equal(existsSync(marker), false, 'Never execute the returned payload before native verification');
+      assert.notEqual(verification.status, 0, 'An ad-hoc signed fixture must not pass Developer ID verification');
+      assert.match(verification.stderr, /Unexpected Apple Team ID|codesign failed/);
+      assert.equal(existsSync(marker), false, 'Signature verification must not execute the ARM64 target');
+      const intel = spawnSync('xcrun', ['--sdk', 'macosx', 'clang',
+        '-target', 'x86_64-apple-macos11', cSource, '-o', builtBinary], { encoding: 'utf8' });
+      assert.equal(intel.status, 0, intel.stderr);
+      const wrongTarget = spawnSync(process.execPath, [script, 'package', platform],
+        { cwd: root, encoding: 'utf8', env });
+      assert.notEqual(wrongTarget.status, 0);
+      assert.match(wrongTarget.stderr, /Expected an ARM64 Mach-O executable/);
+      assert.equal(existsSync(marker), false);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

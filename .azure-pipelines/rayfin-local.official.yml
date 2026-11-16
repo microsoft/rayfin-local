@@ -346,7 +346,7 @@ extends:
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
       - stage: BuildUnix
-        displayName: Build native Linux and Apple Silicon binaries
+        displayName: Build Linux and cross-compile Apple Silicon binaries
         dependsOn: DetermineRelease
         condition: and(succeeded(), or(eq(variables['Build.Reason'], 'Manual'), eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true')))
         jobs:
@@ -364,9 +364,9 @@ extends:
               action: package
               testReleasePr: ${{ parameters.testReleasePr }}
               pool:
-                name: GitHub-hosted Agents
-                vmImage: macos-26-arm64
-                hostArchitecture: arm64
+                name: Azure Pipelines
+                image: macos-15
+                hostArchitecture: amd64
                 os: macOS
 
       - stage: SignUnix
@@ -449,9 +449,9 @@ extends:
               action: verify
               testReleasePr: ${{ parameters.testReleasePr }}
               pool:
-                name: GitHub-hosted Agents
-                vmImage: macos-26-arm64
-                hostArchitecture: arm64
+                name: Azure Pipelines
+                image: macos-15
+                hostArchitecture: amd64
                 os: macOS
 
       - stage: StageGitHubRelease
@@ -545,6 +545,7 @@ extends:
                     Windows x64: ESRP Authenticode signature.
                     Linux x64: detached Microsoft PGP signature (.tar.gz.sig).
                     Apple Silicon: Developer ID signature, hardened runtime, and Apple notarization.
+                    Native Apple Silicon execution testing is deferred.
                     Prereleases are never marked latest.
                   assets: |
                     $(Pipeline.Workspace)/release/*.zip

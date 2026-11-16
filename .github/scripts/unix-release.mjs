@@ -50,7 +50,8 @@ function main() {
   assert.ok(['package', 'verify'].includes(action) && targets[platform], 'Expected package|verify and linux|macos');
   const target = targets[platform];
   assert.equal(process.platform, platform === 'macos' ? 'darwin' : 'linux');
-  assert.equal(process.arch, platform === 'macos' ? 'arm64' : 'x64', 'Wrong native build/verification architecture');
+  if (platform === 'macos') assert.ok(['x64', 'arm64'].includes(process.arch), 'Expected a macOS build/verification host');
+  else assert.equal(process.arch, 'x64', 'Expected a Linux x64 build/verification host');
   const version = workspaceVersion(readFileSync('Cargo.toml', 'utf8'));
   assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   const name = `rayfin-local-${version}-${target}`;
@@ -58,6 +59,7 @@ function main() {
   mkdirSync(output, { recursive: true });
   const expected = {
     commit: process.env.BUILD_SOURCEVERSION, buildId: process.env.BUILD_BUILDID, version, target,
+    ...(platform === 'macos' ? { nativeExecutionTested: false } : {}),
   };
   assert.match(expected.commit, /^[a-f0-9]{40}$/);
   assert.match(expected.buildId, /^[1-9]\d*$/);
@@ -66,7 +68,11 @@ function main() {
   if (action === 'package') {
     mkdirSync(directory);
     const binary = join('target', target, 'release', 'rayfin-local');
-    assert.equal(run(binary, ['--version']).stdout, `rayfin-local ${version}`);
+    if (platform === 'macos') {
+      assert.equal(run('lipo', ['-archs', binary]).stdout, 'arm64', 'Expected an ARM64 Mach-O executable');
+    } else {
+      assert.equal(run(binary, ['--version']).stdout, `rayfin-local ${version}`);
+    }
     for (const file of ['README.md', 'LICENSE']) copyFileSync(file, join(directory, file));
     copyFileSync(binary, join(directory, 'rayfin-local'));
     const archive = `${name}${platform === 'macos' ? '.zip' : '.tar.gz'}`;
@@ -101,14 +107,14 @@ function main() {
   const binary = join(directory, 'rayfin-local');
   if (platform === 'macos') {
     assert.equal(run('lipo', ['-archs', binary]).stdout, 'arm64');
-    run('codesign', ['--verify', '--strict', '--verbose=2', binary]);
+    run('codesign', ['--verify', '--strict', '--all-architectures', '--verbose=2', binary]);
     verifyAppleIdentity(run('codesign', ['--display', '--verbose=4', binary]).stderr);
     const assessment = run('spctl', ['--assess', '--type', 'execute', '--verbose=4', binary]);
     assert.match(`${assessment.stdout}\n${assessment.stderr}`, /source=Notarized Developer ID/);
   } else {
     assert.equal(hash(binary), source.binarySha256, 'Linux executable changed after packaging');
   }
-  assert.equal(run(binary, ['--version']).stdout, `rayfin-local ${version}`);
+  if (platform === 'linux') assert.equal(run(binary, ['--version']).stdout, `rayfin-local ${version}`);
   const archive = `${name}.tar.gz`;
   if (platform === 'macos') run('tar', ['-czf', join(output, archive), '-C', temp, name]);
   else copyFileSync(inputArchive, join(output, archive));

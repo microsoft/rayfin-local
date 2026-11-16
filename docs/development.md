@@ -184,7 +184,7 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 ## Releasing
 
 The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
-It builds Windows x64, Linux x64 and Apple Silicon binaries natively and signs through ESRP.
+It builds Windows x64 and Linux x64 natively, cross-compiles Apple Silicon on Intel macOS, and signs through ESRP.
 Independent platform verifiers produce `windows-signed`, `linux-signed` and `macos-signed` artifacts; publication requires all three.
 To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
 It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
@@ -202,6 +202,10 @@ The official pipeline then:
 - packages the binaries with `README.md` and `LICENSE` as a Windows ZIP and Unix `.tar.gz` archives;
 - waits for every platform's verification, build/output and source-security checks, then creates `v<version>` and its GitHub Release at the exact source commit;
 - includes three archives and signing metadata, Linux `.sig`/public key, combined `SHA256SUMS.txt`, `install.sh` and `install.ps1`; stable versions become latest, while prereleases never do.
+
+Native Apple Silicon execution tests are deferred; the [signing runbook TODO](release-signing.md#deferred-native-apple-silicon-testing) tracks restoring them.
+Intel macOS workspace tests and all signing/notarization checks remain required.
+Apple release metadata records `nativeExecutionTested: false`; signature verification is not a native execution test.
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.
 Keep the scripts compatible with the releases they may install: they expect the archive names above and `SHA256SUMS.txt`.

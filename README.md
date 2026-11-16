@@ -141,6 +141,7 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 The official release pipeline signs Windows x64 with Authenticode, Linux x64 archives with Microsoft's PGP key, and Apple Silicon binaries with Developer ID and Apple notarization.
 Those guarantees apply to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
+Apple Silicon releases are cross-compiled on Intel macOS; [native ARM64 execution testing is deferred](docs/release-signing.md#deferred-native-apple-silicon-testing).
 
 **Apple Silicon and Linux x64:**
 
