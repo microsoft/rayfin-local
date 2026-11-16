@@ -138,10 +138,12 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 
 ## Install
 
-The official release pipeline currently publishes only Windows x64 binaries signed with Authenticode.
+The official release pipeline submits Windows x64, Linux x64 and Apple Silicon binaries to ESRP from Windows agents.
+It requires Windows Authenticode, detached Microsoft PGP signing for Linux archives, and Apple Developer ID signing/notarization before publication.
 Those guarantees apply to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
-Linux and Apple Silicon signing stages are commented out pending infrastructure access and end-to-end validation; see the [signing TODOs](docs/release-signing.md#linux-and-apple-silicon).
+Standard hosted Ubuntu and Intel macOS agents build and verify the Unix artifacts; no Apple Silicon signing VM is needed.
+The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) tracks end-to-end validation and deferred native ARM64 execution testing.
 
 **macOS and Linux (existing unsigned `0.2.8` release):**
 
@@ -179,8 +181,10 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
 | Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
 
-For all macOS and Linux platforms, pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+Until a three-platform release is available, all macOS and Linux platforms must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+New Unix releases target Apple Silicon and Linux x64; Intel macOS and Linux ARM64 remain on the legacy release.
 The installers check archive checksums; that is not signature verification.
+Signed Linux releases additionally include `.tar.gz.sig` and `microsoft.asc` for independent PGP verification.
 
 Other ways to install:
 
