@@ -183,24 +183,38 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 
 ## Releasing
 
-The manual-only [official ADO pipeline](release-signing.md) is a Windows
-build-validation pilot for resource approval before ESRP signing is enabled.
-It publishes metadata only and does not replace or gate the GitHub release
-workflow below.
+The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
+It currently builds and signs only Windows x64 on the existing `1ES-AppDev/windows-2022` infrastructure.
+Publication requires the verified `windows-signed` artifact and all official output/source-security checks; there is no unsigned fallback.
+Linux/macOS build, signing, verification and publication paths are commented out for a separate PR after consulting the ESRP team.
+The [signing runbook](release-signing.md#linux-and-apple-silicon) retains the cross-compilation design, authorization blocker and validation TODOs.
+To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
+It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
+GitHub Actions release publishing is removed: there is no unsigned fallback.
+While Unix releases are deferred, macOS and Linux users must pin the existing unsigned `0.2.8` release or build from source.
 
-1. Set the new version in `[workspace.package]` of the root `Cargo.toml`, and commit (with the updated `Cargo.lock`).
-2. Tag the commit `v<version>` (for example `v0.2.0`, or `v0.2.0-rc.1` for a prerelease) and push the tag.
+1. Increase `[workspace.package].version` in the root `Cargo.toml`, and update `Cargo.lock` with `cargo update --workspace`.
+2. Merge that change into `main`; no tag push or manual queue is required.
 
-The [release workflow](../.github/workflows/release.yml) then:
+The official pipeline then:
 
-- checks that the tag matches the crate version;
-- builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin` (the Linux builds run on Ubuntu 22.04, which sets their glibc requirement, and print it);
-- packages each binary with `README.md` and `LICENSE` as `rayfin-local-<version>-<target>.zip` (Windows) or `.tar.gz`;
-- publishes a GitHub Release with the archives, `SHA256SUMS.txt`, `install.sh` and `install.ps1`, marked as a prerelease when the tag has a `-` suffix;
-- installs the published release with `install.sh` on Linux (x64 and ARM64) and macOS, and with `install.ps1` on Windows (PowerShell 7, and Windows PowerShell 5.1 through `irm | iex`), and checks the installed version. For a final release, it also checks that the scripts install it as the latest release.
+- compares the version with the commit's first parent (the previous `main` tip); unchanged or decreased versions do not release;
+- tests and builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`;
+- signs through ESRP and independently verifies Windows Authenticode, timestamp and executable version;
+- packages the executable with `README.md` and `LICENSE` as a Windows ZIP;
+- waits for verification, build/output and source-security checks, then creates `v<version>` and its GitHub Release at the exact source commit;
+- attaches the ZIP, `windows-signing.json`, `SHA256SUMS.txt` and `install.ps1`; stable versions become latest, while prereleases never do.
+
+Native release-binary execution tests for Linux and Apple Silicon are deferred; the signing runbook tracks [Linux](release-signing.md#deferred-native-linux-testing) and [Apple Silicon](release-signing.md#deferred-native-apple-silicon-testing) TODOs.
+The separate Unix release PR must restore all signing/notarization checks and disclose any remaining execution-testing gaps.
+The retained Unix helpers require `nativeExecutionTested: false`; signature verification is not a native execution test.
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.
 Keep the scripts compatible with the releases they may install: they expect the archive names above and `SHA256SUMS.txt`.
+
+If a run fails, manually queue the same version-bump commit from `main` after fixing the external failure.
+Existing releases are never edited or overwritten; a source fix needs a new version bump.
+The pipeline compares semantic versions, including prerelease precedence, and rejects malformed versions.
 
 To try the scripts before a release, run them against an existing one: `RAYFIN_LOCAL_VERSION=<version> RAYFIN_LOCAL_INSTALL_DIR=/tmp/rl sh install.sh`, or in PowerShell set `$env:RAYFIN_LOCAL_VERSION`, `$env:RAYFIN_LOCAL_INSTALL_DIR` and `$env:RAYFIN_LOCAL_NO_MODIFY_PATH = '1'`, then run `./install.ps1`.
 Lint them with `shellcheck --shell=sh install.sh` and [actionlint](https://github.com/rhysd/actionlint) for the workflows.

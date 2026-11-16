@@ -138,14 +138,16 @@ It is tested with the real 1.36.2 SDK, and end to end with real apps.
 
 ## Install
 
-Prebuilt releases from the original repository are not included in the Git history migration.
-Until a release is published in this repository, [build from source](#requirements) with
-`cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
+The official release pipeline currently publishes only Windows x64 binaries, signed through ESRP and independently verified before publication.
+Linux and Apple Silicon build/signing/publishing stages are commented out pending ESRP authorization and validation in a separate PR.
+The Windows signing guarantee applies to new official releases, not the existing unsigned multi-platform `0.2.8` release.
+Existing release assets are not retroactively signed.
+The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) preserves the deferred Unix design, ESRP blocker and native Linux/ARM64 execution-testing TODOs.
 
-**macOS and Linux:**
+**macOS and Linux (existing unsigned `0.2.8` release):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.2.8 sh
 ```
 
 **Windows (PowerShell):**
@@ -154,7 +156,7 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install
 irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 ```
 
-The script downloads the latest [release](https://github.com/microsoft/rayfin-local/releases) for your platform, checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
+The script downloads the requested [release](https://github.com/microsoft/rayfin-local/releases) (latest when no version is set), checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
 
 - **macOS and Linux:** into `~/.local/bin`. If that folder isn't on your `PATH`, the script prints the line to add to your shell's profile.
 - **Windows:** into `%LOCALAPPDATA%\Programs\rayfin-local`, which it adds to your user `PATH`. Open a new terminal to pick it up there.
@@ -174,13 +176,17 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Platform | Release build |
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
-| macOS on Apple silicon or Intel | `aarch64-apple-darwin`, `x86_64-apple-darwin` |
-| Linux x64 or ARM64 with glibc 2.34 or later (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 or newer) | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` |
+| macOS on Apple Silicon (existing unsigned `0.2.8` release only) | `aarch64-apple-darwin` |
+| Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
+| Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
+
+While Unix releases are deferred, all macOS and Linux platforms must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+The installers check archive checksums; that is not signature verification.
 
 Other ways to install:
 
 - **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
-  The macOS binaries are not notarized: if Gatekeeper blocks one you downloaded with a browser, run `xattr -d com.apple.quarantine rayfin-local`.
+  The existing `0.2.8` macOS binaries are not notarized.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
   `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
