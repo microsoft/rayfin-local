@@ -21,24 +21,29 @@
 //!   `content-type` (`application/json` when it set none) and `x-fabric-udf-status` pass through
 //!   with the body; the deployed workflow adds nothing the SDK reads (Rayfin:
 //!   `Workflow/FunctionInvokeWorkflow.cs` `CopyHttpResponseAsync`).
-//! - **Caller.** Anonymous calls are allowed: the deployed authentication middleware gives
-//!   token-less requests anonymous claims (Rayfin:
-//!   `Auth/Middleware/RayfinAuthenticationMiddleware.cs`) and `InvokeController` has no
-//!   `[Authorize]`. An invalid bearer token is `401 {"error": "Invalid authentication token"}`,
-//!   as that middleware answers.
-//! - **Request checks,** in the deployed order: the bearer token (401); the name,
+//! - **Caller.** Only signed-in callers may invoke, as in Fabric: BaaS's
+//!   `FunctionAccessAuthorizer` answers token-less requests (which its authentication middleware
+//!   gives anonymous claims) 403 `FUNCTION_ACCESS_DENIED` "Anonymous access is not allowed for
+//!   function invocation.", and so does a call to its reserved dynamic auth-claims provider,
+//!   `rayfin_auth_claims`. An invalid bearer token is `401 {"error": "Invalid authentication
+//!   token"}`, as that middleware answers.
+//! - **Request checks,** in the deployed order: the bearer token (401); the caller (403); the
+//!   name,
 //!   `^[A-Za-z0-9_]{1,128}$` (400 `FUNCTION_INVALID_NAME`, Rayfin:
 //!   `Validation/FunctionInputValidation.cs`); `Content-Type: application/json` (415
 //!   `FUNCTION_INVOKE_INVALID_CONTENT_TYPE`). Then rayfin-local's own: a body of at most 30 MiB
 //!   (413), valid JSON (400; an empty body means `{}`).
-//! - **Errors without an envelope** use the deployed shape `{"error": <code>, "message"}`
-//!   (Rayfin: `Middleware/RayfinExceptionMiddleware.cs`): unknown function 404
+//! - **Client errors without an envelope** retain their code and message: unknown function 404
 //!   `FUNCTION_NOT_FOUND`; host (re)starting, or its start failed for a reason that may pass
 //!   (it is tried again), 503 `FUNCTION_HOST_STARTING` with `Retry-After`;
 //!   functions not built or not loadable 503 `FUNCTIONS_UNAVAILABLE`; past the timeout (250 s,
 //!   the UDF ceiling) 408 `FUNCTION_INVOKE_TIMEOUT`; no response from the function (a crash, a
-//!   `BigInt` result) 500 `FUNCTION_INVOKE_FAILED`. Deployed 5xx bodies hide their cause behind
-//!   `internal_server_error`; locally the message says what failed.
+//!   `BigInt` result) 500. Service-generated 5xx bodies use Fabric's masked
+//!   `{"error":{"code":"InternalServerError","message":"An internal execution error occured"}}`;
+//!   the original code and redacted diagnostic are logged at error level. This is BaaS's
+//!   `BaaSCodeMarker` / `ExceptionConstants.InternalError` contract, not the OSS middleware's
+//!   `internal_server_error`. As in BaaS, app-authored HTTP responses and HTTP 200 UDF envelopes
+//!   are relayed unchanged.
 //!
 //! # What the function gets
 //!

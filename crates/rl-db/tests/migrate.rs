@@ -11,6 +11,71 @@ fn explorer() -> AppModel {
     AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap()
 }
 
+/// The fixture app's model (`tests/fixtures/apps/basic`).
+fn basic() -> AppModel {
+    let json = include_str!("../../rl-model/tests/fixtures/basic.analysis.json");
+    AppModel::from_analysis(&serde_json::from_str(json).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn upgrading_system_relationships_rebuilds_old_tables_and_preserves_users() {
+    let model = basic();
+    let db = Db::open_in_memory().unwrap();
+    let mut old = model.clone();
+    let person = entity(&mut old, "Person");
+    person.foreign_keys.clear();
+    apply(&db, &old, false).await.unwrap();
+    db.call_blocking(|conn| {
+        conn.execute_batch(
+            "INSERT INTO Users (Id, Email) VALUES \
+         ('00000000-0000-4000-8000-000000000001', 'legacy@example.test');
+         INSERT INTO People (account_id) VALUES ('00000000-0000-4000-8000-000000000001');",
+        )
+    })
+    .unwrap();
+    let report = apply(&db, &model, false).await.unwrap();
+    assert!(report.steps.iter().any(|step| {
+        matches!(step, MigrationStep::RebuildTable { to, .. } if to.name == "People")
+    }));
+    let mut empty = model.clone();
+    empty.entities.clear();
+    apply(&db, &empty, true).await.unwrap();
+    assert_eq!(
+        query::<String>(&db, "SELECT Email FROM Users"),
+        ["legacy@example.test"]
+    );
+    assert!(
+        migrate::stored_schema(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .table("Users")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn app_schema_cannot_replace_the_users_table() {
+    let db = Db::open_in_memory().unwrap();
+    let mut model = basic();
+    model.entities[0].table = "uSeRs".into();
+    assert!(matches!(
+        apply(&db, &model, true).await,
+        Err(SchemaError::ReservedName { .. })
+    ));
+}
+
+#[test]
+fn legacy_app_snapshots_cannot_schedule_a_system_table_drop() {
+    let mut model = basic();
+    model.entities.clear();
+    let current = rl_db::StoredSchema {
+        format: rl_db::schema::FORMAT,
+        tables: vec![rl_db::schema::table_schema(&rl_model::system_user(model.dialect)).unwrap()],
+    };
+    assert!(migrate::plan(Some(&current), &model).unwrap().is_empty());
+}
+
 fn entity<'a>(model: &'a mut AppModel, name: &str) -> &'a mut Entity {
     model.entities.iter_mut().find(|e| e.name == name).unwrap()
 }
@@ -476,5 +541,5 @@ async fn lossless_rebuilds_and_dropped_tables() {
         &db,
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE '\\_rl\\_%' ESCAPE '\\'",
     );
-    assert_eq!(tables, ["AskThreads"]);
+    assert_eq!(tables, ["Users", "AskThreads"]);
 }

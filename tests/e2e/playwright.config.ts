@@ -31,6 +31,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'fixture', testMatch: 'fixture.spec.ts' },
+    { name: 'static', testMatch: 'static.spec.ts' },
     { name: 'explorer', testMatch: 'explorer.spec.ts' },
   ],
 });

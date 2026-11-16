@@ -221,12 +221,12 @@ async fn field_permissions_and_dab_errors() {
         (
             "{ todos { groupBy { aggregations { sum(field: estimate) } } } }",
             "Access forbidden to field 'estimate' referenced in the aggregation function 'sum'.",
-            "AuthorizationCheckFailed",
+            "Forbidden",
         ),
         (
             "{ todos { groupBy(fields: [status, priority]) { fields { status } } } }",
             "Access forbidden to field 'priority' referenced in the groupBy argument.",
-            "AuthorizationCheckFailed",
+            "Forbidden",
         ),
         (
             "{ todos { groupBy(fields: [status]) { fields { title } } } }",

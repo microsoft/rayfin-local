@@ -33,7 +33,7 @@ fn id(n: u32) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sdk_data_client_reads_and_writes_through_rayfin_local() {
     let Some(node_modules) = sdk_node_modules() else {
-        eprintln!("skipped: the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
         return;
     };
     let node = tokio::process::Command::new("node")
@@ -41,7 +41,7 @@ async fn the_sdk_data_client_reads_and_writes_through_rayfin_local() {
         .output()
         .await;
     if node.is_err() {
-        eprintln!("skipped: node isn't on PATH");
+        rl_test_support::skip("node isn't on PATH");
         return;
     }
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -140,7 +140,10 @@ async fn the_sdk_data_client_reads_and_writes_through_rayfin_local() {
         out["pages"],
         json!([["Alice two", "alice three"], ["Alice one"]])
     );
-    assert_eq!(out["anonymous"]["status"], 401);
+    assert_eq!(
+        out["anonymous"]["message"],
+        "GraphQL errors: The current user is not authorized to access this resource."
+    );
     assert_eq!(out["mutations"]["renamed"], "Renamed");
     assert_eq!(
         out["mutations"]["forged"],
@@ -192,7 +195,7 @@ async fn the_sdk_data_client_aggregates_through_rayfin_local() {
 /// `settings` plus the server's; returns its `RESULT`, or `None` (skipped) without Node or the SDK.
 async fn run_sdk_script(app: &App, script: &str, mut settings: Value) -> Option<Value> {
     let Some(node_modules) = sdk_node_modules() else {
-        eprintln!("skipped: the Rayfin SDK 1.36.2 node_modules aren't installed");
+        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
         return None;
     };
     let node = tokio::process::Command::new("node")
@@ -200,7 +203,7 @@ async fn run_sdk_script(app: &App, script: &str, mut settings: Value) -> Option<
         .output()
         .await;
     if node.is_err() {
-        eprintln!("skipped: node isn't on PATH");
+        rl_test_support::skip("node isn't on PATH");
         return None;
     }
     let _ = rustls::crypto::ring::default_provider().install_default();

@@ -32,6 +32,7 @@ rl-connectors = { path = "crates/rl-connectors" }
 rl-storage = { path = "crates/rl-storage" }
 rl-frontend = { path = "crates/rl-frontend" }
 rl-server = { path = "crates/rl-server" }
+rl-test-support = { path = "crates/rl-test-support" }
 
 anyhow = "1.0.104"
 thiserror = "2.0.21"

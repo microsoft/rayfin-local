@@ -9,8 +9,8 @@
 //! - **Warehouse**: no `OUTPUT` (DWSQL has none); the answer is `DbOperationResult { result:
 //!   "success" }` once a row was written.
 //!
-//! No row written: a create refused by its policy answers DAB's `DatabasePolicyFailure`, an
-//! update `ItemNotFound`, a delete `null`. Database errors roll back and answer
+//! No row written: a create refused by its policy or a filtered update answers `BadRequest`,
+//! a delete `null`. Database errors roll back and answer
 //! `DatabaseOperationFailed` with the server's message as `extensions.detail`.
 
 use async_graphql_parser::Pos;
@@ -36,7 +36,6 @@ use crate::schema::Resolver;
 use crate::sql::{CmpOp, Operand, Pred};
 
 pub(crate) struct Planned {
-    authentication_required: bool,
     roots: Vec<Root>,
 }
 
@@ -88,20 +87,11 @@ enum Answer {
 /// Plans the root fields of a mutation (the `Mutation` type exists: validation checked it).
 pub(crate) fn plan<'d>(ctx: &Ctx<'d>, selection: &'d SelectionSet, target: Target) -> Planned {
     let fields = plan::collect_fields(ctx, MUTATION, &[selection]);
-    let authentication_required = !ctx.caller.is_authenticated()
-        && exec::requires_authentication(ctx.model, ctx.schema, MUTATION, &fields);
-    let roots = if authentication_required {
-        Vec::new()
-    } else {
-        fields
-            .iter()
-            .map(|field| plan_root(ctx, field, target))
-            .collect()
-    };
-    Planned {
-        authentication_required,
-        roots,
-    }
+    let roots = fields
+        .iter()
+        .map(|field| plan_root(ctx, field, target))
+        .collect();
+    Planned { roots }
 }
 
 fn plan_root(ctx: &Ctx<'_>, field: &Collected<'_>, target: Target) -> Root {
@@ -159,7 +149,12 @@ fn plan_write(
             let item = item_values(ctx, entity, grant, node, &args)?;
             let alias = ctx.alias();
             emitter.register(&alias, index);
-            let policy = policy::action_filter(entity, ctx.caller, Action::Create, &alias)?;
+            let policy = policy::create_filter(
+                entity,
+                ctx.caller,
+                &alias,
+                &item.iter().map(|(column, _)| *column).collect::<Vec<_>>(),
+            )?;
             (
                 insert(&mut emitter, entity, &item, &alias, policy, rows),
                 rows && !entity.key_columns().is_empty(),
@@ -391,9 +386,6 @@ pub(crate) async fn execute(
     planned: Planned,
     backend: &dyn SqlBackend,
 ) -> Outcome {
-    if planned.authentication_required {
-        return Outcome::AuthenticationRequired;
-    }
     let mut errors = Vec::new();
     let mut data = Map::new();
     for root in planned.roots {
@@ -535,14 +527,14 @@ impl Write {
                 _ => GraphQlError::dab(messages::DATABASE_ERROR, codes::UNEXPECTED_ERROR),
             },
             Done::NoRow if self.action == Action::Create => {
-                GraphQlError::dab(INSERT_REFUSED, codes::DATABASE_POLICY_FAILURE)
+                GraphQlError::dab(INSERT_REFUSED, codes::BAD_REQUEST)
             }
             Done::NoRow if self.action == Action::Update => {
-                GraphQlError::dab(self.not_found, codes::ITEM_NOT_FOUND)
+                GraphQlError::dab(self.not_found, codes::BAD_REQUEST)
             }
             // DAB reports a role that may not read once the transaction is over, rows or not.
             Done::NoRow | Done::Applied(_) if matches!(self.answer, Answer::ReadDenied) => {
-                GraphQlError::dab(read_denied(&self.field), codes::AUTHORIZATION_CHECK_FAILED)
+                GraphQlError::dab(read_denied(&self.field), codes::FORBIDDEN)
             }
             Done::NoRow => return Json::Null,
             Done::Applied(row) => match (&self.answer, row) {

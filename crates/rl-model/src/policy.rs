@@ -4,8 +4,8 @@
 //! (`eq`, and `ne` from `.neq()`) over `claims.sub|email|role`, `item.<field>` and literals
 //! (string, number, boolean, `Date`, `null`), combined by `LogicalExpression`s (`and`, `or`).
 //! There is no `not` and no ordering comparison. rayfin-core's `serializeCheckToAst` turns that
-//! tree into a JSON "check" AST, which [`PolicyExpr::from_check`] reads; anything outside that
-//! grammar is an error, never ignored.
+//! tree into a JSON "check" AST, which [`PolicyExpr::from_check`] reads for data policies.
+//! Storage admits its narrower BaaS profile separately through [`StorageFolder::validate_rules`](crate::StorageFolder::validate_rules).
 
 use std::fmt;
 
@@ -20,8 +20,8 @@ pub enum PolicyExpr {
     And(Vec<PolicyExpr>),
     /// True when any operand is (at least two operands).
     Or(Vec<PolicyExpr>),
-    /// `left op right`. DAB compares with SQL semantics: a `null` operand never matches, so
-    /// `@item.x eq null` is never true (use the result as a SQL predicate as-is).
+    /// `left op right`. DAB renders `eq null` / `neq null` as SQL null tests; other
+    /// comparisons with a null column retain SQL's three-valued logic.
     Compare {
         op: CompareOp,
         left: Operand,

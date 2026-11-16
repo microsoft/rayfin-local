@@ -186,17 +186,30 @@ impl Reply {
     /// `(error, message)` of an error answer.
     fn error(&self) -> (String, String) {
         let body = self.json();
+        if body["error"].is_object() {
+            return (
+                body["error"]["code"].as_str().unwrap().into(),
+                body["error"]["message"].as_str().unwrap().into(),
+            );
+        }
         let text = |key: &str| body[key].as_str().unwrap_or_default().to_owned();
         (text("error"), text("message"))
     }
 }
 
+/// A signed-in call, as the SDK makes it.
 fn post(path: &str) -> axum::http::request::Builder {
+    anonymous_post(path).header(header::AUTHORIZATION, SIGNED_IN)
+}
+
+fn anonymous_post(path: &str) -> axum::http::request::Builder {
     Request::builder()
         .method(Method::POST)
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
 }
+
+const SIGNED_IN: &str = concat!("Bearer", " good");
 
 async fn send(router: &Router, request: Request<Body>) -> Reply {
     let response = router.clone().oneshot(request).await.unwrap();
@@ -295,8 +308,8 @@ async fn functions_answer_with_the_deployed_envelope() {
     let bigint = invoke(&router, "bigint", json!({})).await;
     assert_eq!(bigint.status, StatusCode::INTERNAL_SERVER_ERROR);
     let (code, message) = bigint.error();
-    assert_eq!(code, "FUNCTION_INVOKE_FAILED");
-    assert!(message.contains("BigInt"), "{message}");
+    assert_eq!(code, "InternalServerError");
+    assert_eq!(message, "An internal execution error occured");
 
     service.stop().await;
     let stopped = invoke(&router, "hello", json!({})).await;
@@ -310,7 +323,7 @@ async fn requests_are_checked_in_the_deployed_order() {
 
     let bad_token = send(
         &router,
-        post("/functions/hello/invoke")
+        anonymous_post("/functions/hello/invoke")
             .header(header::AUTHORIZATION, "Bearer bad")
             .body(Body::from("{}"))
             .unwrap(),
@@ -320,6 +333,37 @@ async fn requests_are_checked_in_the_deployed_order() {
     assert_eq!(
         bad_token.json(),
         json!({"error": "Invalid authentication token"})
+    );
+
+    // Then BaaS's access check: signed-in callers only, and never the auth-claims provider.
+    for path in [
+        "/functions/hello/invoke",
+        "/functions/missing/invoke",
+        "/functions/get-backlog/invoke",
+        "/.rayfin-local/functions/api/hello",
+    ] {
+        let anonymous = send(
+            &router,
+            anonymous_post(path).body(Body::from("{}")).unwrap(),
+        )
+        .await;
+        assert_eq!(anonymous.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            anonymous.error(),
+            (
+                "FUNCTION_ACCESS_DENIED".into(),
+                "Anonymous access is not allowed for function invocation.".into()
+            )
+        );
+    }
+    let reserved = invoke(&router, "Rayfin_Auth_Claims", json!({})).await;
+    assert_eq!(reserved.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        reserved.error(),
+        (
+            "FUNCTION_ACCESS_DENIED".into(),
+            "Function 'Rayfin_Auth_Claims' is reserved and cannot be invoked directly.".into()
+        )
     );
 
     let unknown = invoke(&router, "missing", json!({})).await;
@@ -337,6 +381,7 @@ async fn requests_are_checked_in_the_deployed_order() {
     let text = send(
         &router,
         Request::post("/functions/hello/invoke")
+            .header(header::AUTHORIZATION, SIGNED_IN)
             .header(header::CONTENT_TYPE, "text/plain")
             .body(Body::from("hello"))
             .unwrap(),
@@ -389,7 +434,6 @@ async fn functions_get_the_caller_secrets_and_tokens() {
     let signed_in = send(
         &router,
         post("/functions/whoami/invoke")
-            .header(header::AUTHORIZATION, "Bearer good")
             .body(Body::from("{}"))
             .unwrap(),
     )
@@ -398,8 +442,6 @@ async fn functions_get_the_caller_secrets_and_tokens() {
         signed_in.output(),
         json!({"baseUrl": format!("{API_ORIGIN}/"), "hasPublishableKey": true, "hasAccessToken": true})
     );
-    let anonymous = invoke(&router, "whoami", json!({})).await;
-    assert_eq!(anonymous.output()["hasAccessToken"], false);
 
     // Non-ASCII survives the header (the fixture's local.settings.json value is shorter).
     let secret = invoke(&router, "secret", json!({})).await;
@@ -640,8 +682,8 @@ async fn a_broken_build_answers_503_until_it_is_fixed() {
     let unavailable = invoke(&router, "hello", json!({})).await;
     assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
     let (code, message) = unavailable.error();
-    assert_eq!(code, "FUNCTIONS_UNAVAILABLE");
-    assert!(message.contains("functions build failed"), "{message}");
+    assert_eq!(code, "InternalServerError");
+    assert_eq!(message, "An internal execution error occured");
 
     std::fs::write(package.path.join("src/function_app.ts"), original).unwrap();
     let hello = eventually(

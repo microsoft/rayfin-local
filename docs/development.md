@@ -46,17 +46,35 @@ While other work is in progress, lint and format one crate: `cargo clippy -p <cr
 
 ## Tests
 
+`scripts/check.mjs` runs every check CI runs, the same way on Windows, Linux and macOS:
+
 ```sh
-cargo test --workspace     # everything; CI runs this on Windows, Linux and macOS
-cargo test -p <crate>      # one crate
+node scripts/check.mjs              # everything: setup, lint, rust, js, e2e
+node scripts/check.mjs rust js      # some steps
+node scripts/check.mjs e2e --no-setup
+node scripts/check.mjs --help
 ```
 
+| Step | What it runs | CI job |
+| --- | --- | --- |
+| `setup` | `npm ci` in each test fixture and harness (again only when its `package-lock.json` changed), builds `tests/fixtures/functions/basic`, and for `e2e` downloads Playwright's Chromium (not with `PLAYWRIGHT_CHANNEL`). The other steps run it first unless `--no-setup`. | all but `lint` |
+| `lint` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`. | `lint` |
+| `rust` | `cargo test --workspace` and the SDK auth test (`rl-auth --test sdk -- --ignored`), in strict mode. | `test` (Windows, Linux, macOS) |
+| `js` | `node --test` on each `js/test/*.test.mjs`. | `test` |
+| `e2e` | The Playwright `fixture` and `static` suites ([below](#end-to-end-tests)), and the sign-in portal test (`rl-auth --test portal_e2e -- --ignored`). | `e2e` (Linux) |
+
+While working on one crate, `cargo test -p <crate>` is quicker; run the check before you push.
 Unit tests sit next to the code (`#[cfg(test)]`); integration tests are in `crates/<crate>/tests/`.
+
+**Strict mode.** The check sets `RAYFIN_LOCAL_TEST_STRICT=1`, and points `RAYFIN_SDK_NODE_MODULES` at the basic fixture's `node_modules`.
+In strict mode a test that needs Node.js, a fixture's packages or the SDK fails when they are missing, instead of skipping, so a broken setup can't pass for a green run.
+The tests that need what CI doesn't have still skip: an app outside this repository (the variables below), a SQL Server (`RAYFIN_LOCAL_TEST_MSSQL`; CI's `sql-connectors` job has one), and a signed-in Azure CLI.
+Skips go through `rl_test_support::skip` (`crates/rl-test-support`); a new test that needs an optional dependency should too.
 
 ### Tests that use Node.js and the real SDK
 
 Several integration tests drive the real Rayfin SDK 1.36.2, or the project's own packages, with Node.js against rayfin-local's routes.
-They print a `skipped: …` note and pass when Node.js or the packages they need are missing, so `cargo test --workspace` works on any machine.
+Outside strict mode they print a `skipped: …` note and pass when Node.js or the packages they need are missing, so a plain `cargo test --workspace` works on any machine.
 
 | Test | What it checks | Needs |
 | --- | --- | --- |
@@ -135,14 +153,17 @@ node --test js/test/function-host.test.mjs
 
 ### End-to-end tests
 
-`tests/e2e/` runs `rayfin-local serve` on real apps and drives them with Playwright:
+`tests/e2e/` runs `rayfin-local serve` on real apps and drives them with Playwright.
+`node scripts/check.mjs e2e` runs what CI runs; to run one suite:
 
 ```sh
 cd tests/e2e
 npm ci
 npx playwright install chromium   # or set PLAYWRIGHT_CHANNEL=msedge (or chrome)
 npm run test:fixture              # the fixture app, with fake tokens and a mock Power BI
+npm run test:static               # the fixture app's static build with protected hosting
 npm run test:explorer             # the reference app, with your real tokens (az login)
+npx playwright test --project=fixture -g "fn-ping"   # one test
 ```
 
 - The run builds rayfin-local first (`cargo build -p rayfin-local`); `RAYFIN_LOCAL_BIN` uses another binary, and `RAYFIN_LOCAL_SKIP_BUILD=1` skips the build.
@@ -150,7 +171,8 @@ npm run test:explorer             # the reference app, with your real tokens (az
 - The reference app comes from `EXPLORER_DIR`, else `../fabric-apps/apps/explorer`; run `npm ci` in it first.
   Its suite puts back the app's own `.rayfin-local/` and checks that git sees no new changes in the app.
 - `HEADED=1` shows the browser.
-- Logs go to `test-results/logs/`, and traces and screenshots of failures to `test-results/`.
+- Logs go to `test-results/logs/`, and traces and screenshots of failures to `test-results/`; CI's `e2e` job uploads `test-results/` as the `e2e-results` artifact when it fails.
+- A change to what a browser sees needs a test here. [`tests/e2e/README.md`](../tests/e2e/README.md) lists each test and how the harness works.
 
 ### Fixtures
 

@@ -3,7 +3,8 @@
 //!
 //! On Fabric an app's entities are served by Data API Builder (DAB, on Hot Chocolate) over
 //! Fabric SQL. [`DataApi`] answers the documents the Rayfin SDK 1.36.2 sends with the same
-//! schema, data, errors and statuses; "compat" is micro-fabric's `docs/compatibility.md`.
+//! schema and data. Authorization follows Fabric BaaS's embedded DAB 2.0.10 behavior,
+//! including BaaS's sanitized wire codes, rather than raw standalone DAB substatus names.
 //!
 //! # Pipeline
 //!
@@ -12,7 +13,7 @@
 //! | [`schema`] | The schema DAB generates for the model (types, fields, arguments, filter and `orderBy` inputs), built once per model snapshot. Each object field carries a [`schema::Resolver`]. |
 //! | `value` | Argument literals re-read from the document with positions (duplicate input fields kept, for DAB's error). |
 //! | `validate`, `coerce` | Hot Chocolate's validation rules and messages; input coercion into [`Input`]. |
-//! | [`access`] | The grant a role acts under for an action (DAB role inheritance, compat §7.2). |
+//! | [`access`] | Last matching action grant; anonymous inheritance only without an authenticated entry. |
 //! | [`policy`] | `@role` policies compiled to SQL predicates, claims bound and typed per field. |
 //! | [`plan`] | A root field → selections, filters, order and page, authorization decided per field. |
 //! | [`sql`] | Parameterized SQL text and predicates ([`sql::Pred`]). |
@@ -26,15 +27,15 @@
 //! # Notes
 //!
 //! - **Mutations** reuse [`access::grant`], [`policy::action_filter`] for update/delete
-//!   `WHERE`s, [`policy::compile`] over the candidate row for create checks, and
+//!   `WHERE`s, [`policy::create_filter`] over supplied values for create checks, and
 //!   [`plan::object_plan`] to read the row back.
 //! - **Aggregations** add `groupBy` on `{E}Connection` and the `{E}GroupBy`, `{E}Aggregations`,
 //!   `{E}ScalarFields`, `{E}NumericAggregateFields` types in [`schema::Schema::build`]; a
 //!   [`plan::ConnectionField::GroupBy`] reuses the connection's `predicate` (filter and read
 //!   policy).
 //! - **Introspection**: `__schema`/`__type` are refused with Hot Chocolate's `HC0046` error
-//!   unless [`DataApiSettings::allow_introspection`]; when allowed they answer an error until a
-//!   resolver over [`schema::Schema`] is added (`exec::plan_root`). `__typename` always works.
+//!   unless [`DataApiSettings::allow_introspection`]; when allowed, standard introspection is
+//!   reflected from [`schema::Schema`]. `__typename` always works.
 
 pub mod access;
 pub mod admin;
@@ -44,6 +45,7 @@ mod cursor;
 pub mod error;
 mod exec;
 mod http;
+mod introspection;
 mod mutation;
 pub mod plan;
 pub mod policy;
@@ -104,18 +106,33 @@ impl Default for DataApiSettings {
 
 /// A model and the schema built from it.
 pub(crate) struct Snapshot {
+    /// The app's model as given, without system entities.
+    pub app: Arc<AppModel>,
+    /// The model requests run against: the app's entities plus system entities.
     pub model: Arc<AppModel>,
     pub schema: schema::Schema,
 }
 
 impl Snapshot {
-    fn new(model: Arc<AppModel>) -> Self {
-        Self::with_options(model, schema::SchemaOptions::default())
+    fn new(app: Arc<AppModel>) -> Self {
+        let mut model = (*app).clone();
+        model.entities.retain(|entity| entity.name != "User");
+        model.entities.push(rl_model::system_user(model.dialect));
+        let schema = schema::Schema::build_with(&model, schema::SchemaOptions::default());
+        Self {
+            app,
+            model: Arc::new(model),
+            schema,
+        }
     }
 
     pub(crate) fn with_options(model: Arc<AppModel>, options: schema::SchemaOptions) -> Self {
         let schema = schema::Schema::build_with(&model, options);
-        Self { model, schema }
+        Self {
+            app: Arc::clone(&model),
+            model,
+            schema,
+        }
     }
 }
 
@@ -149,9 +166,9 @@ impl DataApi {
         *self.snapshot.write() = snapshot;
     }
 
-    /// The model being served.
+    /// The app model being served, without the system entities the API adds to it.
     pub fn model(&self) -> Arc<AppModel> {
-        Arc::clone(&self.snapshot.read().model)
+        Arc::clone(&self.snapshot.read().app)
     }
 
     /// Runs a GraphQL request for `caller` (the routes, and in-process callers such as tests).

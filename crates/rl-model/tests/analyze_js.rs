@@ -64,11 +64,11 @@ fn prerequisites() -> Option<(OsString, PathBuf)> {
         .join("rayfin-core")
         .is_dir()
     {
-        eprintln!("skipped: run `npm install` in {}", project.display());
+        rl_test_support::skip(format_args!("run `npm install` in {}", project.display()));
         return None;
     }
     let Some(node) = node() else {
-        eprintln!("skipped: Node.js was not found (set RAYFIN_LOCAL_NODE)");
+        rl_test_support::skip("Node.js was not found (set RAYFIN_LOCAL_NODE)");
         return None;
     };
     Some((node, project))
@@ -429,11 +429,11 @@ fn connectors_prerequisites() -> Option<(OsString, PathBuf)> {
         .join("rayfin-connectors")
         .is_dir()
     {
-        eprintln!("skipped: run `npm install` in {}", project.display());
+        rl_test_support::skip(format_args!("run `npm install` in {}", project.display()));
         return None;
     }
     let Some(node) = node() else {
-        eprintln!("skipped: Node.js was not found (set RAYFIN_LOCAL_NODE)");
+        rl_test_support::skip("Node.js was not found (set RAYFIN_LOCAL_NODE)");
         return None;
     };
     Some((node, project))

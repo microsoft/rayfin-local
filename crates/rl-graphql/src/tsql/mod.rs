@@ -128,7 +128,7 @@ fn root_statement(model: &AppModel, root: &QueryRoot) -> Option<Result<Statement
             return Some(Err(not_supported()));
         }
         RootKind::ByPk(plan, filter) => emitter.object_select(plan, filter),
-        RootKind::Typename | RootKind::Failed(_) => return None,
+        RootKind::Typename | RootKind::Introspection(_) | RootKind::Failed(_) => return None,
     };
     Some(Ok(emitter.finish(text)))
 }

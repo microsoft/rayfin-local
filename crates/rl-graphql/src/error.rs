@@ -1,18 +1,15 @@
 //! GraphQL errors, serialized as Hot Chocolate (the server DAB runs on) writes them:
-//! `{"message", "locations", "path", "extensions"}` in that order, with DAB's messages and codes.
+//! `{"message", "locations", "path", "extensions"}` in that order, with BaaS's sanitized codes.
 
 use async_graphql_parser::Pos;
 use serde_json::{Map, Value, json};
 
-/// DAB `DataApiBuilderException.SubStatusCodes` names, which DAB's error filter writes as
-/// `extensions.code`.
+/// Wire codes after BaaS sanitization, not DAB's internal exception substatus names.
 pub mod codes {
     pub const BAD_REQUEST: &str = "BadRequest";
-    pub const AUTHORIZATION_CHECK_FAILED: &str = "AuthorizationCheckFailed";
+    pub const FORBIDDEN: &str = "Forbidden";
     pub const DATABASE_OPERATION_FAILED: &str = "DatabaseOperationFailed";
-    pub const DATABASE_POLICY_FAILURE: &str = "DatabasePolicyFailure";
     pub const DATABASE_INPUT_ERROR: &str = "DatabaseInputError";
-    pub const ITEM_NOT_FOUND: &str = "ItemNotFound";
     pub const UNEXPECTED_ERROR: &str = "UnexpectedError";
     /// Hot Chocolate's `@authorize` failure.
     pub const AUTH_NOT_AUTHORIZED: &str = "AUTH_NOT_AUTHORIZED";
@@ -81,7 +78,7 @@ impl GraphQlError {
         }
     }
 
-    /// A DAB execution error (`message`, `extensions.code` = the sub-status code).
+    /// A DAB execution error with its BaaS wire code.
     pub fn dab(message: impl Into<String>, code: &str) -> Self {
         Self::new(message).code(code)
     }

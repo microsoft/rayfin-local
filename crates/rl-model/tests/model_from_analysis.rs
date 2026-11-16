@@ -12,6 +12,39 @@ fn basic() -> AppModel {
     AppModel::from_analysis(&basic_json()).unwrap()
 }
 
+#[test]
+fn app_entities_cannot_redefine_the_system_user_or_table() {
+    for (name, table) in [("User", "Other"), ("Other", "uSeRs")] {
+        let mut analysis = basic_json();
+        let mut entity = analysis["config"]["entities"]["Person"].clone();
+        entity["source"] = json!(table);
+        analysis["config"]["entities"][name] = entity;
+        let error = AppModel::from_analysis(&analysis).unwrap_err();
+        assert!(
+            error.to_string().contains("reserved system names"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn system_user_has_dialect_types_and_read_only_unfiltered_permissions() {
+    for (dialect, id_type) in [
+        (Dialect::Mssql, "uniqueidentifier"),
+        (Dialect::Postgresql, "uuid"),
+    ] {
+        let user = system_user(dialect);
+        assert_eq!(user.column("Id").unwrap().db_type, id_type);
+        assert_eq!(user.column("Email").unwrap().db_type, "varchar(255)");
+        assert!(user.columns.iter().all(|c| !c.nullable));
+        assert_eq!(user.permissions.len(), 1);
+        assert_eq!(user.permissions[0].role, "authenticated");
+        assert_eq!(user.permissions[0].actions.len(), 1);
+        assert_eq!(user.permissions[0].actions[0].action, Action::Read);
+        assert!(user.permissions[0].actions[0].policy.is_none());
+    }
+}
+
 fn explorer() -> AppModel {
     let json = serde_json::from_str(include_str!("fixtures/explorer.analysis.json")).unwrap();
     AppModel::from_analysis(&json).unwrap()
@@ -408,7 +441,7 @@ fn basic_storage_folders() {
         delete.check,
         Some(PolicyExpr::And(vec![
             eq(claim("sub"), field("owner_id")),
-            ne(field("team_id"), Operand::Literal(Literal::Null)),
+            ne(field("team_id"), string("")),
         ]))
     );
     assert_eq!(
@@ -518,6 +551,22 @@ fn unknown_decorators_and_shapes_fail_loudly() {
         json!({"op": "in", "args": []});
     let error = AppModel::from_analysis(&analysis).unwrap_err();
     assert!(matches!(error, ModelError::Storage { .. }), "{error}");
+
+    // The SDK analyzer's own storage rejections are storage configuration errors too.
+    let mut analysis = basic_json();
+    analysis["storage"] = json!({"error": {
+        "folder": "attachments",
+        "message": "anonymous permissions are not supported for storage folders.",
+    }});
+    let error = AppModel::from_analysis(&analysis).unwrap_err();
+    assert!(
+        matches!(&error, ModelError::Storage { folder, .. } if folder == "attachments"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("anonymous permissions"),
+        "{error}"
+    );
 
     let error = AppModel::from_analysis(&json!({"dialect": "mssql"})).unwrap_err();
     assert!(matches!(error, ModelError::Malformed(_)), "{error}");

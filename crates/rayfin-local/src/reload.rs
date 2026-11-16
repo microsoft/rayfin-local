@@ -1204,10 +1204,13 @@ impl Reloader {
     fn rebuild_router(&self) {
         let ctx = self.ctx();
         let config = serve::server_config(&ctx, self.run.static_site.clone());
-        self.run.router.replace(rl_server::build_router(
-            config,
-            self.live.features.routers(&ctx),
-        ));
+        self.run
+            .router
+            .replace(rl_server::build_router_with_hosting(
+                config,
+                self.live.features.routers(&ctx),
+                serve::hosting_options(&ctx),
+            ));
     }
 
     /// Tells what changed: `config-changed`, then (when something applied) the rows of the
@@ -1317,7 +1320,7 @@ mod tests {
     async fn a_reload_on_request_applies_the_changes_and_answers_their_events() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let Ok(node) = NodeRuntime::discover().await else {
-            eprintln!("skipped: Node.js is not on PATH");
+            rl_test_support::skip("Node.js is not on PATH");
             return;
         };
         let dir = tempfile::tempdir().unwrap();

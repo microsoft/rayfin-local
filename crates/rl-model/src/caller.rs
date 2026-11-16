@@ -98,9 +98,47 @@ pub fn bearer_token(authorization: Option<&str>) -> Option<&str> {
     (!token.is_empty()).then_some(token)
 }
 
+/// The query parameter in which the Fabric host names the user it signed in (`?_fu=`).
+pub const FABRIC_USER_HINT_PARAM: &str = "_fu";
+
+/// Fabric's user hint for `user_id` in the app `project_id` (`StaticHostingUserHint` in the BaaS
+/// workload): base64url, unpadded, of the first 16 bytes of
+/// `SHA-256("rayfin.sh.fu.v1|<project>|<user>")`, both ids as lowercase hyphenated GUIDs. `None`
+/// when either id is not a GUID. The host adds it to the app's frame URL; the static-site gate
+/// rejects a hosting cookie signed in as another user, and the SDK keeps its session.
+pub fn fabric_user_hint(project_id: &str, user_id: &str) -> Option<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let guid = |id: &str| {
+        uuid::Uuid::try_parse(id.trim())
+            .ok()
+            .map(|id| id.hyphenated())
+    };
+    let input = format!("rayfin.sh.fu.v1|{}|{}", guid(project_id)?, guid(user_id)?);
+    let digest = ring::digest::digest(&ring::digest::SHA256, input.as_bytes());
+    Some(URL_SAFE_NO_PAD.encode(&digest.as_ref()[..16]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fabric_user_hint_matches_the_workloads_vector() {
+        // `StaticHostingUserHintTests` in the BaaS workload: shared with the AppBackend extension.
+        let project = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+        let user = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+        let hint = "ToVQv3p2KO1E1KwCWmoxFw";
+        assert_eq!(fabric_user_hint(project, user).as_deref(), Some(hint));
+        for spelling in [
+            user.to_uppercase(),
+            format!("{{{user}}}"),
+            user.replace('-', ""),
+        ] {
+            assert_eq!(fabric_user_hint(project, &spelling).as_deref(), Some(hint));
+        }
+        assert_eq!(fabric_user_hint(project, "not-a-guid"), None);
+        assert_eq!(fabric_user_hint("item", user), None);
+    }
 
     #[test]
     fn bearer_token_accepts_any_scheme_case_and_trims() {

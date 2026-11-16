@@ -36,7 +36,7 @@ Keep the backend on loopback (the default `--host 127.0.0.1`): any other address
 | Sessions: access tokens, refresh-token rotation, sign-out, sign-out everywhere | Supported | ES256 access tokens shaped like the service's, with the lifetimes of `services.auth` in `rayfin.yml`. |
 | JWKS and runtime settings (`/.well-known/jwks.json`, `/api/projectRuntimeSettings`) | Supported | The settings mirror `services.auth` in `rayfin.yml`. |
 | "Sign in with Fabric" (`ensureSignedInWithFabric`) | Differs | The popup opens rayfin-local's sign-in page (`/.rayfin-local/portal`) instead of the Fabric portal. As Fabric signs in whoever is signed in to it, the page signs in as the sign-in identity (`--sign-in-as`, `[auth] sign_in_as`) without asking, and closes, when it's opened on localhost. With `none`, it offers local sign-in, sign-up and "Continue as &lt;you&gt;". The handshake with the app is the SDK's own (`brokeredAuth.*` messages, then a one-time handoff code). |
-| Embedded sign-in (`initEmbeddedAuth`) | Differs | Fabric frames the app and answers its `fabric-auth` handoff requests. Locally, open `/.rayfin-local/portal/embed` (the banner's **Embedded** URL): you sign in on that page, and it frames the app with `?fabricEmbedded=true` and answers the same requests for you. It doesn't stamp Fabric's `_fu` user hint, so the app signs in afresh on each load, as with an older Fabric host. Other host requests answer `NOT_SUPPORTED`. |
+| Embedded sign-in (`initEmbeddedAuth`) | Differs | Fabric frames the app and answers its `fabric-auth` handoff requests. Locally, open `/.rayfin-local/portal/embed` (the banner's **Embedded** URL): you sign in on that page, and it frames the app with `?fabricEmbedded=true` and Fabric's `_fu` user hint for the signed-in user (so the SDK keeps a session that belongs to that user across loads) and answers the same requests for you. Other host requests answer `NOT_SUPPORTED`. |
 | Automatic sign-in in development (`rayfinLocalDev({ autoLogin: true })`) | Differs | rayfin-local's dev server answers the page's `/.rayfin/dev/session-token` before `rayfinLocalDev()` does, so the Rayfin CLI never signs you in interactively. The app signs in as the sign-in identity (`--sign-in-as`, `[auth] sign_in_as`): you, as your Entra user when the Azure CLI or the Rayfin CLI's login has a token without a prompt and the backend listens on loopback, else `developer@example.com`; a local user; or nobody, which answers 401 so the app offers its own sign-in. With `serve --open-sign-in`, pages another dev server or proxy serves can ask the backend's `/.rayfin-local/dev/session-token` themselves, from this machine and on its origin; `developer` then always signs in as `developer@example.com`. |
 | Entra users | Differs | Local users are not Entra users. "Continue as" signs you in with your own Entra account (the one your tokens come from), and is offered only when the backend listens on loopback. |
 | The `email` claim | Differs | Set only when the username is an email address; "Continue as" sets it to your user principal name. Policies on `claims.email` need such a user. |
@@ -47,23 +47,46 @@ Keep the backend on loopback (the default `--host 127.0.0.1`): any other address
 ## Data (`client.data`, `/graphql`)
 
 The data API is a DAB-compatible GraphQL API compiled to SQL over SQLite.
-It generates the schema DAB generates for your entities and answers with DAB's data, errors and HTTP statuses.
+It generates the schema DAB generates for your entities and follows Fabric BaaS's embedded DAB 2.0.10 policy behavior and sanitized authorization codes.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Queries: lists, by key, filters, `orderBy`, cursor pagination | Supported | |
 | Relationships (`@one`, `@many`) | Supported | Nested selections and relationship filters. |
+| System `User` entity | Supported | `Users(Id, Email)`, exposed as `User` through `users` and `user_by_pk(Id:)`. Authenticated users can read all rows, with no anonymous or write grant. App relationships enforce real foreign keys. |
+| System `User` population | Differs | Local auth account inserts and email updates atomically upsert the mirror, and startup backfills existing accounts before app migrations. `Id` is the UUID `sub`; username-only accounts use their username for `Email` (bounded to 255 characters). Deleted accounts leave their mirrored row to preserve references. Fabric sign-in-driven mirror population is not established by the BaaS implementation. |
 | Mutations: create, update, delete | Supported | |
 | Aggregations (`groupBy`, `aggregate`) | Supported | |
-| `@role` policies and field permissions | Supported | The `anonymous` and `authenticated` roles, with DAB's per-action inheritance. A policy that reads a claim the caller doesn't have fails the request, as on Fabric. |
+| `@role` policies and field permissions | Supported | Last matching action wins, including `*`; fields are include minus exclude. `authenticated` inherits `anonymous` only when the entity has no authenticated permission entry. A missing referenced claim rejects the whole operation, even within an otherwise-true OR. |
 | The `anonymous` role | Differs | Allowed, as on a tenant where an administrator turned on "Enable anonymous data access for Fabric Apps (Preview)"; that setting is off by default, and without it `rayfin up` refuses the schema and requests without a token get a 401. `serve` warns when entities grant `anonymous`; `[fabric] anonymous_data_access = false` in `rayfin-local.toml` acts like a tenant without the setting. |
 | Constraints | Supported | The database enforces required fields, lengths, `@set` values, the email shape, minimum lengths, uniqueness and foreign keys, as on Fabric. Patterns and other `min`/`max` options are checked only by the SDK's form validation, on both. |
-| Text comparisons | Differs | Case-insensitive like Fabric SQL's default collation, but SQLite's `NOCASE` folds ASCII letters only: `'É' = 'é'` is false locally and true on Fabric. On the `postgresql` dialect, text compares case-sensitively. |
+| Text comparisons | Differs | Comparisons use the column's collation, without universal lowercasing. The local MSSQL profile uses SQLite's ASCII-only `NOCASE`; PostgreSQL uses case-sensitive text. An actual deployment's database/column collation may differ. |
 | Decimals | Differs | Stored as doubles (`REAL`), with output rounded to the column's scale. About 15 significant digits are exact, so a `DECIMAL(18,2)` above about 10^13 loses cents; Fabric is exact to the declared precision. |
 | Dates | Differs | Stored as UTC ISO-8601 text with 100 ns precision. Responses use Fabric's format (`YYYY-MM-DDTHH:MM:SS.fffZ`), so the difference shows only in the SQLite file. |
 | Schema changes | Differs | `serve` applies them from `rayfin/data` when it starts and as you edit the entities, not on a deployment. Changes that would lose data are refused until you pass `--force-schema`. A data package (`services.data.path`) is built with `services.data.buildCommand` first, as `rayfin up` and `rayfin dev` do, at every start and when its sources change. |
-| Introspection (`__schema`, `__type`) | Not supported | Refused unless `services.data.allowIntrospection` is true, as on Fabric; when allowed, rayfin-local still answers an error (no introspection resolver yet). `__typename` always works. |
+| Introspection (`__schema`, `__type`) | Supported | Refused with `HC0046` unless `services.data.allowIntrospection` is true, as on Fabric. When allowed, standard introspection is reflected from the same schema used for validation and execution, including the system `User`, descriptions, inputs, enums, directives and type wrappers. `__typename` always works. |
 | Data from a deployed app | Not supported | The local database starts empty; nothing is copied from Fabric. |
+
+### Data policy decisions
+
+- Create policies check supplied values.
+  A referenced field must be present in the request, even if it is nullable, defaulted or generated.
+  Update and delete policies check the existing row, not replacement values.
+- `eq null` and `neq null` mean `IS NULL` and `IS NOT NULL`.
+  A null column does not satisfy ordinary inequality to a non-null value.
+- String operands can promote to UUID, Int32 and Boolean fields (`true`/`false`, not numeric truthiness).
+  Invalid conversions return `BadRequest`, rather than silently matching no rows.
+  Quoted date/decimal strings do not receive unsupported promotion; SDK Date literals retain their unquoted date type.
+  These failure choices follow the pinned DAB resolver/parser; exact provider-specific date/decimal failures still need a BaaS probe.
+- A read-policy-hidden row returns null.
+  A successful write whose read-back is hidden commits and returns null; no read grant instead gives a post-commit `Forbidden` error.
+  Read-back policy errors such as a missing claim roll back the write.
+  DAB's mutation read detector also checks explicit anonymous read grants; the authenticated-write-only plus anonymous-read combination still needs a reference probe for its read-back/transaction timing.
+- Authorization denials use HTTP 200: native schema/directive denials use `AUTH_NOT_AUTHORIZED`, field/claim denials use `Forbidden`, and create-policy rejection or a filtered update uses `BadRequest`.
+  A filtered by-key read or delete returns null without an error.
+  Invalid bearer tokens remain transport-authentication failures.
+- `X-MS-API-ROLE` does not select a role.
+  Empty/default-only creates still evaluate claim-only policies locally; DAB's empty-insert bypass branch needs a reference probe.
 
 ## Functions (`/functions/<name>/invoke`)
 
@@ -71,12 +94,12 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Invocation and the response envelope | Supported | HTTP 200 with `x-fabric-udf-status`, so failed functions surface as `FunctionsError`, as deployed. This holds even when `local.settings.json` sets `IsLocal` to true. Anonymous calls are allowed, as deployed. |
+| Invocation and the response envelope | Supported | HTTP 200 with `x-fabric-udf-status`, so failed functions surface as `FunctionsError`, as deployed. This holds even when `local.settings.json` sets `IsLocal` to true. Only signed-in callers may invoke: anonymous calls, and calls to the reserved `rayfin_auth_claims`, get Fabric's 403 `FUNCTION_ACCESS_DENIED`. |
 | Arguments and return values | Supported | Parsed and serialized by the UDF package itself. |
 | `ctx.getDataClient()` | Supported | Calls the local data API as the caller. |
 | `ctx.Tokens.<Audience>` (`Sql`, `Storage`, `Fabric`, `AzureAI`, `ADO`) | Differs | Tokens for you, not the app's identity. A token that can't be minted is left out: the function still runs, reading it throws "No token available for audience…", and `serve` logs why. |
 | `ctx.Secrets.<NAME>` | Differs | Local values, from `local.settings.json` `Values`, the environment, or `.rayfin-local/secrets.json` (`rayfin-local secret set`). |
-| Error messages | Differs | Deployed, 5xx bodies hide their cause behind `internal_server_error`; locally the message says what failed. |
+| Error messages | Supported | Service-generated 5xx responses hide their cause behind Fabric's `InternalServerError`; the original diagnostic is logged with credentials redacted. Client errors and app-authored upstream responses are preserved. See [hosting.md](hosting.md#system-errors). |
 | Limits | Differs | The 250-second timeout (408) is the UDF ceiling, and results over 30 MiB fail with `ResponseTooLarge`, as deployed. Request bodies over 30 MiB get 413, a limit of rayfin-local's own. |
 | Logs | Differs | `console.*` output goes to `serve`'s output, prefixed `[fn]`, not to Fabric's monitoring. |
 
@@ -90,7 +113,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | Category A SQL connectors (`fabric-sqldatabase`, `fabric-warehouse`, `fabric-sqlanalytics`): queries, keys, relationships, filters, `orderBy`, cursor pagination | Differs | The DAB-style GraphQL API that `rayfin up` would deploy, answered by rayfin-local over the connector's real Fabric item. They run as you, with your Entra token, even for `auth: application` connectors (see [Who acts](#who-acts)); a `delegated` connector still needs a signed-in user. [sql-connectors.md](sql-connectors.md) has the details. |
 | Category A mutations | Differs | Run as you on the real item. A SQL database answers the row, a Warehouse `DbOperationResult`, and a SQL analytics endpoint has no mutations, as on Fabric. A create on a keyless entity of a SQL database answers `null` (the row is written). |
 | Category A `@role` grants, field lists and policies | Supported | Enforced by rayfin-local in every statement, against the signed-in local user, as for data entities. Grants beyond the connector's `operations:` (which `rayfin up` refuses) are dropped with a warning. |
-| Category A values and errors | Differs | DAB's formats and error codes. Scalars follow the entity decorators (`@int` is `Int` even on a `bigint` column, where Fabric's DAB says `Long`). Statements the database refuses answer DAB's `DatabaseOperationFailed` with the server's message as `extensions.detail`, which Fabric hides; a database that can't be reached or refuses your sign-in answers a GraphQL error that says what to do. |
+| Category A values and errors | Differs | Scalars follow the entity decorators (`@int` is `Int` even on a `bigint` column, where Fabric's DAB says `Long`). Errors follow Fabric's GraphQL workload: vetted SQL client faults get curated `BadRequest` messages; internal failures get `InternalServerError`. SQL detail is only in redacted serve logs, never `extensions.detail`. |
 | Category A aggregations (`groupBy`, `aggregate`) | Not supported | Answer an error that names them. |
 | Category A setup checks | Differs | Entity names that are reserved or collide across connectors are not refused as `rayfin up` refuses them. |
 | `kusto` and other connector types | Not supported | Answer 501 `not_supported`. |
@@ -100,7 +123,9 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Upload, download, list and delete (`StorageFolderClient`) | Supported | The 1.36.2 routes and answers, on files under `.rayfin-local/storage`. |
-| `@blob` folder rules and checks | Supported | `anonymous` and `authenticated` rules; checks compare strings case-insensitively, as Fabric's collation does. |
+| `@blob` folder rules and checks | Supported | BaaS storage profile: `eq`, `neq`, `and`, `or`; claims `sub`, `email`, `role`; `owner_id` and declared metadata only, with matching operand types and no null literals. Anonymous grants and invalid checks fail admission (`config-invalid`), including reloads (the previous model stays active). |
+| Storage rule evaluation | Supported | Matching rules are OR-ed; a checkless rule allows. `eq` requires two non-null values; `neq` allows exactly one null, not two. Missing allowed claims bind null. Create checks prospective caller-owned metadata; overwrite checks only stored metadata, before conflict handling. Policy denials use HTTP 403 `PERMISSION_DENIED`; lists omit hidden objects. |
+| Storage string comparison | Differs | Local checks compare strings exactly, without coercion or lowercasing. BaaS emits SQL `=`/`<>`, so actual case, accent and trailing-space behavior follows its backing database/collation; no universal Fabric case-insensitive or ordinal contract is implied. |
 | Signed URLs | Differs | They point at the backend (`/.rayfin-local/storage/…`), not Azure Blob Storage; the HMAC token in the URL is the credential. The default lifetime is 15 minutes. |
 | Long-running operations | Differs | Every step completes at once, so the first status poll already sees the result. |
 | Size limits | Differs | 25 MiB per file, the service's limit (a folder's `maxSize` can lower it), and 1 GiB for all files together. |
@@ -111,7 +136,9 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | --- | --- | --- |
 | The app's Vite dev server | Supported | Your `vite.config` and plugins. rayfin-local starts Vite itself with the local environment, never `npm run dev`. |
 | `rayfinLocalDev()` (`@microsoft/rayfin-local-dev/vite`) | Supported | Used when your Vite config has it; otherwise rayfin-local adds a plugin that serves `/rayfin.config.json` and proxies the SDK's routes. |
-| Static hosting | Differs | `--static` builds once with `services.staticHosting.buildCommand` and serves the output from the backend origin, with the SPA fallback to `indexDocument`; it doesn't rebuild on changes. |
+| Static hosting | Differs | `--static` builds once with `services.staticHosting.buildCommand` and serves the output from the backend origin, with the SPA fallback to `indexDocument`, as Fabric does: a path whose last segment has no `.` gets its folder's `indexDocument`, and any GET that finds no file gets the root one, missing assets such as `/favicon.ico` included; it doesn't rebuild on changes. |
+| Protected assets (`assetAccess: protected`) | Differs | Enforced for every asset and runtime config in `--static`: document loads get a sign-in page, asset fetches a 401. Vite is not gated and warns. Local sessions stand in for Fabric item authorization; absent `assetAccess` retains the legacy public default. [hosting.md](hosting.md#asset-access) lists the cookie/auth differences. |
+| Telemetry config | Differs | `services.telemetry.enabled` delivers the optional `applicationInsightsConnectionString` from `[telemetry]` in `rayfin-local.toml`, on static builds and Vite. No Azure resource is provisioned; enabled without a value warns and omits the field. |
 
 ## Platform
 

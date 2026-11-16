@@ -39,9 +39,28 @@ Each service has a local stand-in:
 | `cargo build --workspace` | Build everything. |
 | `cargo test -p <crate>` | One crate's tests. Prefer this while other work is in progress. |
 | `cargo test --workspace` | All Rust tests. |
+| `node scripts/check.mjs` | Everything CI checks: lint, Rust and JS tests in strict mode, the browser e2e suites. |
+| `node scripts/check.mjs rust js e2e` | Just those steps (`--help` lists them). |
 | `cargo clippy -p <crate> --all-targets -- -D warnings` | Lint one crate (CI lints the workspace with `-D warnings`). |
 | `cargo fmt -p <crate>` / `cargo fmt --all --check` | Format (100 columns). |
 | `cargo run -p rayfin-local -- serve -C <project>` | Run against a project. |
+
+## Testing your change
+
+Before you call a change done, run `node scripts/check.mjs` (about 5 minutes; the first run installs the fixtures' packages and Chromium).
+It is the command CI runs, so it passing locally means CI's checks pass.
+While iterating, run the narrowest step that covers the change, then the full check at the end:
+
+| Changed | Run |
+| --- | --- |
+| One crate | `cargo test -p <crate>`, then `node scripts/check.mjs rust` |
+| `js/` (embedded helpers) | `node scripts/check.mjs js` |
+| Serving, sign-in, hosting, functions, data, storage or anything a browser sees | `node scripts/check.mjs e2e` |
+
+- Tests run in **strict mode** (`RAYFIN_LOCAL_TEST_STRICT=1`): a test that needs Node, a fixture's packages or the SDK fails rather than skipping. Never weaken a test to get it past strict mode; fix the setup or the expectation.
+- A behavior change needs a test that fails without it. User-visible behavior goes in the e2e suites (`tests/e2e`, driving the fixture app in `tests/fixtures/apps/basic`); add a scenario to the fixture app when the SDK call you need isn't there.
+- When a test's expectation changes, say why in the commit; a changed expectation is a behavior change.
+- `docs/development.md` has the details: each suite, the environment variables, and how to debug an e2e failure.
 
 ## Sources of truth for Rayfin behavior
 
