@@ -39,8 +39,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: "**/package-lock.json"
-      - name: Check release routing, platform verification, packaging and the official build's needs
-        run: node --test .github/scripts/set-alpha-version.test.mjs .github/scripts/main-release.test.mjs .github/scripts/unix-release.test.mjs .github/scripts/official-build.test.mjs
+      - name: Check release routing, platform verification, packaging and npm registries
+        run: node --test .github/scripts/set-alpha-version.test.mjs .github/scripts/main-release.test.mjs .github/scripts/unix-release.test.mjs .github/scripts/npm-registry.test.mjs
       - name: Check PR test-release opt-in
         if: runner.os == 'Windows'
         shell: pwsh

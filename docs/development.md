@@ -64,7 +64,7 @@ node scripts/check.mjs --help
 | `e2e` | The Playwright `fixture` and `static` suites ([below](#end-to-end-tests)), and the sign-in portal test (`rl-auth --test portal_e2e -- --ignored`). | `e2e` (Linux) |
 
 Cargo runs with `--locked`, as the official release build does, so a `Cargo.lock` that `Cargo.toml` has moved on from fails the check: after bumping the version or changing a dependency, run `cargo build` (or `cargo update -w`) and commit the lockfile with it.
-The `test` job also runs `.github/scripts/*.test.mjs`. `official-build.test.mjs` checks what the official build's network isolation needs: lockfiles resolve packages only from registry.npmjs.org (which the official build swaps for the internal feed) or 1es-public, and every official job that runs `cargo test` first points npm at the internal feed.
+The `test` job also runs `.github/scripts/*.test.mjs`. `npm-registry.test.mjs` checks that every committed `package-lock.json` resolves its packages from the anonymous 1es-public feed, and that a `.npmrc` next to it sets that registry: the official build's network isolation blocks registry.npmjs.org. The `.npmrc` keeps a regenerated lockfile on the feed whatever your own npm registry is.
 
 While working on one crate, `cargo test -p <crate>` is quicker; run the check before you push.
 Unit tests sit next to the code (`#[cfg(test)]`); integration tests are in `crates/<crate>/tests/`.
