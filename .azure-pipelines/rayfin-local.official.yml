@@ -175,10 +175,11 @@ extends:
                 inputs:
                   configFile: $(Build.SourcesDirectory)/.cargo/config.toml
 
-              # The agents' proxy to registry.npmjs.org can refuse packages the
-              # fixtures need (it 403'd @microsoft/rayfin-lib 2.0.0), so their
-              # `npm ci` goes through the feed's npmjs upstream instead. npm
-              # rewrites lockfiles' registry.npmjs.org URLs to this registry.
+              # Network isolation (the required CFSClean policies) blocks
+              # registry.npmjs.org, where the fixtures' lockfiles resolve the
+              # @microsoft/* packages, so their `npm ci` goes through the feed's
+              # npmjs upstream instead. npm rewrites lockfiles' registry.npmjs.org
+              # URLs to this registry.
               - pwsh: |
                   $ErrorActionPreference = 'Stop'
                   $npmrc = Join-Path $env:AGENT_TEMPDIRECTORY 'rayfin-official.npmrc'

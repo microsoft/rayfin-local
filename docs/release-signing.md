@@ -41,8 +41,8 @@ crates.io with the existing AppDev `rayfin-official` Azure Artifacts Cargo feed.
 `CargoAuthenticate@0` authenticates using the pipeline's build identity; no PAT
 or new service connection is needed. The Windows job likewise points npm at the
 feed's npmjs upstream for the test fixtures' `npm ci`, through a generated user
-`.npmrc` and `npmAuthenticate@0`: the agents' proxy to registry.npmjs.org refused
-`@microsoft/rayfin-lib` 2.0.0. The config is generated only in the official
+`.npmrc` and `npmAuthenticate@0`: the agents' network isolation blocks
+registry.npmjs.org, where the lockfiles resolve the `@microsoft/*` packages. The config is generated only in the official
 job so local development and public GitHub CI do not require internal feed access.
 Normal runs preserve the lockfile; PR test runs update only the workspace package versions in their build checkout.
 The vendored TDS patch remains unchanged.
