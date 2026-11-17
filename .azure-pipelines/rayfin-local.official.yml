@@ -175,6 +175,23 @@ extends:
                 inputs:
                   configFile: $(Build.SourcesDirectory)/.cargo/config.toml
 
+              # The agents' proxy to registry.npmjs.org can refuse packages the
+              # fixtures need (it 403'd @microsoft/rayfin-lib 2.0.0), so their
+              # `npm ci` goes through the feed's npmjs upstream instead. npm
+              # rewrites lockfiles' registry.npmjs.org URLs to this registry.
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $npmrc = Join-Path $env:AGENT_TEMPDIRECTORY 'rayfin-official.npmrc'
+                  'registry=https://pkgs.dev.azure.com/powerbi/AppDev/_packaging/rayfin-official/npm/registry/' |
+                    Set-Content -Encoding utf8 $npmrc
+                  Write-Host "##vso[task.setvariable variable=NPM_CONFIG_USERCONFIG]$npmrc"
+                displayName: Configure npm to use the internal Rayfin feed
+
+              - task: npmAuthenticate@0
+                displayName: Authenticate npm with the pipeline identity
+                inputs:
+                  workingFile: $(Agent.TempDirectory)/rayfin-official.npmrc
+
               - pwsh: |
                   $ErrorActionPreference = 'Stop'
                   $cargoBin = Join-Path $env:USERPROFILE '.cargo/bin'

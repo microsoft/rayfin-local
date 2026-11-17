@@ -39,7 +39,10 @@ accepting any trusted signer or changing the approved keycode.
 The official job generates a checkout-local `.cargo/config.toml` that replaces
 crates.io with the existing AppDev `rayfin-official` Azure Artifacts Cargo feed.
 `CargoAuthenticate@0` authenticates using the pipeline's build identity; no PAT
-or new service connection is needed. The config is generated only in the official
+or new service connection is needed. The Windows job likewise points npm at the
+feed's npmjs upstream for the test fixtures' `npm ci`, through a generated user
+`.npmrc` and `npmAuthenticate@0`: the agents' proxy to registry.npmjs.org refused
+`@microsoft/rayfin-lib` 2.0.0. The config is generated only in the official
 job so local development and public GitHub CI do not require internal feed access.
 Normal runs preserve the lockfile; PR test runs update only the workspace package versions in their build checkout.
 The vendored TDS patch remains unchanged.
@@ -147,7 +150,8 @@ Request these permissions **only for this pipeline**, not for all pipelines:
   cross-project template access explicitly.
 - Grant the pipeline's build identity **Feed and Upstream Reader (Collaborator)**
   on the AppDev `rayfin-official` feed if it cannot restore dependencies. Upstream
-  saving requires this role; Feed Reader alone can only read already-saved crates.
+  saving requires this role; Feed Reader alone can only read already-saved crates
+  and npm packages.
   Do not grant feed publishing or owner access.
 - Authorize `Fabric-ESRP-Secure-AppDev` for definition 20870 only. Confirm that the
   approved identity can use the configured request-signing certificate and the
