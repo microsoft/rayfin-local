@@ -58,10 +58,13 @@ node scripts/check.mjs --help
 | Step | What it runs | CI job |
 | --- | --- | --- |
 | `setup` | `npm ci` in each test fixture and harness (again only when its `package-lock.json` changed), builds `tests/fixtures/functions/basic`, and for `e2e` downloads Playwright's Chromium (not with `PLAYWRIGHT_CHANNEL`). The other steps run it first unless `--no-setup`. | all but `lint` |
-| `lint` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`. | `lint` |
-| `rust` | `cargo test --workspace` and the SDK auth test (`rl-auth --test sdk -- --ignored`), in strict mode. | `test` (Windows, Linux, macOS) |
+| `lint` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`. | `lint` |
+| `rust` | `cargo test --workspace --locked` and the SDK auth test (`rl-auth --test sdk -- --ignored`), in strict mode. | `test` (Windows, Linux, macOS) |
 | `js` | `node --test` on each `js/test/*.test.mjs`. | `test` |
 | `e2e` | The Playwright `fixture` and `static` suites ([below](#end-to-end-tests)), and the sign-in portal test (`rl-auth --test portal_e2e -- --ignored`). | `e2e` (Linux) |
+
+Cargo runs with `--locked`, as the official release build does, so a `Cargo.lock` that `Cargo.toml` has moved on from fails the check: after bumping the version or changing a dependency, run `cargo build` (or `cargo update -w`) and commit the lockfile with it.
+The `test` job also runs `.github/scripts/*.test.mjs`. `official-build.test.mjs` checks what the official build's network isolation needs: lockfiles resolve packages only from registry.npmjs.org (which the official build swaps for the internal feed) or 1es-public, and every official job that runs `cargo test` first points npm at the internal feed.
 
 While working on one crate, `cargo test -p <crate>` is quicker; run the check before you push.
 Unit tests sit next to the code (`#[cfg(test)]`); integration tests are in `crates/<crate>/tests/`.

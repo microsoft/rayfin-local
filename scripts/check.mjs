@@ -16,6 +16,9 @@
 //   e2e    the browser suites (tests/e2e: the fixture and static projects) against a real
 //          `rayfin-local serve`, and the sign-in portal test (crates/rl-auth/tests/portal_e2e.rs).
 //
+// Cargo runs with --locked, as the official release build does: a Cargo.lock that Cargo.toml has
+// moved on from (a version bump without the lockfile) fails here, not only at release time.
+//
 // rust, js and e2e run setup first, which takes seconds once done; --no-setup skips it.
 // Needs Rust 1.96 or later, Node.js 22 or later and npm.
 
@@ -98,12 +101,12 @@ function setup({ browser }) {
 
 function lint() {
   exec('cargo', ['fmt', '--all', '--check']);
-  exec('cargo', ['clippy', '--workspace', '--all-targets', '--', '-D', 'warnings']);
+  exec('cargo', ['clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings']);
 }
 
 function rust() {
-  exec('cargo', ['test', '--workspace'], { env: strictEnv() });
-  exec('cargo', ['test', '-p', 'rl-auth', '--test', 'sdk', '--', '--ignored'], { env: strictEnv() });
+  exec('cargo', ['test', '--workspace', '--locked'], { env: strictEnv() });
+  exec('cargo', ['test', '--locked', '-p', 'rl-auth', '--test', 'sdk', '--', '--ignored'], { env: strictEnv() });
 }
 
 function js() {
@@ -119,7 +122,7 @@ function e2e() {
   exec(process.execPath, [playwrightCli(), 'test', '--project=fixture', '--project=static'], {
     cwd: at('tests/e2e'),
   });
-  exec('cargo', ['test', '-p', 'rl-auth', '--test', 'portal_e2e', '--', '--ignored'], { env: strictEnv() });
+  exec('cargo', ['test', '--locked', '-p', 'rl-auth', '--test', 'portal_e2e', '--', '--ignored'], { env: strictEnv() });
 }
 
 function strictEnv() {
