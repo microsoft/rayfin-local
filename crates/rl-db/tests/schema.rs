@@ -61,8 +61,10 @@ fn ddl_of_the_fixture_apps() {
         "CONSTRAINT \"PK_Todos\" PRIMARY KEY (\"id\")",
         "CONSTRAINT \"FK_Todos_category_id\" FOREIGN KEY (\"category_id\") REFERENCES \
          \"Categories\" (\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
-        "CONSTRAINT \"CK_Todos_status\" CHECK (\"status\" IN ('its new', 'doing', 'done', \
-         'its archived'))",
+        "CONSTRAINT \"CK_Todos_status\" CHECK (\"status\" COLLATE BINARY IN ('its new', 'doing', \
+         'done', 'its archived'))",
+        "CONSTRAINT \"CK_Todos_estimate_range\" CHECK (\"estimate\" >= 0)",
+        "CONSTRAINT \"CK_Todos_weight_range\" CHECK (\"weight\" >= 0 AND \"weight\" <= 99999)",
         "CONSTRAINT \"CK_Todos_title_minlen\" CHECK (length(rtrim(\"title\", ' ')) >= 1)",
         "CONSTRAINT \"CK_Todos_title_maxlen\" CHECK (length(\"title\") <= 200)",
         "CONSTRAINT \"CK_Todos_contactEmail_email\" CHECK (\"contactEmail\" LIKE '_%@_%._%' AND \
@@ -72,12 +74,10 @@ fn ddl_of_the_fixture_apps() {
     ] {
         assert!(todo.contains(expected), "missing {expected}\n{todo}");
     }
-    // No range CHECK without `cli-minor-fixes` (the IR has none).
-    assert!(!todo.contains("_range"), "{todo}");
 
-    // The system `User` has no table: the column stays, indexed, without a foreign key.
+    // The system `User` participates in real, indexed foreign keys.
     let people = create_table_sql(model.entity("Person").unwrap()).unwrap();
-    assert!(!people.contains("REFERENCES"), "{people}");
+    assert!(people.contains("REFERENCES \"Users\" (\"Id\")"), "{people}");
     assert!(
         people.contains("CREATE INDEX \"IX_People_account_id\""),
         "{people}"
@@ -102,10 +102,12 @@ fn ddl_of_the_fixture_apps() {
         let tables = db.call_blocking(|conn| {
             strings(
                 conn,
-                "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
+                "SELECT name FROM sqlite_schema WHERE type = 'table' \
+                 AND name NOT LIKE '_rl_%' ORDER BY name",
             )
         });
         let mut expected: Vec<String> = model.entities.iter().map(|e| e.table.clone()).collect();
+        expected.push("Users".into());
         expected.sort();
         assert_eq!(tables, expected);
     }
@@ -144,7 +146,7 @@ fn constraints_behave_like_fabric() {
 
         let cases = [
             (todo(", status", ", 'doing'"), None),
-            (todo(", status", ", 'DOING'"), None),
+            (todo(", status", ", 'DOING'"), Some(ConstraintKind::Check)),
             (todo(", status", ", 'its new'"), None),
             (
                 todo(", status", ", 'archived'"),
@@ -248,11 +250,28 @@ fn constraints_behave_like_fabric() {
             ConstraintKind::ForeignKey
         );
 
-        // `People.account_id` references the system User, which has no table here.
+        // The relationship must name a real system User, and deletion does not cascade.
+        assert_eq!(
+            violation(
+                conn,
+                "INSERT INTO People (account_id) VALUES \
+                ('5b0c6f1e-1111-4222-8333-444455556666')"
+            ),
+            ConstraintKind::ForeignKey
+        );
+        conn.execute_batch(
+            "INSERT INTO Users (Id, Email) VALUES \
+                ('5b0c6f1e-1111-4222-8333-444455556666', 'ada@example.test')",
+        )
+        .unwrap();
         conn.execute_batch(
             "INSERT INTO People (account_id) VALUES ('5b0c6f1e-1111-4222-8333-444455556666')",
         )
         .unwrap();
+        assert_eq!(
+            violation(conn, "DELETE FROM Users"),
+            ConstraintKind::ForeignKey
+        );
         let person: (String, i64, f64, i64, String) = conn
             .query_row(
                 "SELECT nickname, level, rate, active, memberSince FROM People",

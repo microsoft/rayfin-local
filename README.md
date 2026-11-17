@@ -6,7 +6,7 @@
 Even `rayfin dev` keeps that backend in Fabric, so before you can run anything you need a workspace, a capacity and a deployed app backend.
 
 `rayfin-local` runs that backend locally instead.
-It answers the same requests as the Fabric backend, so the Rayfin SDK 1.36 in your app can't tell the difference, and your code runs unchanged:
+It answers the same requests as the Fabric backend, so the Rayfin SDK 2.0 in your app can't tell the difference, and your code runs unchanged:
 
 ```sh
 cd my-rayfin-app
@@ -155,20 +155,22 @@ The existing [child-process embedding contract](docs/embedding.md) remains suppo
 | Passwordless sign-in, email verification, password-reset email | No | |
 | GraphQL introspection | No | |
 
-rayfin-local implements the contract of `@microsoft/rayfin-*` 1.36.x.
-It is tested with the real 1.36.2 SDK, and end to end with real apps.
+rayfin-local implements the contract of `@microsoft/rayfin-*` 2.0.x.
+It is tested with the real 2.0.0 SDK, and end to end with real apps.
 [docs/differences.md](docs/differences.md) lists every difference from Fabric.
 
 ## Install
 
-Prebuilt releases from the original repository are not included in the Git history migration.
-Until a release is published in this repository, [build from source](#requirements) with
-`cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
+The official release pipeline currently publishes only Windows x64 binaries, signed through ESRP and independently verified before publication.
+Linux and Apple Silicon build/signing/publishing stages are commented out pending ESRP authorization and validation in a separate PR.
+The Windows signing guarantee applies to new official releases, not the existing unsigned multi-platform `0.2.8` release.
+Existing release assets are not retroactively signed.
+The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) preserves the deferred Unix design, ESRP blocker and native Linux/ARM64 execution-testing TODOs.
 
-**macOS and Linux:**
+**macOS and Linux (existing unsigned `0.2.8` release):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.2.8 sh
 ```
 
 **Windows (PowerShell):**
@@ -177,7 +179,7 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install
 irm https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.ps1 | iex
 ```
 
-The script downloads the latest [release](https://github.com/microsoft/rayfin-local/releases) for your platform, checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
+The script downloads the requested [release](https://github.com/microsoft/rayfin-local/releases) (latest when no version is set), checks it against the release's `SHA256SUMS.txt`, and installs the `rayfin-local` binary:
 
 - **macOS and Linux:** into `~/.local/bin`. If that folder isn't on your `PATH`, the script prints the line to add to your shell's profile.
 - **Windows:** into `%LOCALAPPDATA%\Programs\rayfin-local`, which it adds to your user `PATH`. Open a new terminal to pick it up there.
@@ -197,13 +199,17 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Platform | Release build |
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
-| macOS on Apple silicon or Intel | `aarch64-apple-darwin`, `x86_64-apple-darwin` |
-| Linux x64 or ARM64 with glibc 2.34 or later (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 or newer) | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` |
+| macOS on Apple Silicon (existing unsigned `0.2.8` release only) | `aarch64-apple-darwin` |
+| Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
+| Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
+
+While Unix releases are deferred, all macOS and Linux platforms must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+The installers check archive checksums; that is not signature verification.
 
 Other ways to install:
 
 - **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
-  The macOS binaries are not notarized: if Gatekeeper blocks one you downloaded with a browser, run `xattr -d com.apple.quarantine rayfin-local`.
+  The existing `0.2.8` macOS binaries are not notarized.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
   `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
@@ -245,6 +251,12 @@ rayfin-local serve --json                  # for programs: JSON events on stdout
 
 Programs that run rayfin-local for the developer, such as [Fabricator](https://github.com/spatney/rayfin-fabricator), use `serve --json`; [docs/embedding.md](docs/embedding.md) is their contract.
 
+`--static` enforces `services.staticHosting.assetAccess: protected` on all app assets and
+runtime config. Vite remains an unprotected development surface and warns when protection is
+requested. Telemetry uses `[telemetry] application_insights_connection_string` in
+`rayfin-local.toml`, delivered only when `services.telemetry.enabled` is true.
+[Hosting and runtime config](docs/hosting.md) describes sign-in, defaults, and local differences.
+
 ### The backend's routes
 
 The backend has one origin, `http://localhost:7171` by default.
@@ -252,7 +264,7 @@ Its port is remembered per project; when it is busy, rayfin-local takes the next
 
 | Path | What it serves |
 | --- | --- |
-| `/rayfin.config.json` | The app's config: `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`. |
+| `/rayfin.config.json` | The app's config: `serviceMode: "fabric"`, `apiUrl`, `publishableKey`, workspace, item and tenant ids, `portalUrl`, and optional `applicationInsightsConnectionString`. |
 | `/api/auth/v1/*` | Auth: sign-up, sign-in, refresh tokens, sign-out. |
 | `/.well-known/jwks.json` | The public keys that verify access tokens. |
 | `/api/projectRuntimeSettings` | The auth settings from `rayfin.yml`. |
@@ -276,6 +288,14 @@ rayfin-local starts Vite itself, never `npm run dev`, which may call `rayfin up`
 
 Users are local: they live in `.rayfin-local/db.sqlite`, not in Entra ID.
 
+The data API exposes the built-in, read-only `User` entity: `users { items { Id Email } }` and `user_by_pk(Id: "...")`.
+Every authenticated user can read every row; anonymous access and mutations are not granted.
+Relationships to `User` navigate normally and enforce real foreign keys to `Users.Id`.
+Locally, account creation and email changes update this system table atomically, and startup backfills existing accounts before app schema migrations.
+This population is a local convenience, not a promise about Fabric sign-in populating its mirrored table.
+`Email` uses the account email, or the username when absent, bounded to 255 characters.
+Deleting an auth account retains its mirrored row so existing app references remain valid.
+
 - **Automatic sign-in.** Apps from Rayfin's templates sign themselves in during development (`rayfinLocalDev({ autoLogin: true })` in their Vite config).
   rayfin-local's dev server answers them itself, without opening any Entra sign-in, as the **sign-in identity** that `--sign-in-as` (or `[auth] sign_in_as` in `rayfin-local.toml`) sets:
   - `developer` (the default): you, as your own Entra user when `az login` or the Rayfin CLI's login has a token without a prompt and the backend listens on loopback, else a local account, `developer@example.com`.
@@ -289,7 +309,7 @@ Users are local: they live in `.rayfin-local/db.sqlite`, not in Entra ID.
   "Continue as" is offered only when the backend listens on a loopback address.
 - **Email and password.** The app's own sign-up and sign-in work as on Fabric.
   One local convenience: a password sign-in for an email that has no account creates the account (a wrong password for an existing account is still refused).
-  Many app templates sign in to a local backend with a fixed development account (`MockAuthService`) and fall back to sign-up when it doesn't exist yet, a fallback the 1.36.2 SDK never reaches because `@microsoft/rayfin-client` exports a different `AuthError` class from the one it throws.
+  Many app templates sign in to a local backend with a fixed development account (`MockAuthService`) and fall back to sign-up when it doesn't exist yet.
   Turn this off with `[auth] auto_create_users = false` in `rayfin-local.toml`.
 - **Apps that sign in only inside Fabric** (`initEmbeddedAuth`, which does nothing outside a Fabric frame) need the **Embedded** URL from the banner, `http://localhost:7171/.rayfin-local/portal/embed`.
   That page plays Fabric's role: sign in there once, and it shows the app in a frame and signs it in, as Fabric does.
@@ -335,7 +355,7 @@ A function or query can therefore reach exactly what your account can reach.
 | --- | --- |
 | `auto` (default) | The Azure CLI, then the Rayfin CLI's login. When Power BI turns down the Azure CLI's token for a semantic-model query, the Rayfin CLI's sign-in gets one instead (the first time, it may open a browser window to sign in or consent), and Power BI tokens come from it from then on. |
 | `az` | `az account get-access-token --scope <scope>`: run `az login` first. |
-| `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
+| `rayfin` | The Rayfin CLI's login, through the project's `@microsoft/rayfin-cli/_internal/auth`: run `npx rayfin login` first. It may open a browser window to sign in. |
 
 `RAYFIN_LOCAL_TOKEN_<AUDIENCE>` overrides every source for one audience: `SQL`, `STORAGE`, `FABRIC`, `AZUREAI`, `ADO` or `POWERBI`.
 It is meant for tests and CI; the token is used as given.
@@ -447,6 +467,10 @@ Rebuilding the package yourself also counts as a change.
   Restart with `serve --force-schema` to apply them anyway (a `serve` started with it also applies them as you edit), or `serve --reset` to start over.
 
 `rayfin-local schema` prints the app model and the SQLite schema derived from `rayfin/data`.
+
+The system `Users` table is separate from app schema migrations; app entities cannot redefine it.
+With `services.data.allowIntrospection: true`, standard GraphQL `__schema` and `__type(name:)` introspection reflects the served schema, including `User`.
+Introspection remains disabled by default (`HC0046`); `__typename` always works.
 
 ## Live reload
 
@@ -599,9 +623,9 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
   With the `auto` token source, rayfin-local asks the Rayfin CLI for a token itself, and the first time it may open a browser window to sign in or consent: finish it there.
   Otherwise, run `npx rayfin connector invoke <connector> executeQuery --file query.json` once in a terminal in the project folder, with `{"query": "EVALUATE {1}"}` in `query.json`, and finish signing in in the browser it opens; or ask a tenant administrator to consent to the Rayfin CLI app (`2f844663-8e82-4a34-8b65-09d9d14b0fb6`) for Power BI Service.
   If it still fails, check that your account can query the model (Build permission) in the model's tenant.
-- **"… is not the 1.36 SDK rayfin-local implements".**
-  rayfin-local implements the wire contract of `@microsoft/rayfin-*` 1.36.x; with another version, behavior may differ from Fabric.
-  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 1.36.
+- **"… is not the 2.0 SDK rayfin-local implements".**
+  rayfin-local implements the wire contract of `@microsoft/rayfin-*` 2.0.x; with another version, behavior may differ from Fabric.
+  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 2.0.
 - **"Cannot find type definition file for …" (TS2688) when the entities are analyzed.**
   TypeScript also loads the `@types` packages in the `node_modules` of every parent folder; set `"types"` (or `"typeRoots"`) in `rayfin/tsconfig.json`, or remove the stray folder the message names.
 - **"rayfin-local serve is already running this project".**

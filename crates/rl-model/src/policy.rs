@@ -1,11 +1,11 @@
 //! `@role` policies as a typed expression tree.
 //!
-//! The 1.36.2 policy DSL (`@microsoft/rayfin-core` `policy.js`) builds `ComparisonExpression`s
+//! The 2.0.0 policy DSL (`@microsoft/rayfin-core` `policy.js`) builds `ComparisonExpression`s
 //! (`eq`, and `ne` from `.neq()`) over `claims.sub|email|role`, `item.<field>` and literals
 //! (string, number, boolean, `Date`, `null`), combined by `LogicalExpression`s (`and`, `or`).
 //! There is no `not` and no ordering comparison. rayfin-core's `serializeCheckToAst` turns that
-//! tree into a JSON "check" AST, which [`PolicyExpr::from_check`] reads; anything outside that
-//! grammar is an error, never ignored.
+//! tree into a JSON "check" AST, which [`PolicyExpr::from_check`] reads for data policies.
+//! Storage admits its narrower BaaS profile separately through [`StorageFolder::validate_rules`](crate::StorageFolder::validate_rules).
 
 use std::fmt;
 
@@ -20,8 +20,8 @@ pub enum PolicyExpr {
     And(Vec<PolicyExpr>),
     /// True when any operand is (at least two operands).
     Or(Vec<PolicyExpr>),
-    /// `left op right`. DAB compares with SQL semantics: a `null` operand never matches, so
-    /// `@item.x eq null` is never true (use the result as a SQL predicate as-is).
+    /// `left op right`. DAB renders `eq null` / `neq null` as SQL null tests; other
+    /// comparisons with a null column retain SQL's three-valued logic.
     Compare {
         op: CompareOp,
         left: Operand,
@@ -43,7 +43,7 @@ pub enum CompareOp {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operand {
-    /// A claim of the caller's token (`@claims.sub`); 1.36.2 offers `sub`, `email` and `role`.
+    /// A claim of the caller's token (`@claims.sub`); 2.0.0 offers `sub`, `email` and `role`.
     Claim(String),
     /// A field of the row (`@item.user_id`), by its exposed (GraphQL) name.
     Field(String),
@@ -64,7 +64,7 @@ pub enum Literal {
     String(String),
 }
 
-/// Why a check AST node is outside the 1.36.2 policy grammar.
+/// Why a check AST node is outside the 2.0.0 policy grammar.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{reason}")]
 pub struct PolicyAstError {

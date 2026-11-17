@@ -1,0 +1,39 @@
+parameters:
+  - name: folder
+    type: string
+  - name: pattern
+    type: string
+  - name: keyCode
+    type: string
+  - name: operation
+    type: string
+  - name: operationParameters
+    type: object
+    default: []
+
+steps:
+  - task: EsrpCodeSigning@6
+    displayName: ESRP ${{ parameters.operation }}
+    inputs:
+      ConnectedServiceName: Fabric-ESRP-Secure-AppDev
+      UseMSIAuthentication: true
+      AppRegistrationClientId: $(EsrpAppRegistrationClientId)
+      AppRegistrationTenantId: $(EsrpAppRegistrationTenantId)
+      EsrpClientId: $(EsrpClientId)
+      AuthAKVName: $(EsrpKeyVaultName)
+      AuthSignCertName: $(EsrpSignCertName)
+      FolderPath: ${{ parameters.folder }}
+      Pattern: ${{ parameters.pattern }}
+      signConfigType: inlineSignParams
+      inlineOperation: |
+        [{
+          "keyCode": "${{ parameters.keyCode }}",
+          "operationSetCode": "${{ parameters.operation }}",
+          "parameters": ${{ convertToJson(parameters.operationParameters) }},
+          "toolName": "sign",
+          "toolVersion": "1.0"
+        }]
+      SessionTimeout: 120
+      MaxConcurrency: 1
+      MaxRetryAttempts: 5
+      PendingAnalysisWaitTimeoutMinutes: 5

@@ -391,7 +391,7 @@ async fn anonymous_callers_get_the_anonymous_grant() {
         response.messages(),
         ["Access forbidden to a field referenced in the filter."]
     );
-    assert_eq!(response.codes(), ["AuthorizationCheckFailed"]);
+    assert_eq!(response.codes(), ["Forbidden"]);
     let response = app
         .run(
             &anonymous,
@@ -402,9 +402,10 @@ async fn anonymous_callers_get_the_anonymous_grant() {
         response.messages(),
         ["Access forbidden to a field referenced in the orderBy argument."]
     );
-    // Milestones are for signed-in users only: 401, so a restored session refreshes.
+    // A valid anonymous caller lacking a grant receives a GraphQL authorization denial.
     let response = app.run(&anonymous, "{ milestones { items { id } } }").await;
-    assert_eq!(response.status, 401);
+    assert_eq!(response.status, 200);
+    assert_eq!(response.codes(), ["AUTH_NOT_AUTHORIZED"]);
 }
 
 #[tokio::test]
@@ -496,7 +497,7 @@ async fn validation_errors_read_as_hot_chocolate_writes_them() {
         ),
         (
             "{ users { items { id } } }",
-            "The field `users` does not exist on the type `Query`.",
+            "The field `id` does not exist on the type `User`.",
         ),
         (
             "{ todos(filter: { not: { title: { eq: \"x\" } } }) { items { id } } }",
@@ -635,9 +636,10 @@ async fn explorer_threads_are_private_to_their_owner() {
         app.run(&alice, query).await.items("askMessages")[0],
         json!({"content": "hello", "thread": {"title": "Alice one"}})
     );
-    // No token: the SDK must refresh first.
+    // Anonymous authorization failures do not request session refresh.
     let response = app.run(&Caller::anonymous(), query).await;
-    assert_eq!(response.status, 401);
+    assert_eq!(response.status, 200);
+    assert_eq!(response.codes(), ["AUTH_NOT_AUTHORIZED"]);
 }
 
 #[tokio::test]
@@ -689,11 +691,10 @@ async fn http_status_policy() {
     assert_eq!(body["error"], "invalid_token");
 
     let (status, _, body) = send("POST", "/graphql", None, query).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "authentication_required");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["errors"][0]["extensions"]["code"],
-        "AUTH_NOT_AUTHENTICATED"
+        "AUTH_NOT_AUTHORIZED"
     );
 
     let (status, _, body) = send("POST", "/graphql", bearer.clone(), "{\"query\":\"{ x\"}").await;
@@ -731,7 +732,7 @@ async fn set_model_swaps_the_schema_for_new_requests() {
         Vec::<Value>::new()
     );
     app.api.set_model(std::sync::Arc::new(basic_model()));
-    assert_eq!(app.api.model().entities.len(), basic_model().entities.len());
+    assert_eq!(app.api.model().entities, basic_model().entities);
     assert_eq!(
         app.run(&alice, query).await.messages(),
         ["The field `askThreads` does not exist on the type `Query`."]

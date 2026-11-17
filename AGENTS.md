@@ -1,6 +1,6 @@
 # AGENTS.md: working in the rayfin-local repo
 
-`rayfin-local` is a Rust CLI that runs an existing [Rayfin](https://rayfin.ai) project (SDK 1.36.x) entirely on the developer's machine.
+`rayfin-local` is a Rust CLI that runs an existing [Rayfin](https://rayfin.ai) project (SDK 2.0.x) entirely on the developer's machine.
 `rayfin-local serve`, run in the project, starts every backend service locally and the unmodified app works against it through the Rayfin SDK.
 Each service has a local stand-in:
 
@@ -34,7 +34,7 @@ Each service has a local stand-in:
 | `crates/rl-server` | Router composition: `/rayfin.config.json`, CORS, publishable-key and Host checks, static hosting. |
 | `js/` | JS helpers embedded in the binary (see `js/README.md`). |
 | `vendor/tiberius` | The TDS driver (tiberius 0.12.3) with Fabric fixes, used through `[patch.crates-io]`; changes are marked `rayfin-local patch` (see `docs/sql-connectors.md`). |
-| `tests/` | Fixture projects, SDK conformance suite (Node + real `@microsoft/rayfin-*` 1.36.2), e2e. |
+| `tests/` | Fixture projects, SDK conformance suite (Node + real `@microsoft/rayfin-*` 2.0.0), e2e. |
 
 ## Commands
 
@@ -43,21 +43,40 @@ Each service has a local stand-in:
 | `cargo build --workspace` | Build everything. |
 | `cargo test -p <crate>` | One crate's tests. Prefer this while other work is in progress. |
 | `cargo test --workspace` | All Rust tests. |
+| `node scripts/check.mjs` | Everything CI checks: lint, Rust and JS tests in strict mode, the browser e2e suites. |
+| `node scripts/check.mjs rust js e2e` | Just those steps (`--help` lists them). |
 | `cargo clippy -p <crate> --all-targets -- -D warnings` | Lint one crate (CI lints the workspace with `-D warnings`). |
 | `cargo fmt -p <crate>` / `cargo fmt --all --check` | Format (100 columns). |
 | `cargo run -p rayfin-local -- serve -C <project>` | Run against a project. |
 
+## Testing your change
+
+Before you call a change done, run `node scripts/check.mjs` (about 5 minutes; the first run installs the fixtures' packages and Chromium).
+It is the command CI runs, so it passing locally means CI's checks pass.
+While iterating, run the narrowest step that covers the change, then the full check at the end:
+
+| Changed | Run |
+| --- | --- |
+| One crate | `cargo test -p <crate>`, then `node scripts/check.mjs rust` |
+| `js/` (embedded helpers) | `node scripts/check.mjs js` |
+| Serving, sign-in, hosting, functions, data, storage or anything a browser sees | `node scripts/check.mjs e2e` |
+
+- Tests run in **strict mode** (`RAYFIN_LOCAL_TEST_STRICT=1`): a test that needs Node, a fixture's packages or the SDK fails rather than skipping. Never weaken a test to get it past strict mode; fix the setup or the expectation.
+- A behavior change needs a test that fails without it. User-visible behavior goes in the e2e suites (`tests/e2e`, driving the fixture app in `tests/fixtures/apps/basic`); add a scenario to the fixture app when the SDK call you need isn't there.
+- When a test's expectation changes, say why in the commit; a changed expectation is a behavior change.
+- `docs/development.md` has the details: each suite, the environment variables, and how to debug an e2e failure.
+
 ## Sources of truth for Rayfin behavior
 
-Do not rely on memory for Rayfin APIs or wire formats; they are version-locked (1.36.2).
+Do not rely on memory for Rayfin APIs or wire formats; they are version-locked (2.0.0).
 These are the sources of truth:
 
-The paths below are relative to this repository's parent folder, where the related repositories are checked out side by side.
+Related repositories below are checked out beside this repository.
 
-- The SDK 1.36.2 dist installed in the reference app: `fabric-apps/apps/explorer/node_modules/@microsoft/rayfin-*` (and `rayfin/functions/node_modules/@microsoft/fabric-user-data-functions`).
+- The SDK 2.0.0 dist installed in the fixture app: `tests/fixtures/apps/basic/node_modules/@microsoft/rayfin-*` (and `rayfin/functions/node_modules/@microsoft/fabric-user-data-functions`).
 - The wire contract written up by micro-fabric: `micro-fabric/docs/compatibility.md`.
   It is a reference only; this project is a clean-room implementation, so never copy micro-fabric code.
-- Rayfin's source (1.37 alpha; may differ from 1.36.2): `project-rayfin/packages/*`.
+- Rayfin's source (may differ from 2.0.0): `project-rayfin/packages/*`.
 - The docs: `https://rayfin.ai/docs/...`; append `.md` to any page for Markdown.
 
 The reference app for end-to-end checks is `fabric-apps/apps/explorer`.

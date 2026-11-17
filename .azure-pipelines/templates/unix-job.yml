@@ -1,0 +1,107 @@
+parameters:
+  - name: platform
+    type: string
+    values: [linux, macos]
+  - name: action
+    type: string
+    values: [package, verify]
+  - name: testReleasePr
+    type: number
+  - name: pool
+    type: object
+
+jobs:
+  - job: ${{ parameters.action }}_${{ parameters.platform }}
+    timeoutInMinutes: 120
+    pool: ${{ parameters.pool }}
+    variables:
+      ${{ if eq(parameters.platform, 'linux') }}:
+        UnixTarget: x86_64-unknown-linux-gnu
+      ${{ else }}:
+        UnixTarget: aarch64-apple-darwin
+    templateContext:
+      ${{ if eq(parameters.action, 'verify') }}:
+        inputs:
+          - input: pipelineArtifact
+            artifactName: unix-signing
+            targetPath: $(Pipeline.Workspace)/unix-signing
+      outputs:
+        - output: pipelineArtifact
+          ${{ if eq(parameters.action, 'package') }}:
+            targetPath: $(Build.ArtifactStagingDirectory)/unsigned-${{ parameters.platform }}
+            artifactName: unsigned-${{ parameters.platform }}
+          ${{ else }}:
+            targetPath: $(Build.ArtifactStagingDirectory)/${{ parameters.platform }}-signed
+            artifactName: ${{ parameters.platform }}-signed
+    steps:
+      - checkout: self
+        clean: true
+        persistCredentials: false
+      - task: UseNode@1
+        inputs:
+          version: $(NodeVersion)
+      - bash: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BUILD_SOURCEVERSION"
+          if [ "$PLATFORM" = macos ]; then
+            test "$(uname -s)" = Darwin && test "$(uname -m)" = x86_64
+          else
+            test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64
+          fi
+        displayName: Verify exact source and build/verification host
+        env:
+          PLATFORM: ${{ parameters.platform }}
+      - ${{ if eq(parameters.action, 'package') }}:
+        - bash: |
+            set -euo pipefail
+            mkdir -p .cargo
+            cat > .cargo/config.toml <<'EOF'
+            [registries.rayfin-official]
+            index = "sparse+https://pkgs.dev.azure.com/powerbi/AppDev/_packaging/rayfin-official/Cargo/index/"
+            credential-provider = "cargo:token"
+            [source.crates-io]
+            replace-with = "rayfin-official"
+            EOF
+          displayName: Configure authenticated internal Cargo feed
+        - task: CargoAuthenticate@0
+          inputs:
+            configFile: $(Build.SourcesDirectory)/.cargo/config.toml
+        - bash: |
+            set -euo pipefail
+            rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+            rustup target add "$RUST_TARGET"
+            if [ "$TEST_RELEASE_PR" != 0 ]; then
+              node .github/scripts/set-alpha-version.mjs "$BUILD_BUILDID"
+            fi
+            if [ "$PLATFORM" = macos ]; then
+              cargo test --workspace --locked
+              echo 'Native Apple Silicon execution tests are deferred; see the TODO in docs/release-signing.md.'
+            else
+              cargo test --workspace --locked --target "$RUST_TARGET"
+            fi
+            cargo build --release --locked -p rayfin-local --target "$RUST_TARGET"
+          displayName: Test host workspace and build Unix release target
+          env:
+            RUSTUP_TOOLCHAIN: $(RustVersion)
+            RUST_TARGET: $(UnixTarget)
+            TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+            PLATFORM: ${{ parameters.platform }}
+      - ${{ else }}:
+        - bash: |
+            set -euo pipefail
+            if [ "$TEST_RELEASE_PR" != 0 ]; then
+              node --input-type=module -e '
+                import { readFile, writeFile } from "node:fs/promises";
+                import { alphaManifest } from "./.github/scripts/set-alpha-version.mjs";
+                const result = alphaManifest(await readFile("Cargo.toml", "utf8"), process.env.BUILD_BUILDID);
+                await writeFile("Cargo.toml", result.manifest);
+              '
+            fi
+          displayName: Match the build-only alpha version without restoring dependencies
+          env:
+            TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+      - bash: node .github/scripts/unix-release.mjs "$ACTION" "$PLATFORM"
+        displayName: ${{ parameters.action }} and verify Unix release archive
+        env:
+          ACTION: ${{ parameters.action }}
+          PLATFORM: ${{ parameters.platform }}

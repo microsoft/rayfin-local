@@ -2,7 +2,7 @@
 
 Experimental source package; npm publication and release signing are not configured yet.
 
-Runs an existing Rayfin 1.36.2 project **in the Node.js process**, using the same Rust services
+Runs an existing Rayfin 2.0.0 project **in the Node.js process**, using the same Rust services
 as `rayfin-local serve`. Project dependencies must already be installed.
 
 ```js

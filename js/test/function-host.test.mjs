@@ -193,11 +193,10 @@ describe('function host (fixture)', () => {
     assert.equal(envelope(rejected).errors[0].errorCode, 'UserThrown');
   });
 
-  test('reports a failure when the worker produces no response', async () => {
-    const reply = await invoke('bigint');
-    assert.equal(reply.ok, false);
-    assert.equal(reply.error.kind, 'failed');
-    assert.match(reply.error.message, /BigInt/);
+  test('maps a result JSON cannot serialize to Failed', async () => {
+    const failed = envelope(await invoke('bigint'));
+    assert.equal(failed.status, 'Failed');
+    assert.match(failed.errors[0].properties.error_message, /BigInt/);
   });
 
   test('routes console output to the invocation log', async () => {
@@ -205,8 +204,8 @@ describe('function host (fixture)', () => {
     await invoke('logs', { message: marker });
     await new Promise((resolve) => setTimeout(resolve, 100));
     const logged = (text) => host.output.some((line) => line.includes(text));
-    assert.ok(logged(`logs: [UserDataFunctions] log: ${marker}`), host.output.join('\n'));
-    assert.ok(logged(`logs: [UserDataFunctions] error: ${marker}`));
+    assert.ok(logged(`logs: log: ${marker}`), host.output.join('\n'));
+    assert.ok(logged(`logs: error: ${marker}`));
   });
 
   test('runs raw HTTP functions with their own method, route and response', async () => {

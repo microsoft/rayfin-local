@@ -63,15 +63,15 @@ impl App {
         .iter()
         .all(|package| fixture.join(package).join("package.json").is_file());
         if !installed {
-            eprintln!(
-                "skipped: the fixture's packages are not installed (run `npm ci` in {0} and in \
+            rl_test_support::skip(format_args!(
+                "the fixture's packages are not installed (run `npm ci` in {0} and in \
                  {0}/rayfin/functions)",
                 fixture.display()
-            );
+            ));
             return None;
         }
         if Command::new("node").arg("--version").output().is_err() {
-            eprintln!("skipped: Node.js is not on PATH");
+            rl_test_support::skip("Node.js is not on PATH");
             return None;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -345,12 +345,23 @@ fn publishable_key(api_url: &str) -> String {
     config["publishableKey"].as_str().unwrap().to_owned()
 }
 
-/// Invokes function `name` anonymously: the status and the envelope's `output`.
+/// Invokes function `name` as a signed-in user, as Fabric requires: the status and the envelope's
+/// `output`.
 fn invoke(api_url: &str, key: &str, name: &str) -> (u16, Value) {
+    let grant = json!({
+        "grantType": "password",
+        "email": "invoker@example.test",
+        "password": "correct horse",
+    });
+    let url = format!("{api_url}/api/auth/v1/token");
+    let (status, body) = request("POST", &url, &[("X-Publishable-Key", key)], Some(&grant));
+    assert_eq!(status, 200, "{body}");
+    let session: Value = serde_json::from_str(&body).unwrap();
+    let bearer = format!("{} {}", "Bearer", session["accessToken"].as_str().unwrap());
     let (status, body) = request(
         "POST",
         &format!("{api_url}/functions/{name}/invoke"),
-        &[("X-Publishable-Key", key)],
+        &[("X-Publishable-Key", key), ("Authorization", &bearer)],
         Some(&json!({})),
     );
     let envelope: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
@@ -422,10 +433,16 @@ fn processes() -> Vec<(u32, u32, String)> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            let mut parts = line.trim().splitn(3, char::is_whitespace);
-            let pid = parts.next()?.parse().ok()?;
-            let parent = parts.next()?.parse().ok()?;
-            Some((pid, parent, parts.next().unwrap_or_default().to_owned()))
+            // `ps` pads its columns, so fields can be separated by more than one space.
+            let line = line.trim_start();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let rest = rest.trim_start();
+            let (parent, command) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            Some((
+                pid.parse().ok()?,
+                parent.parse().ok()?,
+                command.trim().to_owned(),
+            ))
         })
         .collect()
 }
@@ -807,6 +824,84 @@ export class Label {
   @text({ max: 50 }) name!: string;
 }
 ";
+
+#[test]
+fn storage_checks_are_config_invalid_at_startup() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let source = app
+        .path()
+        .join("rayfin")
+        .join("storage")
+        .join("Attachments.ts");
+    let valid = std::fs::read_to_string(&source).unwrap();
+    assert!(valid.contains("item.team_id.neq('')"));
+    std::fs::write(
+        &source,
+        valid.replace("item.team_id.neq('')", "item.team_id.neq(null)"),
+    )
+    .unwrap();
+    let mut serve = Serve::start(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let error = serve.next("error");
+    assert_eq!(error["code"], "config-invalid", "{error}");
+    assert_eq!(error["fatal"], true, "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("todo-attachments") && message.contains("rule[0]"),
+        "{message}"
+    );
+    assert!(message.contains("rayfin up"), "{message}");
+    assert_eq!(serve.close_stdin().code(), Some(1), "{}", serve.report());
+}
+
+#[test]
+fn invalid_storage_reload_keeps_the_previous_rules_and_recovers() {
+    let Some(app) = App::copy() else {
+        return;
+    };
+    let mut serve = Serve::start_hosted(
+        app.path(),
+        &["--no-functions", "--no-frontend", "--port", "0"],
+    );
+    let ready = serve.next("ready");
+    let api_url = ready["apiUrl"].as_str().unwrap().to_owned();
+    let key = publishable_key(&api_url);
+    let (status, token) = control(&api_url, "POST", "/token", None);
+    assert_eq!(status, 200, "{token}");
+    let bearer = format!("Bearer {}", token["accessToken"].as_str().unwrap());
+    let headers = [
+        ("X-Publishable-Key", key.as_str()),
+        ("Authorization", bearer.as_str()),
+    ];
+    let list_url = format!("{api_url}/api/storage/list?folder=todo-attachments");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+
+    let source = app
+        .path()
+        .join("rayfin")
+        .join("storage")
+        .join("Attachments.ts");
+    let valid = std::fs::read_to_string(&source).unwrap();
+    std::fs::write(
+        &source,
+        valid.replace("item.team_id.neq('')", "item.team_id.neq(null)"),
+    )
+    .unwrap();
+    let (status, error) = control(&api_url, "POST", "/reload", None);
+    assert_eq!(status, 422, "{error}");
+    assert_eq!(error["error"]["code"], "config-invalid", "{error}");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+
+    std::fs::write(&source, valid).unwrap();
+    let (status, recovered) = control(&api_url, "POST", "/reload", None);
+    assert_eq!(status, 200, "{recovered}");
+    assert_eq!(request("GET", &list_url, &headers, None).0, 200);
+    assert_eq!(serve.close_stdin().code(), Some(0), "{}", serve.report());
+}
 
 #[test]
 fn a_reload_on_request_answers_a_refused_schema_change_and_forces_it() {

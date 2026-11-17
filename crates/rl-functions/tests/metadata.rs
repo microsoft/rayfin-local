@@ -1,6 +1,6 @@
 //! `runtimemetadata.json` generation with `js/udf-metadata.mjs` on Node and TypeScript.
 //!
-//! The expected files under `tests/fixtures` were produced by the Rayfin CLI 1.36.2 generator on
+//! The expected files under `tests/fixtures` were produced by the Rayfin CLI 2.0.0 generator on
 //! the same sources. Tests skip (with a note) when Node or TypeScript is unavailable: TypeScript
 //! comes from `RAYFIN_LOCAL_TYPESCRIPT_DIR` (a folder `typescript` resolves from) or from the
 //! explorer app (`RAYFIN_LOCAL_EXPLORER`, else `fabric-apps/apps/explorer` beside this repository).
@@ -38,18 +38,22 @@ fn typescript_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("RAYFIN_LOCAL_TYPESCRIPT_DIR") {
         return Some(dir.into());
     }
+    let has_typescript = |dir: &Path| dir.join("node_modules/typescript/package.json").is_file();
+    // The functions fixture's own devDependency (`npm ci` in tests/fixtures/functions/basic).
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/functions/basic");
+    if has_typescript(&fixture) {
+        return Some(fixture);
+    }
     let functions = explorer()?.join("rayfin").join("functions");
-    functions
-        .join("node_modules/typescript/package.json")
-        .is_file()
-        .then_some(functions)
+    has_typescript(&functions).then_some(functions)
 }
 
 async fn node() -> Option<NodeRuntime> {
     match NodeRuntime::discover().await {
         Ok(node) => Some(node),
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             None
         }
     }
@@ -58,7 +62,7 @@ async fn node() -> Option<NodeRuntime> {
 /// Node and a TypeScript to generate with, or `None` (test skipped).
 async fn toolchain() -> Option<(NodeRuntime, PathBuf)> {
     let Some(typescript) = typescript_dir() else {
-        eprintln!("skipped: no TypeScript (set RAYFIN_LOCAL_TYPESCRIPT_DIR)");
+        rl_test_support::skip("no TypeScript (set RAYFIN_LOCAL_TYPESCRIPT_DIR)");
         return None;
     };
     Some((node().await?, typescript))
@@ -195,6 +199,8 @@ async fn fixture_metadata_matches_the_cli() {
             "lakeFile",
             "namespaced",
             "nothingDeclared",
+            "report",
+            "aliasedReport",
             "destructured",
             "legacyStyle",
             "syncHandler",
@@ -214,6 +220,8 @@ async fn fixture_metadata_matches_the_cli() {
     let ask = metadata.function("askAgent").unwrap();
     assert!(ask.delegate_parameters[1].is_context());
     assert!(!ask.delegate_parameters[0].is_context());
+    let report = metadata.function("aliasedReport").unwrap();
+    assert_eq!(report.capabilities, Some(vec!["sql".to_owned()]));
 }
 
 #[tokio::test]
@@ -243,17 +251,18 @@ async fn without_tsconfig_audiences_come_from_the_annotation_text() {
         .iter()
         .map(|diagnostic| (diagnostic.function_name.as_str(), diagnostic.code.as_str()))
         .collect();
+    let audience = "unverified-context-audience";
     assert_eq!(
         warned,
         [
-            "addNote",
-            "askAgent",
-            "backlog",
-            "legacyContext",
-            "namespaced",
-            "legacyStyle"
+            ("addNote", audience),
+            ("askAgent", audience),
+            ("backlog", audience),
+            ("legacyContext", audience),
+            ("namespaced", audience),
+            ("report", "unverified-context-capability"),
+            ("legacyStyle", audience),
         ]
-        .map(|name| (name, "unverified-context-audience"))
     );
     // An alias cannot be resolved without the checker; the runtime binds nothing for it.
     assert_eq!(generated.metadata.audiences("backlog"), []);

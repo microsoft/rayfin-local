@@ -1,5 +1,5 @@
 import { role, text, int } from '@microsoft/rayfin-core';
-import { blob, StorageObject, mb, ContentTypes } from '@microsoft/rayfin-core/experimental';
+import { blob, StorageObject, mb, ContentTypes } from '@microsoft/rayfin-core';
 
 /**
  * A storage folder with every `@blob` option, app fields stored in
@@ -16,7 +16,7 @@ import { blob, StorageObject, mb, ContentTypes } from '@microsoft/rayfin-core/ex
   policy: (claims, item) => claims.sub.eq(item.owner_id),
 })
 @role('authenticated', 'delete', {
-  policy: (claims, item) => claims.sub.eq(item.owner_id).and(item.team_id.neq(null)),
+  policy: (claims, item) => claims.sub.eq(item.owner_id).and(item.team_id.neq('')),
 })
 export class Attachments extends StorageObject {
   @text() team_id!: string;

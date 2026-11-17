@@ -183,6 +183,7 @@ test('native runtime owns Vite and functions and serves the real SDK', { timeout
   });
   const events = [];
   runtime.onEvent((event) => events.push(event));
+  let client;
   try {
     const ready = await runtime.start();
     assert.ok(events.some((event) => event.type === 'functions' && event.state === 'ready'),
@@ -190,23 +191,32 @@ test('native runtime owns Vite and functions and serves the real SDK', { timeout
     assert.ok(events.some((event) => event.type === 'vite' && event.state === 'ready'));
     assert.equal((await fetch(ready.appUrl)).status, 200);
     const config = await (await fetch(new URL('/rayfin.config.json', ready.apiUrl))).json();
-    const fixtureRequire = createRequire(path.join(fixture, 'package.json'));
-    const { RayfinClient } = await import(pathToFileURL(fixtureRequire.resolve('@microsoft/rayfin-client')));
-    const client = new RayfinClient({
+    const load = (name) => import(pathToFileURL(path.join(fixture, 'node_modules/@microsoft', name, 'dist/index.js')));
+    const { RayfinClient } = await load('rayfin-client');
+    const { browserSession } = await load('rayfin-auth');
+    const { dataService } = await load('rayfin-data');
+    const { functionsService } = await load('rayfin-functions');
+    client = RayfinClient.create({
       baseUrl: ready.apiUrl,
       publishableKey: config.publishableKey,
-      authStorage: false,
-      persistSession: false,
-      autoRefreshToken: false,
-      multiTabSync: false,
+      auth: browserSession({
+        storage: false,
+        persistSession: false,
+        autoRefreshToken: false,
+        multiTabSync: false,
+      }),
+      services: { data: dataService(), functions: functionsService() },
     });
     assert.deepEqual(await client.data.Todo.select(['id', 'title']).execute(), []);
-    await client.auth.signUp({ email: 'native@example.test', password: 'Native-test-password-42!' });
+    const credentials = { email: 'native@example.test', password: 'Native-test-password-42!' };
+    await client.auth.signUp(credentials);
+    await client.auth.signIn(credentials);
     assert.equal(await client.functions.ping.invoke(), 'pong');
     assert.deepEqual((await runtime.close()).cleanupErrors, []);
     await assert.rejects(fetch(ready.appUrl, { signal: AbortSignal.timeout(2000) }));
     await assert.rejects(fetch(new URL('/.rayfin-local/health', ready.apiUrl), { signal: AbortSignal.timeout(2000) }));
   } finally {
+    client?.dispose();
     await runtime.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }

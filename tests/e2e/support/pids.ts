@@ -34,19 +34,45 @@ export function forgetPid(pid: number): void {
   write(pids);
 }
 
-/** Kills the process tree of `pid` (Windows: `taskkill /T /F`; elsewhere its process group). */
+/**
+ * Kills the process tree of `pid` at once (Windows: `taskkill /T /F`). Elsewhere: its process
+ * group and every descendant, since serve starts Vite and the function host in process groups of
+ * their own, which a killed serve can't end.
+ */
 export function killTree(pid: number): void {
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
     return;
   }
-  for (const target of [-pid, pid]) {
+  const descendants = descendantsOf(pid);
+  for (const target of [-pid, pid, ...descendants.flatMap((child) => [-child, child])]) {
     try {
       process.kill(target, 'SIGKILL');
     } catch {
-      // Already gone.
+      // Already gone, or not a group leader.
     }
   }
+}
+
+/** Every process `pid` started, and those they started (Unix, from `ps`). */
+function descendantsOf(pid: number): number[] {
+  const out = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).stdout ?? '';
+  const children = new Map<number, number[]>();
+  for (const line of out.split('\n')) {
+    const [child, parent] = line.trim().split(/\s+/).map(Number);
+    if (!Number.isInteger(child) || !Number.isInteger(parent)) continue;
+    children.set(parent, [...(children.get(parent) ?? []), child]);
+  }
+  const found: number[] = [];
+  const queue = [pid];
+  while (queue.length) {
+    for (const child of children.get(queue.pop()!) ?? []) {
+      if (child === pid || found.includes(child)) continue;
+      found.push(child);
+      queue.push(child);
+    }
+  }
+  return found;
 }
 
 /** The executable name of a running process, or null when there is none with that PID. */

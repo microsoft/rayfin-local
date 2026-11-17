@@ -2,7 +2,7 @@
 
 This note is the design of rayfin-local's Category A connectors: `fabric-sqldatabase`, `fabric-warehouse` and `fabric-sqlanalytics`.
 It covers the contract the SDK expects, how the GraphQL schema derives from the connector's files, how rayfin-local finds and signs in to the database, and where it differs from Fabric.
-The sources of truth are the SDK 1.36.2 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
+The sources of truth are the SDK 2.0.0 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
 
 ## Contents
 
@@ -64,8 +64,9 @@ The answers are DAB's, as for the data API (`/graphql`):
 - The data shapes: `{ "data": { "<field>": { "items": [...], "hasNextPage": …, "endCursor": … } } }` for lists, an object or `null` for `_by_pk`, `{ "items": [...] }` for to-many relationships.
 - Values: UUIDs in lowercase, dates as `YYYY-MM-DDTHH:MM:SS.fffZ` (UTC), decimals and integers as numbers, booleans as `true`/`false`.
 - Cursors: DAB's base64 JSON of the order-by values, then the key columns.
-- Errors: Hot Chocolate's envelope with DAB's messages and codes (`AUTH_NOT_AUTHORIZED`, `AuthorizationCheckFailed`, `ItemNotFound`, `DatabasePolicyFailure`, `DatabaseOperationFailed`, …), with HTTP 200.
-- HTTP statuses: 400 for an unreadable request, 401 `invalid_token` for a bad token, 401 `authentication_required` for a token-less request that needs a signed-in user, 403 for a missing publishable key (checked before the route).
+- Authorization errors: HTTP 200 with BaaS's sanitized codes: `AUTH_NOT_AUTHORIZED` for a schema/directive denial, `Forbidden` for a field or missing-claim denial, and `BadRequest` for rejected creates or policy-filtered updates.
+- HTTP statuses: 400 for an unreadable request, 401 `invalid_token` for a bad token, 403 for a missing publishable key (checked before the route).
+  A valid anonymous caller lacking a grant receives an HTTP 200 GraphQL authorization denial.
 - The SDK throws on `errors` (`GraphQL errors: <message>`); mutations that answer `null` throw `MUTATION_NO_RESULT`.
 
 ## The schema
@@ -117,13 +118,14 @@ sequenceDiagram
 - **Values** come back as SQL Server formats them and are rewritten to DAB's (dates to `…fffZ`, `datetimeoffset` to UTC); the cursor keeps the database's precision.
 - **Mutations** run in a transaction.
   On a SQL database, `INSERT … OUTPUT INSERTED.<key>` (or `UPDATE … OUTPUT …`) returns the key, and the row is read back with the read grant and policy; a delete reads the row first.
-  The action's policy is in the write's `WHERE`; a create's is checked on the candidate row, as for data entities.
+  Update/delete policies constrain the existing row in the write's `WHERE`; create policies check supplied values and reject omitted referenced fields before database defaults apply.
+  A read-policy-hidden response is null after committing the write; no read grant gives a post-commit `Forbidden`.
 
 ## Finding and signing in to the database
 
 ### Which item, which server
 
-rayfin-local resolves the item in `rayfin.yml` to its TDS server and database with the Fabric REST API, as `rayfin connector add` does (CLI 1.36.2 `SqlEndpointManager`):
+rayfin-local resolves the item in `rayfin.yml` to its TDS server and database with the Fabric REST API, as `rayfin connector add` does (CLI 2.0.0 `SqlEndpointManager`):
 
 | Type | `config.itemId` that `connector add` records | Request | Server | Database |
 | --- | --- | --- | --- | --- |
@@ -153,7 +155,12 @@ The answer is cached in `.rayfin-local/cache/connectors/<name>.json` for that ty
 
 ### When it fails
 
-Failures answer HTTP 200 with a GraphQL error whose message says what to do, and `serve` logs the same line:
+Execution failures answer HTTP 200 with Fabric's GraphQL error policy: known SQL client
+faults get curated `BadRequest` messages; other failures use `InternalServerError` and
+`An internal execution error occured`. SQL messages and object names never appear in
+`extensions.detail`. Partial data, locations, and paths are preserved.
+
+The full diagnostic and remediation stay in `serve` output, with credentials redacted:
 
 | Failure | Message |
 | --- | --- |
@@ -163,8 +170,8 @@ Failures answer HTTP 200 with a GraphQL error whose message says what to do, and
 | A firewall rule refuses your address (40615) | Connect from an allowed network, or ask the owner to allow your address. |
 | The database is busy, paused or unavailable (40613, 40501, …) | Try again; a paused Fabric capacity must be resumed first. |
 | The server can't be reached (network, DNS, TCP 1433 blocked) | Check the network, VPN and firewall. |
-| A statement fails in the database (an entity out of step with its table, a constraint) | DAB's `DatabaseOperationFailed` error, with the server's message as `extensions.detail` (for example `Invalid column name 'zip'`). |
-| The entities can't be analyzed (a TypeScript error) | 500 `CONNECTOR_MISCONFIGURED` with the analyzer's message, and a warning when they are analyzed (at startup, and after each change). |
+| A statement fails in the database (an entity out of step with its table, a constraint) | The SQL error number and redacted server message. The wire response uses the GraphQL workload's vetted number-to-message mapping. |
+| The entities can't be analyzed (a TypeScript error) | Analyzer diagnostics at startup and after changes; requests get a masked HTTP 500 `{"error":{"code":"InternalServerError","message":"An internal execution error occured"}}`. |
 
 ## Identity
 
@@ -199,7 +206,7 @@ Keep `serve` on loopback (the default): anyone who can reach the backend acts on
 - `crates/rl-model/tests/connector_model.rs` and `analyze_js.rs`: the model of the `inventory` connector of `tests/fixtures/apps/connectors`, and the helper against its golden analysis.
 - `crates/rl-graphql/tests/tsql.rs`: the schema of that connector per type, and the statements its documents become, on a fake database.
 - `crates/rl-connectors/tests/sql_server.rs`: the routes against a real SQL Server (queries, roles and policies, composite and keyless keys, mutations per type, failures).
-- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 1.36.2 client with the fixture's entity classes against the same.
+- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 2.0.0 client with the fixture's entity classes against the same.
 - `crates/rl-connectors/tests/real_fabric_sql.rs` (ignored): a read-only query of a real Fabric SQL database, Warehouse or SQL analytics endpoint as you.
 - `crates/rl-connectors/src/sql/tds.rs`'s unit tests: the driver patches are in place (the PRELOGIN's `TRACEID`, an empty `TRACEID` in the server's answer, the routed host).
 

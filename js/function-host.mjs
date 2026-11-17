@@ -407,10 +407,10 @@ async function runInvocation(request) {
     return { ok: true, response };
   } catch (error) {
     const described = describeError(error);
+    // The error itself goes to rayfin-local, which logs it with secrets redacted.
     writeLine(
       stderr,
-      `Executed 'Functions.${metadata.name}' (Failed, Id=${invocationId}, Duration=${elapsed()}ms)\n` +
-        `${described.stack ?? `${described.name}: ${described.message}`}`,
+      `Executed 'Functions.${metadata.name}' (Failed, Id=${invocationId}, Duration=${elapsed()}ms)`,
     );
     return { ok: false, error: { kind: 'failed', ...described } };
   }

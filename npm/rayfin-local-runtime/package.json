@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/rayfin-local-runtime",
-  "version": "0.2.8",
+  "version": "0.3.1",
   "description": "In-process Rayfin local runtime and independently usable CLI binary.",
   "license": "MIT",
   "repository": {
@@ -26,10 +26,10 @@
     "test": "node --test test/*.test.cjs"
   },
   "optionalDependencies": {
-    "@microsoft/rayfin-local-runtime-darwin-arm64": "0.2.8",
-    "@microsoft/rayfin-local-runtime-darwin-x64": "0.2.8",
-    "@microsoft/rayfin-local-runtime-linux-arm64-gnu": "0.2.8",
-    "@microsoft/rayfin-local-runtime-linux-x64-gnu": "0.2.8",
-    "@microsoft/rayfin-local-runtime-win32-x64-msvc": "0.2.8"
+    "@microsoft/rayfin-local-runtime-darwin-arm64": "0.3.1",
+    "@microsoft/rayfin-local-runtime-darwin-x64": "0.3.1",
+    "@microsoft/rayfin-local-runtime-linux-arm64-gnu": "0.3.1",
+    "@microsoft/rayfin-local-runtime-linux-x64-gnu": "0.3.1",
+    "@microsoft/rayfin-local-runtime-win32-x64-msvc": "0.3.1"
   }
 }

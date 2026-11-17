@@ -17,7 +17,7 @@ installs signal handlers or enables this document's HTTP control API. The packag
 `rayfin-local version --json` prints one JSON object and exits 0:
 
 ```json
-{"version":"0.2.0","contract":1,"sdk":{"supported":">=1.36.0 <1.37.0","tested":"1.36.2"}}
+{"version":"0.2.0","contract":1,"sdk":{"supported":">=2.0.0 <2.1.0","tested":"2.0.0"}}
 ```
 
 - `contract` is the version of this contract.
@@ -79,7 +79,7 @@ The app model was analyzed (at start, and after each live change of the entity s
 With a data package (`services.data.buildCommand`), its build command runs first, as at start, after changes of its sources or of `services.data`, and for `POST /reload`; a failed build is an `analysis` with `ok: false`.
 
 ```json
-{"v":1,"type":"analysis","time":"…","ok":true,"sdk":{"version":"1.36.2","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}
+{"v":1,"type":"analysis","time":"…","ok":true,"sdk":{"version":"2.0.0","supported":true},"entities":["Note","Tag"],"storageFolders":[],"message":null}
 ```
 
 - `ok: false` with `message` when the analysis failed (a compile error in `rayfin/data`, a failed data build).
@@ -143,7 +143,7 @@ It comes again after each `config-changed` that applied, with the new features; 
   "dataDir": "C:\\apps\\notes\\.rayfin-local",
   "signInAs": {"kind": "developer"},
   "openSignIn": false,
-  "sdk": {"version": "1.36.2", "supported": true},
+  "sdk": {"version": "2.0.0", "supported": true},
   "features": {
     "data": {"enabled": true, "entities": ["Note", "Tag"]},
     "functions": {"enabled": true, "names": ["getBacklog"]},
@@ -172,7 +172,7 @@ It comes again after each `config-changed` that applied, with the new features; 
 {"v":1,"type":"config-changed","time":"…","applied":true,"restartRequired":false,"what":["storage","functions"],"message":null}
 ```
 
-- `what` lists what changed: `auth` (`services.auth`, `[auth]`), `name`, `data`, `functions` (`services.functions`, `[functions]`), `storage` (`services.storage`, the storage folders), `connectors` (the connectors, their entities, `[connectors]`), `secrets` (the declared secrets, their values) and `fabric` (`[fabric]`) apply while serving; `frontend` (`services.staticHosting` moving the app, `[frontend]`), `server` (`[server]`) and `tokens` (`[tokens]`) need a restart.
+- `what` lists what changed: `auth` (`services.auth`, `[auth]`), `name`, `data`, `functions` (`services.functions`, `[functions]`), `storage` (`services.storage`, the storage folders), `connectors` (the connectors, their entities, `[connectors]`), `secrets` (the declared secrets, their values), `fabric` (`[fabric]`), `telemetry` (`services.telemetry`, `[telemetry]`), and `staticHosting` (`assetAccess`) apply while serving; `frontend` (`services.staticHosting` moving the app, `[frontend]`), `server` (`[server]`) and `tokens` (`[tokens]`) need a restart.
   Settings set by a command-line flag don't count.
 - `applied: true`: the services were rebuilt on the same ports, and a new `ready` event follows with the new features.
   The listeners, the database, the users and their sessions, the signing keys and the [sign-in identity](#automatic-sign-in) (unless `[auth] sign_in_as` changed) stay, and so does the [control API](#control-api).
@@ -357,7 +357,7 @@ Content-Type: application/json
 ```
 
 The same works for `POST /functions/<name>/invoke`, `POST /connector-invoke/<name>` and `POST /connectors/<name>/graphql`.
-Leave out `Authorization` to call as an anonymous user.
+Leave out `Authorization` to call as an anonymous user; functions refuse anonymous callers (403 `FUNCTION_ACCESS_DENIED`), as in Fabric.
 
 ## Local secret values
 

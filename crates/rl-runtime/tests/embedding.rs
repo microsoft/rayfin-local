@@ -9,7 +9,7 @@ use serde_json::json;
 async fn serving_does_not_install_a_global_provider_or_change_host_environment() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/apps/basic");
     if !project.join("node_modules/@microsoft/rayfin-core").is_dir() {
-        eprintln!("skipped: install tests/fixtures/apps/basic's npm packages");
+        rl_test_support::skip("install tests/fixtures/apps/basic's npm packages");
         return;
     }
     let state = tempfile::tempdir().unwrap();

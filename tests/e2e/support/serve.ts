@@ -167,14 +167,26 @@ export class ServeProcess {
     return this.#output.replace(ANSI, '');
   }
 
-  /** Kills the process tree and checks that its ports are free again. */
+  /** Stops the server and checks that its ports are free again. */
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
     process.off('exit', this.#killOnExit);
     if (this.#child.exitCode === null && this.#child.signalCode === null) {
-      killTree(this.info.pid);
-      const exited = await Promise.race([this.#exited.then(() => true), sleep(15_000).then(() => false)]);
+      // Elsewhere than Windows, SIGTERM first: serve then stops Vite and the function host itself.
+      let exited = false;
+      if (process.platform !== 'win32') {
+        try {
+          process.kill(this.info.pid, 'SIGTERM');
+        } catch {
+          // Already gone.
+        }
+        exited = await Promise.race([this.#exited.then(() => true), sleep(10_000).then(() => false)]);
+      }
+      if (!exited) {
+        killTree(this.info.pid);
+        exited = await Promise.race([this.#exited.then(() => true), sleep(15_000).then(() => false)]);
+      }
       if (!exited) throw new Error(`rayfin-local (pid ${this.info.pid}) did not exit after it was killed.`);
     }
     forgetPid(this.info.pid);

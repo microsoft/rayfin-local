@@ -118,27 +118,13 @@ impl Object {
         })
     }
 
-    /// What rule checks see as `item`: the app fields and the intrinsic fields (which win).
+    /// What checks see: declared metadata and the sole policy intrinsic, `owner_id` (which wins).
     pub(crate) fn item(&self) -> Map<String, Value> {
         let mut item = self.fields.clone();
-        let intrinsic = json!({
-            "id": self.id,
-            "owner_id": self.owner_id,
-            "folder": self.folder,
-            "path": self.path,
-            "name": self.name,
-            "size": self.size,
-            "content_type": self.content_type,
-            "content_disposition": self.content_disposition,
-            "cache_control": self.cache_control,
-            "etag": self.etag,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "last_accessed_at": null,
-        });
-        if let Value::Object(intrinsic) = intrinsic {
-            item.extend(intrinsic);
-        }
+        item.insert(
+            "owner_id".into(),
+            self.owner_id.clone().map_or(Value::Null, Value::String),
+        );
         item
     }
 

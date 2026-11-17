@@ -102,7 +102,7 @@ async fn prerequisites() -> Option<(NodeRuntime, PathBuf)> {
     match NodeRuntime::discover().await {
         Ok(node) => Some((node, explorer)),
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             None
         }
     }
@@ -318,7 +318,17 @@ impl Backend {
                 "/api/auth/v1/brokered/token",
                 post(|| async { Json(session("from-the-entra-exchange")) }),
             );
-        let router = rl_server::build_router(config, vec![routes]);
+        let router = rl_server::build_router_with_hosting(
+            config,
+            vec![routes],
+            rl_server::HostingOptions {
+                telemetry_enabled: true,
+                application_insights_connection_string: Some(
+                    "InstrumentationKey=local-test".into(),
+                ),
+                ..Default::default()
+            },
+        );
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let task = tokio::spawn(rl_server::serve(router, listeners, async {
             let _ = stopped.await;
@@ -377,11 +387,13 @@ async fn wait_until_port_is_free(port: u16) -> bool {
 /// The runtime config `rayfinLocalDev()` (or the shim) serves: this origin and the local values.
 fn expected_runtime_config(vite: &str, backend: &str) -> Value {
     json!({
+        "serviceMode": "fabric",
         "apiUrl": vite,
         "publishableKey": KEY,
         "workspaceId": WORKSPACE,
         "itemId": ITEM,
         "portalUrl": format!("{backend}/.rayfin-local/portal"),
+        "applicationInsightsConnectionString": "InstrumentationKey=local-test",
     })
 }
 
@@ -536,15 +548,15 @@ async fn the_dev_server_signs_the_app_in_before_rayfin_local_dev_does() {
     let node = match NodeRuntime::discover().await {
         Ok(node) => node,
         Err(error) => {
-            eprintln!("skipped: {error}");
+            rl_test_support::skip(format_args!("{error}"));
             return;
         }
     };
     let apps = vite_apps();
     if apps.is_empty() {
-        eprintln!(
-            "skipped: no app has Vite and @microsoft/rayfin-local-dev installed (run `npm ci` in \
-             tests/fixtures/apps/basic)"
+        rl_test_support::skip(
+            "no app has Vite and @microsoft/rayfin-local-dev installed (run `npm ci` in \
+             tests/fixtures/apps/basic)",
         );
     }
     for app in apps {

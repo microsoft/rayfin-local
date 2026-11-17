@@ -49,6 +49,7 @@ walkdir.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+rl-test-support.workspace = true
 tower.workspace = true
 base64.workspace = true
 http-body-util.workspace = true

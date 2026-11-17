@@ -15,7 +15,7 @@ export const SESSION_STAMP_KEY = 'rayfin-local:session-stamp';
  * Forgets the SDK's stored session and sign-in state unless `storage` is stamped with `stamp`,
  * then stamps it; other keys stay. Returns whether it forgot them.
  *
- * @microsoft/rayfin-auth 1.36 keeps the session in `authSession` and PKCE states in
+ * @microsoft/rayfin-auth 2.0 keeps the session in `authSession` and PKCE states in
  * `rayfin_pkce_<state>`, both after `<storageKeyPrefix>_` when the app sets a prefix.
  *
  * Runs in the page as its source text, so it uses nothing from outside.
