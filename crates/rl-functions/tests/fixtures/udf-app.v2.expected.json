@@ -1,0 +1,383 @@
+{
+  "schemaVersion": "3.0",
+  "functions": [
+    {
+      "functionName": "ping",
+      "delegateParameters": [],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "whoAmI",
+      "delegateParameters": [
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "addNote",
+      "delegateParameters": [
+        {
+          "name": "text",
+          "type": "string",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "pinned",
+          "type": "boolean",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        },
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 2,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "Sql"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "askAgent",
+      "delegateParameters": [
+        {
+          "name": "question",
+          "type": "string",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "ADO",
+        "AzureAI"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "search",
+      "delegateParameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "optional": true,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        },
+        {
+          "name": "offset",
+          "optional": false,
+          "hasDefault": true,
+          "position": 2,
+          "isFabricParameter": false
+        },
+        {
+          "name": "tags",
+          "type": "string[]",
+          "optional": false,
+          "hasDefault": false,
+          "position": 3,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "filterItems",
+      "delegateParameters": [
+        {
+          "name": "filter",
+          "type": "{ status: 'open' | 'closed'; tags?: string[] }",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "ids",
+          "type": "number[]",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        },
+        {
+          "name": "mode",
+          "type": "'fast' | 'full' | null",
+          "optional": false,
+          "hasDefault": false,
+          "position": 2,
+          "isFabricParameter": false
+        },
+        {
+          "name": "rows",
+          "type": "Array<Record<string, unknown>>",
+          "optional": false,
+          "hasDefault": false,
+          "position": 3,
+          "isFabricParameter": false
+        },
+        {
+          "name": "when",
+          "type": "Date | string",
+          "optional": false,
+          "hasDefault": false,
+          "position": 4,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "backlog",
+      "delegateParameters": [
+        {
+          "name": "refresh",
+          "type": "boolean",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "ADO"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "legacyContext",
+      "delegateParameters": [
+        {
+          "name": "context",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": true,
+          "fabricParameterType": "RayfinContext"
+        }
+      ],
+      "contextAudiences": [
+        "Fabric",
+        "Storage"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "lakeFile",
+      "delegateParameters": [
+        {
+          "name": "lakeConnection",
+          "type": "FabricItem",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": true,
+          "fabricParameterType": "FabricItem"
+        },
+        {
+          "name": "path",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        },
+        {
+          "name": "verbose",
+          "type": "boolean",
+          "optional": false,
+          "hasDefault": true,
+          "position": 2,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "namespaced",
+      "delegateParameters": [
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "Sql"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "nothingDeclared",
+      "delegateParameters": [
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "report",
+      "delegateParameters": [
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": [
+        "sql"
+      ]
+    },
+    {
+      "functionName": "aliasedReport",
+      "delegateParameters": [
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "Sql"
+      ],
+      "capabilities": [
+        "sql"
+      ]
+    },
+    {
+      "functionName": "destructured",
+      "delegateParameters": [
+        {
+          "name": "{ a, b }",
+          "type": "{ a: string; b: number }",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "legacyStyle",
+      "delegateParameters": [
+        {
+          "name": "id",
+          "type": "number",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        },
+        {
+          "name": "ctx",
+          "type": "RayfinContext",
+          "optional": false,
+          "hasDefault": false,
+          "position": 1,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [
+        "Fabric"
+      ],
+      "capabilities": []
+    },
+    {
+      "functionName": "syncHandler",
+      "delegateParameters": [
+        {
+          "name": "flag",
+          "type": "boolean",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    },
+    {
+      "functionName": "arrowNoAsync",
+      "delegateParameters": [
+        {
+          "name": "x",
+          "type": "string",
+          "optional": false,
+          "hasDefault": false,
+          "position": 0,
+          "isFabricParameter": false
+        }
+      ],
+      "contextAudiences": [],
+      "capabilities": []
+    }
+  ]
+}

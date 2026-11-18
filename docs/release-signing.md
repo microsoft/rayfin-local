@@ -64,7 +64,7 @@ crates.io and npm publishing remain out of scope.
 
 An on-demand PR test release uses the `testReleasePr` queue parameter and requires the PR's explicit `release-test` label.
 That mode publishes a Windows-only prerelease named `v<base version>-alpha.<ADO build ID>` directly, never marking it latest.
-The current base version produces names such as `v0.3.2-alpha.21422341`.
+The current base version produces names such as `v0.3.3-alpha.21422341`.
 GitHub Actions release publishing has been removed; there is no unsigned publishing path.
 New releases require a verified signed Windows x64 artifact; no Unix assets are published while those paths are disabled.
 Stable main releases become latest; prerelease versions and PR-test alphas never do.

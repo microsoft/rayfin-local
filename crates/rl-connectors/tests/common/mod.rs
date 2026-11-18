@@ -5,7 +5,6 @@
 pub mod sql;
 
 use std::{
-    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
@@ -446,19 +445,6 @@ pub async fn post(
 
 pub fn json_body(body: &Bytes) -> Value {
     serde_json::from_slice(body).unwrap()
-}
-
-/// The basic fixture's `node_modules` with the Rayfin SDK 2.0.0: `RAYFIN_SDK_NODE_MODULES`, else
-/// `tests/fixtures/apps/basic`. `None` when it isn't installed.
-pub fn sdk_node_modules() -> Option<PathBuf> {
-    let path = std::env::var_os("RAYFIN_SDK_NODE_MODULES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fixtures/apps/basic/node_modules")
-        });
-    let marker = path.join("@microsoft/rayfin-connector-fabric-semanticmodel/package.json");
-    marker.is_file().then_some(path)
 }
 
 /// `az account get-access-token --scope <scope>`.

@@ -19,7 +19,8 @@ test('lockfiles resolve every package from the 1es-public feed', () => {
   assert.ok(lockfiles.length > 0, 'no package-lock.json files found');
   const elsewhere = lockfiles.flatMap((file) =>
     Object.entries(JSON.parse(readFileSync(path.join(ROOT, file), 'utf8')).packages ?? {})
-      .filter(([, entry]) => entry.resolved && !entry.resolved.startsWith(FEED))
+      // Workspace links (`"link": true`) resolve to a folder of the package, not a registry.
+      .filter(([, entry]) => entry.resolved && !entry.link && !entry.resolved.startsWith(FEED))
       .map(([name, entry]) => `${file}: ${name} -> ${entry.resolved}`),
   );
   assert.deepEqual(elsewhere, [], `regenerate these with npm's registry set to ${FEED}`);
