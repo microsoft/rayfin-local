@@ -7,13 +7,18 @@ import { checkSource, targets, linuxFingerprint, appleTeam } from './unix-releas
 
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 
-export function assemble(workspace, destination, { commit, buildId, tag }) {
+export const allPlatforms = ['windows', ...Object.keys(targets)];
+
+export function assemble(workspace, destination, { commit, buildId, tag, platforms: selected = allPlatforms }) {
+  assert.ok(selected.includes('windows'), 'Every release includes Windows');
+  assert.ok(selected.every(platform => allPlatforms.includes(platform)), `Unknown platform in ${selected}`);
   const windowsDirectory = join(workspace, 'windows-signed');
   const windows = JSON.parse(readFileSync(join(windowsDirectory, 'windows-signing.json'), 'utf8'));
   const version = windows.version;
   assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   assert.equal(tag, `v${version}`);
-  const platforms = { windows: 'x86_64-pc-windows-msvc', ...targets };
+  const platforms = Object.fromEntries(Object.entries({ windows: 'x86_64-pc-windows-msvc', ...targets })
+    .filter(([platform]) => selected.includes(platform)));
   mkdirSync(destination);
   const sums = [];
   for (const [platform, target] of Object.entries(platforms)) {
@@ -44,8 +49,8 @@ export function assemble(workspace, destination, { commit, buildId, tag }) {
       copyFileSync(join(directory, `${archive}.sig`), join(destination, `${archive}.sig`));
       sums.push(`${metadata.signatureSha256}  ${archive}.sig`);
       copyFileSync(join(directory, 'microsoft.asc'), join(destination, 'microsoft.asc'));
-      copyFileSync(join(directory, 'install.sh'), join(destination, 'install.sh'));
     }
+    if (platform !== 'windows') copyFileSync(join(directory, 'install.sh'), join(destination, 'install.sh'));
   }
   copyFileSync(join(windowsDirectory, 'install.ps1'), join(destination, 'install.ps1'));
   writeFileSync(join(destination, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
@@ -54,5 +59,6 @@ export function assemble(workspace, destination, { commit, buildId, tag }) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   assemble(process.env.PIPELINE_WORKSPACE, join(process.env.PIPELINE_WORKSPACE, 'release'), {
     commit: process.env.BUILD_SOURCEVERSION, buildId: process.env.BUILD_BUILDID, tag: process.env.RELEASE_TAG,
+    platforms: process.env.RELEASE_PLATFORMS ? process.env.RELEASE_PLATFORMS.split(',') : allPlatforms,
   });
 }

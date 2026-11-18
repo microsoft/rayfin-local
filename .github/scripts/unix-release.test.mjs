@@ -157,7 +157,7 @@ for (const platform of process.platform === 'darwin' ? ['macos', 'linux'] : ['li
   }, () => checkPackaging(platform));
 }
 
-test('publication requires all three exact-build signed artifacts and matching hashes', () => {
+test('publication requires every selected exact-build signed artifact and matching hashes', () => {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-assemble-'));
   const source = { commit: 'a'.repeat(40), buildId: '123', version: '0.2.9' };
   const expected = { commit: source.commit, buildId: source.buildId, tag: 'v0.2.9' };
@@ -177,11 +177,13 @@ test('publication requires all three exact-build signed artifacts and matching h
       if (platform === 'linux') {
         writeFileSync(join(directory, `${archive}.sig`), 'signature');
         writeFileSync(join(directory, 'microsoft.asc'), 'public-key-fixture');
-        writeFileSync(join(directory, 'install.sh'), 'installer-fixture');
         Object.assign(metadata, { signatureSha256: hash('signature'), fingerprint: linuxFingerprint });
       } else if (platform === 'macos') Object.assign(metadata, { notarized: true, teamId: 'UBF8T346G9' });
       else writeFileSync(join(directory, 'install.ps1'), 'installer-fixture');
-      if (platform !== 'windows') metadata.nativeExecutionTested = false;
+      if (platform !== 'windows') {
+        metadata.nativeExecutionTested = false;
+        writeFileSync(join(directory, 'install.sh'), 'installer-fixture');
+      }
       records[platform] = metadata;
       record(platform, metadata);
     }
@@ -197,6 +199,14 @@ test('publication requires all three exact-build signed artifacts and matching h
     record('macos', records.macos);
     rmSync(join(root, 'linux-signed', `${records.linux.archiveFile}.sig`));
     assert.throws(() => assemble(root, join(root, 'missing-signature'), expected));
+    rmSync(join(root, 'linux-signed'), { recursive: true });
+    assemble(root, join(root, 'windows-macos'), { ...expected, platforms: ['windows', 'macos'] });
+    assert.deepEqual(readFileSync(join(root, 'windows-macos', 'SHA256SUMS.txt'), 'utf8').trim().split('\n'),
+      [records.windows, records.macos].map(r => `${r.archiveSha256}  ${r.archiveFile}`));
+    assert.equal(existsSync(join(root, 'windows-macos', 'install.sh')), true);
+    assert.equal(existsSync(join(root, 'windows-macos', 'microsoft.asc')), false);
+    assert.throws(() => assemble(root, join(root, 'no-macos'), expected), /linux-signed/);
+    assert.throws(() => assemble(root, join(root, 'no-windows'), { ...expected, platforms: ['macos'] }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

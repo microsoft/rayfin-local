@@ -145,7 +145,9 @@ function main() {
     assert.equal(run('lipo', ['-archs', binary]).stdout, 'arm64');
     run('codesign', ['--verify', '--strict', '--all-architectures', '--verbose=2', binary]);
     verifyAppleIdentity(run('codesign', ['--display', '--verbose=4', binary]).stderr);
-    const assessment = run('spctl', ['--assess', '--type', 'execute', '--verbose=4', binary]);
+    // `--type execute` only accepts app bundles; a bare CLI executable is assessed by its own signature.
+    const assessment = run('spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature',
+      '--verbose=4', binary]);
     assert.match(`${assessment.stdout}\n${assessment.stderr}`, /source=Notarized Developer ID/);
   } else {
     assert.equal(hash(binary), source.binarySha256, 'Linux executable changed after packaging');
