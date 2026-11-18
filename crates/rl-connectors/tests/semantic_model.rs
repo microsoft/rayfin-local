@@ -45,7 +45,7 @@ async fn streams_power_bis_arrow_answer_unchanged() {
     assert_eq!(request.method, "POST");
     assert_eq!(
         request.path,
-        format!("/v1.0/myorg/groups/{WORKSPACE}/datasets/{ITEM}/executeDaxQueries")
+        format!("/v1.0/myorg/datasets/{ITEM}/executeDaxQueries")
     );
     assert_eq!(request.header("authorization"), "Bearer dev-token");
     assert_eq!(
@@ -111,26 +111,27 @@ async fn sends_power_bi_only_the_options_the_input_defines() {
 }
 
 #[tokio::test]
-async fn my_workspace_models_have_no_groups_segment() {
+async fn models_are_queried_on_their_own_route_whatever_their_workspace() {
     let power_bi = MockPowerBi::start().await;
     let app = app(&power_bi.base_url);
 
-    // `mine` lists no operations: every operation of the type is allowed.
-    let input = json!({ "query": ROW_QUERY });
-    let (status, ..) = post(
-        &app,
-        "/connector-invoke/mine",
-        Some(SESSION),
-        execute_query(input),
-    )
-    .await;
+    // `sales` is in a workspace, `mine` in My Workspace (it lists no operations: every operation
+    // of the type is allowed).
+    for connector in ["sales", "mine"] {
+        let input = json!({ "query": ROW_QUERY });
+        let (status, ..) = post(
+            &app,
+            &format!("/connector-invoke/{connector}"),
+            Some(SESSION),
+            execute_query(input),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{connector}");
+    }
 
-    assert_eq!(status, StatusCode::OK);
-    let [request] = power_bi.requests().try_into().unwrap();
-    assert_eq!(
-        request.path,
-        format!("/v1.0/myorg/datasets/{ITEM}/executeDaxQueries")
-    );
+    let paths: Vec<String> = power_bi.requests().into_iter().map(|r| r.path).collect();
+    let route = format!("/v1.0/myorg/datasets/{ITEM}/executeDaxQueries");
+    assert_eq!(paths, [route.as_str(), route.as_str()]);
 }
 
 /// The `responseError` and `requestId` of a failed-query envelope, after checking the envelope.
@@ -295,7 +296,7 @@ async fn tokens_without_a_dataset_scope_fall_back_to_execute_queries() {
     );
     assert_eq!(
         requests[1].path,
-        format!("/v1.0/myorg/groups/{WORKSPACE}/datasets/{ITEM}/executeQueries")
+        format!("/v1.0/myorg/datasets/{ITEM}/executeQueries")
     );
     assert_eq!(
         requests[1].body,

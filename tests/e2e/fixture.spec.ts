@@ -26,7 +26,6 @@ import { ServeProcess } from './support/serve.ts';
  */
 
 const DAX_QUERY = 'EVALUATE ROW("answer", 42)';
-const WORKSPACE_ID = '00000000-0000-0000-0000-00000000aaaa';
 const ITEM_ID = '00000000-0000-0000-0000-00000000bbbb';
 
 test('config: the app talks to the local backend', async ({ app }, testInfo) => {
@@ -195,7 +194,7 @@ test('connector-query: the semantic model answers through Power BI (mock)', asyn
   for (const request of requests) {
     expect(request).toMatchObject({ method: 'POST', query: DAX_QUERY, hasAuthorization: true });
     expect(request.path).toMatch(
-      new RegExp(`^/v1\\.0/myorg/groups/${WORKSPACE_ID}/datasets/${ITEM_ID}/(executeDaxQueries|executeQueries)$`),
+      new RegExp(`^/v1\\.0/myorg/datasets/${ITEM_ID}/(executeDaxQueries|executeQueries)$`),
     );
     expect(request.tokenMatches, 'the bearer token is RAYFIN_LOCAL_TOKEN_POWERBI').toBe(true);
   }

@@ -385,6 +385,7 @@ A missing token doesn't fail the invocation: reading that audience's token throw
 
 `rl-connectors` looks up the connector in `rayfin.yml` and checks the operation is declared, in the deployed route's order.
 For `fabric-semanticmodel`, it requires a signed-in caller, gets a Power BI token from the `TokenSource`, and sends the query to Power BI's `executeDaxQueries` the way the SDK's direct path does, streaming the Arrow answer back unchanged.
+Like the SDK since 2.0, it queries the model's own route (`/v1.0/myorg/datasets/{item}`), so Read and Build on the model are enough: Power BI turns down the workspace's route (`/groups/{workspace}/datasets/{item}`) for someone with no role in the workspace.
 Power BI refuses `executeDaxQueries` to tokens without a dataset scope (Azure CLI tokens), so those queries go to `executeQueries` and come back in the JSON envelope the SDK also accepts.
 When Power BI turns the token down altogether (401), the query is retried once with another sign-in's token (`TokenSource::another_token`, below); a 401 that remains has a hint that says how to consent to the Rayfin CLI querying Power BI.
 Failures come back in the envelope the SDK's normalizer reads, so the app sees the same `QueryError`s as on Fabric.
