@@ -1,13 +1,21 @@
-// The test app: the real `ensureSignedInWithFabric` (SDK 1.36.2) behind a Sign in button, as an
-// app would call it; or, when the local Fabric host frames it (`fabricEmbedded=true`), the real
-// `initEmbeddedAuth` on load. run.mjs bundles it with the SDK from an app's node_modules.
+// The test app: the real `ensureSignedInWithFabric` (SDK 1.36.2 or 2.0.0) behind a Sign in button,
+// as an app would call it; or, when the local Fabric host frames it (`fabricEmbedded=true`), the
+// real `initEmbeddedAuth` on load. run.mjs bundles it with the SDK from an app's node_modules, and
+// defines RL_SDK_MAJOR.
+/* global RL_SDK_MAJOR */
 import { sendBridgeRequest } from '@microsoft/fabric-embedded-host';
 import { ensureSignedInWithFabric, initEmbeddedAuth } from '@microsoft/rayfin-auth-provider-fabric';
+import * as rayfinAuth from '@microsoft/rayfin-auth';
 import { RayfinClient } from '@microsoft/rayfin-client';
 
 const params = new URLSearchParams(location.search);
 const apiUrl = params.get('api');
-const client = new RayfinClient({ baseUrl: apiUrl, publishableKey: params.get('pk') });
+const clientOptions = { baseUrl: apiUrl, publishableKey: params.get('pk') };
+// SDK 2.0 creates the client with an explicit browser session; 1.36 constructs it.
+const client =
+  RL_SDK_MAJOR >= 2
+    ? RayfinClient.create({ ...clientOptions, auth: rayfinAuth.browserSession() })
+    : new RayfinClient(clientOptions);
 const options = {
   workspaceId: params.get('ws'),
   projectId: params.get('item'),

@@ -210,7 +210,7 @@ Keep `serve` on loopback (the default): anyone who can reach the backend acts on
 - `crates/rl-model/tests/connector_model.rs` and `analyze_js.rs`: the model of the `inventory` connector of `tests/fixtures/apps/connectors`, and the helper against its golden analysis.
 - `crates/rl-graphql/tests/tsql.rs`: the schema of that connector per type, and the statements its documents become, on a fake database.
 - `crates/rl-connectors/tests/sql_server.rs`: the routes against a real SQL Server (queries, roles and policies, composite and keyless keys, mutations per type, failures).
-- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 1.36.2 client with the fixture's entity classes against the same.
+- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK client (1.36.2 and 2.0.0) with the fixture's entity classes against the same.
 - `crates/rl-connectors/tests/real_fabric_sql.rs` (ignored): a read-only query of a real Fabric SQL database, Warehouse or SQL analytics endpoint as you.
 - `crates/rl-connectors/src/sql/tds.rs`'s unit tests: the driver patches are in place (the PRELOGIN's `TRACEID`, an empty `TRACEID` in the server's answer, the routed host).
 

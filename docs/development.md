@@ -72,7 +72,7 @@ The `test` job also runs `.github/scripts/*.test.mjs`. `npm-registry.test.mjs` c
 While working on one crate, `cargo test -p <crate>` is quicker; run the check before you push.
 Unit tests sit next to the code (`#[cfg(test)]`); integration tests are in `crates/<crate>/tests/`.
 
-**Strict mode.** The check sets `RAYFIN_LOCAL_TEST_STRICT=1`, and points `RAYFIN_SDK_NODE_MODULES` at the basic fixture's `node_modules`.
+**Strict mode.** The check sets `RAYFIN_LOCAL_TEST_STRICT=1`, and points `RAYFIN_SDK_NODE_MODULES` at the basic fixture's `node_modules` (SDK 1.36) and `RAYFIN_SDK_V2_NODE_MODULES` at the sdk-v2 fixture's (SDK 2.0).
 In strict mode a test that needs Node.js, a fixture's packages or the SDK fails when they are missing, instead of skipping, so a broken setup can't pass for a green run.
 The tests that need what CI doesn't have still skip: an app outside this repository (the variables below), a SQL Server (`RAYFIN_LOCAL_TEST_MSSQL`; CI's `sql-connectors` job has one), and a signed-in Azure CLI.
 Skips go through `rl_test_support::skip` (`crates/rl-test-support`); a new test that needs an optional dependency should too.
@@ -85,10 +85,10 @@ Outside strict mode they print a `skipped: …` note and pass when Node.js or th
 | Test | What it checks | Needs |
 | --- | --- | --- |
 | `rl-graphql` `tests/sdk.rs` | The SDK's data client against the GraphQL API, signed in through `rl-auth`, on the reference app's model. | `npm ci` in `tests/fixtures/apps/basic` |
-| `rl-connectors` `tests/sdk_decode.rs` | The SDK's `fabricSemanticModel()` through rayfin-local, compared with its direct path to the same mock Power BI. | `npm ci` in `tests/fixtures/apps/basic` |
+| `rl-connectors` `tests/sdk_decode.rs` | The SDK's `fabricSemanticModel()` through rayfin-local, compared with its direct path to the same mock Power BI, on both SDK lines. | `npm ci` in `tests/fixtures/apps/basic` and `tests/fixtures/apps/sdk-v2` |
 | `rl-storage` `tests/sdk.rs` | The SDK's `StorageFolderClient` against the storage routes. | `npm install` in `crates/rl-storage/tests/sdk` |
 | `rl-model` `tests/analyze_js.rs` | Golden 1.36 analysis, plus SDK 2.0 data, storage and mapped SQL-connector permissions. | `npm ci` in `tests/fixtures/apps/basic`, `tests/fixtures/apps/connectors` and `tests/fixtures/apps/sdk-v2` |
-| `rl-connectors` `tests/sql_sdk.rs` | The SDK's Category A connector client (`createConnectorsApi` with the entity classes, for a SQL database, a Warehouse and a SQL analytics endpoint) through rayfin-local on a real SQL Server. | `npm install` in `tests/fixtures/apps/connectors`, and [SQL Server](#sql-server-tests) |
+| `rl-connectors` `tests/sql_sdk.rs` | The SDK's Category A connector client (`createConnectorsApi` with the entity classes, for a SQL database, a Warehouse and a SQL analytics endpoint) through rayfin-local on a real SQL Server, on both SDK lines. | `npm ci` in `tests/fixtures/apps/connectors` and `tests/fixtures/apps/sdk-v2`, and [SQL Server](#sql-server-tests) |
 | `rl-functions` `tests/host.rs`, `tests/invoke.rs` | The function host and the invoke routes on `tests/fixtures/functions/basic`, which they install and build on first use; also the reference app's functions when present. | Node.js and npm |
 | `rl-frontend` `tests/vite.rs` | The Vite dev server and the static build, on copies of the reference app and small Vite apps; automatic sign-in answered before `rayfinLocalDev()`'s, on the fixture app and the apps in `RAYFIN_LOCAL_TEST_VITE_APPS`. | The reference app; `npm ci` in `tests/fixtures/apps/basic` |
 | `rayfin-local` `tests/host_contract.rs` | `serve --json` of the fixture app ([embedding.md](embedding.md)): its events from `starting` to `ready`, the app and the backend answering, and a clean stop when stdin closes; with a `--state-dir` outside the project, a backup while it serves, a refused restore, and a restore into a new state folder that `serve` then runs on. Also the composed SDK 2.0 client (`tests/fixtures/apps/sdk-v2`) using auth, data, functions and storage through Vite. | `npm ci` in `tests/fixtures/apps/basic` and `tests/fixtures/apps/sdk-v2` |
@@ -99,7 +99,8 @@ These variables point the tests at what they need:
 
 | Variable | Default |
 | --- | --- |
-| `RAYFIN_SDK_NODE_MODULES` | `tests/fixtures/apps/basic/node_modules`: a `node_modules` with the Rayfin SDK 1.36.2 (SDK 2.0 tests use `tests/fixtures/apps/sdk-v2`). |
+| `RAYFIN_SDK_NODE_MODULES` | `tests/fixtures/apps/basic/node_modules`: a `node_modules` with the Rayfin SDK 1.36.2. |
+| `RAYFIN_SDK_V2_NODE_MODULES` | `tests/fixtures/apps/sdk-v2/node_modules`: a `node_modules` with the Rayfin SDK 2.0.0. The SDK auth, sign-in portal and semantic model tests run on both; other SDK 2.0 tests use `tests/fixtures/apps/sdk-v2` directly. |
 | `RAYFIN_LOCAL_EXPLORER` | `../fabric-apps/apps/explorer`: the reference app, for `rl-frontend`. |
 | `RAYFIN_LOCAL_EXPLORER_FUNCTIONS` | `../fabric-apps/apps/explorer/rayfin/functions`: the reference app's functions, for `rl-functions`. |
 | `RAYFIN_LOCAL_TYPESCRIPT_DIR` | `tests/fixtures/functions/basic` (its TypeScript devDependency), else the reference app's functions: where `rl-functions`' metadata tests resolve `typescript` from. |
@@ -108,7 +109,7 @@ These variables point the tests at what they need:
 | `RAYFIN_LOCAL_NODE` | `node` on `PATH`. |
 
 The defaults are relative to this repository's folder: they expect `fabric-apps` checked out beside it.
-CI's `sdk-compatibility` job installs both SDK fixtures and runs the analyzer, Functions metadata and host-contract tests on Linux and Windows.
+The `test` job's `node scripts/check.mjs rust js` installs both SDK fixtures and runs these tests strict on Linux, Windows and macOS.
 
 ### SQL Server tests
 
@@ -126,8 +127,8 @@ docker rm -f rayfin-local-mssql
 ```
 
 SQL Server takes a few seconds to accept logins after the container starts.
-`sql_sdk.rs` also needs the `connectors` fixture's packages (`npm ci` in `tests/fixtures/apps/connectors`).
-CI's `sql-connectors` job runs both on Linux, with a SQL Server service container.
+`sql_sdk.rs` also needs the SDK fixtures' packages (`npm ci` in `tests/fixtures/apps/connectors` for 1.36 and `tests/fixtures/apps/sdk-v2` for 2.0); it compiles the `connectors` fixture's entities against each line.
+CI's `sql-connectors` job runs both on Linux, with a SQL Server service container, in strict mode.
 
 ### Ignored tests
 

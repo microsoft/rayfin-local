@@ -1,12 +1,12 @@
-//! The real Rayfin SDK (`@microsoft/rayfin-client` 1.36.2, run by Node) against the auth routes:
-//! sign-up, sign-in, refresh, JWKS validation, auth settings, sign-out and 401 → refresh → retry.
+//! The real Rayfin SDK (`@microsoft/rayfin-client` 1.36.2 and 2.0.0, run by Node) against the
+//! auth routes: sign-up, sign-in, refresh, JWKS validation, auth settings, sign-out and
+//! 401 → refresh → retry.
 //!
-//! Ignored by default: it needs Node and the SDK's `node_modules`. Point
-//! `RAYFIN_SDK_NODE_MODULES` at a `node_modules` with the SDK; the default is the explorer app
-//! checked out next to this repository (`../fabric-apps/apps/explorer/node_modules`). Run with
-//! `cargo test -p rl-auth --test sdk -- --ignored`.
+//! Ignored by default: it needs Node and the SDK's `node_modules`, by default the basic (1.36) and
+//! `sdk-v2` (2.0) fixtures' (`RAYFIN_SDK_NODE_MODULES` and `RAYFIN_SDK_V2_NODE_MODULES` override
+//! them). Run with `cargo test -p rl-auth --test sdk -- --ignored`.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use rl_auth::{AuthService, AuthSettings};
 use rl_db::Db;
@@ -17,7 +17,14 @@ const APP_ID: &str = "6c6f6361-6c00-4000-8000-0000000000a1";
 const SCRIPT: &str = r#"
 const { RayfinClient } = await import(process.env.RL_SDK_ENTRY);
 const apiUrl = process.env.RL_API_URL;
-const newClient = () => new RayfinClient({ baseUrl: apiUrl, publishableKey: 'pk-local-test' });
+const options = { baseUrl: apiUrl, publishableKey: 'pk-local-test' };
+// SDK 2.0 creates the client with an explicit auth adapter; 1.36 constructs it.
+const { browserSession } = Number(process.env.RL_SDK_MAJOR) >= 2
+  ? await import(process.env.RL_AUTH_ENTRY)
+  : {};
+const newClient = browserSession
+  ? () => RayfinClient.create({ ...options, auth: browserSession() })
+  : () => new RayfinClient(options);
 const describe = (e) => ({ name: e?.name, code: e?.code, status: e?.status, message: e?.message });
 const attempt = async (run) => {
   try { return { ok: await run() }; } catch (e) { return { error: describe(e) }; }
@@ -65,37 +72,31 @@ out.authenticatedAfterSignOutAll = auth.getSession().isAuthenticated;
 out.thirdRefresh = await attempt(() => third.auth.refreshSession());
 out.thirdAuthenticated = third.auth.getSession().isAuthenticated;
 
-for (const c of [client, other, third]) c.auth.destroy();
+for (const c of [client, other, third]) (browserSession ? c.dispose() : c.auth.destroy());
 console.log('RESULT ' + JSON.stringify(out));
 process.exit(0);
 "#;
 
-fn sdk_entry() -> PathBuf {
-    let node_modules = std::env::var_os("RAYFIN_SDK_NODE_MODULES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../fabric-apps/apps/explorer/node_modules")
-        });
-    let entry = node_modules
-        .join("@microsoft")
-        .join("rayfin-client")
-        .join("dist")
-        .join("index.js");
-    assert!(
-        entry.is_file(),
-        "{} is missing: set RAYFIN_SDK_NODE_MODULES to a node_modules with \
-         @microsoft/rayfin-client 1.36.2",
-        entry.display()
-    );
-    entry
+fn entry_url(node_modules: &Path, package: &str) -> url::Url {
+    let entry = node_modules.join(package).join("dist").join("index.js");
+    url::Url::from_file_path(entry.canonicalize().unwrap()).unwrap()
 }
 
 #[tokio::test]
-#[ignore = "needs Node and @microsoft/rayfin-client 1.36.2 (see the module docs)"]
+#[ignore = "needs Node and @microsoft/rayfin-client 1.36.2 and 2.0.0 (see the module docs)"]
 async fn the_rayfin_sdk_signs_up_in_and_out() {
-    let entry = sdk_entry();
-    let entry_url = url::Url::from_file_path(entry.canonicalize().unwrap()).unwrap();
+    for line in rl_test_support::sdk_lines() {
+        let Some(node_modules) = line.with("@microsoft/rayfin-client") else {
+            continue;
+        };
+        println!("SDK {}", line.version);
+        signs_up_in_and_out(node_modules, line.major()).await;
+    }
+}
+
+async fn signs_up_in_and_out(node_modules: &Path, major: u64) {
+    let client_url = entry_url(node_modules, "@microsoft/rayfin-client");
+    let auth_url = entry_url(node_modules, "@microsoft/rayfin-auth");
 
     let dir = tempfile::tempdir().unwrap();
     let mut settings = AuthSettings::new(APP_ID);
@@ -119,7 +120,9 @@ async fn the_rayfin_sdk_signs_up_in_and_out() {
     std::fs::write(&script, SCRIPT).unwrap();
     let output = tokio::process::Command::new("node")
         .arg(&script)
-        .env("RL_SDK_ENTRY", entry_url.as_str())
+        .env("RL_SDK_ENTRY", client_url.as_str())
+        .env("RL_AUTH_ENTRY", auth_url.as_str())
+        .env("RL_SDK_MAJOR", major.to_string())
         .env("RL_API_URL", format!("http://{address}"))
         .output()
         .await

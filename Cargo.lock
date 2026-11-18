@@ -1798,6 +1798,9 @@ dependencies = [
 [[package]]
 name = "rl-test-support"
 version = "0.3.3"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "rl-tokens"

@@ -1,13 +1,17 @@
-// Runs the real Rayfin SDK 1.36.2 Category A client (`createConnectorsApi` with the connector's
-// entity classes, as an app's `connectorConfig` wires it) against rayfin-local's
+// Runs the real Rayfin SDK Category A client (1.36.2 or 2.0.0: `createConnectorsApi` with the
+// connector's entity classes, as an app's `connectorConfig` wires it) against rayfin-local's
 // /connectors/<name>/graphql route over a real SQL Server, and checks what the app gets back.
 //
 // Started by tests/sql_sdk.rs, which passes the settings in RL_SDK_TEST (JSON): `nodeModules`,
-// `compiled` (the fixture's compiled connector entities), `api`, and the keys of the rows.
+// `sdkMajor`, `compiled` (the fixture's compiled connector entities), `api`, and the keys of the
+// rows.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 
 const cfg = JSON.parse(process.env.RL_SDK_TEST ?? '{}');
+// SDK 2.0 selects a to-many relationship's fields as `stockLevels[].quantity`, and returns date
+// columns as ISO strings instead of Date objects.
+const v2 = cfg.sdkMajor >= 2;
 const load = (path) => import(pathToFileURL(`${cfg.nodeModules}/${path}`).href);
 const { ApiClient } = await load('@microsoft/rayfin-lib/dist/index.js');
 const { createConnectorsApi } = await load('@microsoft/rayfin-connectors/dist/index.js');
@@ -64,7 +68,8 @@ await check('findMany with the default columns', async () => {
 });
 
 await check('select, where, orderBy and dotted relationship paths', async () => {
-  const rows = await alice.inventory.Product.select(['name', 'price', 'category.name', 'stockLevels.quantity'])
+  const stockQuantity = v2 ? 'stockLevels[].quantity' : 'stockLevels.quantity';
+  const rows = await alice.inventory.Product.select(['name', 'price', 'category.name', stockQuantity])
     .where({ inStock: { eq: true } })
     .orderBy({ price: 'desc' })
     .execute();
@@ -74,12 +79,24 @@ await check('select, where, orderBy and dotted relationship paths', async () => 
   assert.deepEqual(rows[0].stockLevels.map((level) => level.quantity).sort(), [0, 5]);
 });
 
-await check('findByKey reads the full row and deserializes dates', async () => {
+/** A date column as the SDK returns it: a Date (1.36) or an ISO string (2.0). */
+function assertDate(value, iso) {
+  if (v2) {
+    assert.equal(typeof value, 'string', `${value}`);
+    if (iso) assert.equal(new Date(value).toISOString(), iso);
+    else assert.ok(!Number.isNaN(Date.parse(value)), `${value}`);
+  } else {
+    assert.ok(value instanceof Date, `${value}`);
+    if (iso) assert.equal(value.toISOString(), iso);
+  }
+}
+
+await check('findByKey reads the full row and its dates', async () => {
   const hammer = await alice.inventory.Product.findByKey({ productId: cfg.hammer });
   assert.equal(hammer.name, 'Hammer');
   assert.equal(hammer.inStock, true);
-  assert.ok(hammer.createdAt instanceof Date, `createdAt: ${hammer.createdAt}`);
-  assert.equal(hammer.createdAt.toISOString(), '2024-01-15T10:30:00.123Z');
+  assertDate(hammer.createdAt, '2024-01-15T10:30:00.123Z');
+  if (v2) assert.equal(hammer.createdAt, '2024-01-15T10:30:00.123Z');
   assert.equal(await alice.inventory.Product.findByKey({ productId: '00000000-0000-0000-0000-000000000000' }), null);
 });
 
@@ -105,7 +122,7 @@ await check('a keyless entity', async () => {
   const rows = await alice.inventory.AuditEntry.findMany();
   assert.deepEqual(rows.map((row) => row.action).sort(), ['login', 'logout']);
   const login = rows.find((row) => row.action === 'login');
-  assert.equal(login.at.toISOString(), '2024-01-15T08:30:00.000Z');
+  assertDate(login.at, '2024-01-15T08:30:00.000Z');
 });
 
 await check('create, update and delete on a SQL database return the row', async () => {
@@ -117,7 +134,7 @@ await check('create, update and delete on a SQL database return the row', async 
     ownerEmail: 'alice@contoso.com',
   });
   assert.match(created.productId, /^[0-9a-f-]{36}$/);
-  assert.ok(created.createdAt instanceof Date);
+  assertDate(created.createdAt);
   const updated = await alice.inventory.Product.update({ productId: created.productId }, { price: 21 });
   assert.equal(updated.price, 21);
   const deleted = await alice.inventory.Product.delete({ productId: created.productId });

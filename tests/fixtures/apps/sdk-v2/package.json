@@ -12,7 +12,10 @@
   },
   "dependencies": {
     "@microsoft/rayfin-auth": "2.0.0",
+    "@microsoft/rayfin-auth-provider-fabric": "2.0.0",
     "@microsoft/rayfin-client": "2.0.0",
+    "@microsoft/rayfin-connector-fabric-graphql": "2.0.0",
+    "@microsoft/rayfin-connector-fabric-semanticmodel": "2.0.0",
     "@microsoft/rayfin-connectors": "2.0.0",
     "@microsoft/rayfin-core": "2.0.0",
     "@microsoft/rayfin-data": "2.0.0",

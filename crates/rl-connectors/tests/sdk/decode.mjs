@@ -1,6 +1,6 @@
-// Runs the real Rayfin SDK 1.36.2 against rayfin-local's /connector-invoke route, and the SDK's own
-// direct path (`rayfin connector invoke`) against the same mock Power BI, and checks that the
-// `fabricSemanticModel()` runtime normalizes both to the same results. Also checks the
+// Runs the real Rayfin SDK (1.36.2 or 2.0.0) against rayfin-local's /connector-invoke route, and
+// the SDK's own direct path (`rayfin connector invoke`) against the same mock Power BI, and checks
+// that the `fabricSemanticModel()` runtime normalizes both to the same results. Also checks the
 // executeQueries (JSON) fallback rayfin-local uses for Azure CLI tokens.
 //
 // Started by tests/sdk_decode.rs, which passes the servers in RL_SDK_TEST (JSON).

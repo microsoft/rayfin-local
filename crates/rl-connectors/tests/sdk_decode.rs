@@ -1,9 +1,9 @@
-//! The real Rayfin SDK 1.36.2 (`fabricSemanticModel()` on `createConnectorsApi`, as the reference
-//! app wires it) against rayfin-local's routes, compared with the SDK's own direct path to the
-//! same mock Power BI (`tests/sdk/decode.mjs`).
+//! The real Rayfin SDK 1.36.2 and 2.0.0 (`fabricSemanticModel()` on `createConnectorsApi`, as the
+//! reference app wires it) against rayfin-local's routes, compared with the SDK's own direct path
+//! to the same mock Power BI (`tests/sdk/decode.mjs`).
 //!
-//! Needs Node and the reference app's node_modules (`RAYFIN_SDK_NODE_MODULES`, or
-//! `fabric-apps/apps/explorer` next to this repository); skipped without them.
+//! Needs Node and each line's node_modules (the basic and `sdk-v2` fixtures', or
+//! `RAYFIN_SDK_NODE_MODULES` and `RAYFIN_SDK_V2_NODE_MODULES`); skipped without them.
 
 mod common;
 
@@ -19,10 +19,6 @@ const TOKEN_HINT: &str = "Run `az login`, then retry.";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_sdk_normalizes_rayfin_local_answers_as_its_direct_path() {
-    let Some(node_modules) = sdk_node_modules() else {
-        rl_test_support::skip("the Rayfin SDK 1.36.2 node_modules aren't installed");
-        return;
-    };
     if Command::new("node")
         .arg("--version")
         .output()
@@ -32,7 +28,17 @@ async fn the_sdk_normalizes_rayfin_local_answers_as_its_direct_path() {
         rl_test_support::skip("node isn't on PATH");
         return;
     }
+    for line in rl_test_support::sdk_lines() {
+        let Some(node_modules) = line.with("@microsoft/rayfin-connector-fabric-semanticmodel")
+        else {
+            continue;
+        };
+        println!("SDK {}", line.version);
+        normalizes_as_the_direct_path(node_modules).await;
+    }
+}
 
+async fn normalizes_as_the_direct_path(node_modules: &Path) {
     let power_bi = MockPowerBi::start().await;
     let offline_power_bi = closed_origin().await;
     let api = serve(router(

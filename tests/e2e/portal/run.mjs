@@ -1,11 +1,13 @@
 // Drives the rayfin-local sign-in popup with a real browser (Playwright) and the real Rayfin SDK
-// 1.36.2. Run by crates/rl-auth/tests/portal_e2e.rs, which starts the backend and passes:
+// (1.36.2 or 2.0.0). Run by crates/rl-auth/tests/portal_e2e.rs, which starts the backend and
+// passes:
 //
 //   RL_API_URL            the backend origin (it serves the portal and /api/auth/v1/*)
 //   RL_PUBLISHABLE_KEY    its publishable key
 //   RL_WORKSPACE_ID, RL_ITEM_ID
-//   RL_SDK_NODE_MODULES   a node_modules with @microsoft/rayfin-client and
-//                         @microsoft/rayfin-auth-provider-fabric 1.36.2
+//   RL_SDK_NODE_MODULES   a node_modules with @microsoft/rayfin-client,
+//                         @microsoft/rayfin-auth and @microsoft/rayfin-auth-provider-fabric
+//   RL_SDK_MAJOR          their major version (1 or 2)
 //   RL_USER, RL_PASSWORD  an existing password user
 //   RL_NEW_USER           a username to sign up with
 //   RL_EMBED_USER         a username to sign up with on the local Fabric host
@@ -41,6 +43,7 @@ await build({
   platform: 'browser',
   target: 'es2022',
   nodePaths: [env('RL_SDK_NODE_MODULES')],
+  define: { RL_SDK_MAJOR: String(Number(env('RL_SDK_MAJOR'))) },
   logLevel: 'error',
 });
 const bundle = await readFile(outfile);
