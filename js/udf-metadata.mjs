@@ -1,15 +1,19 @@
-// Generates `runtimemetadata.json` for a Rayfin functions package, as `rayfin dev` (Rayfin CLI
-// 2.0.0) does in its type generation step.
+// Generates `runtimemetadata.json` for a Rayfin 1.36 or 2.0 functions package, as `rayfin dev`
+// (Rayfin CLI 1.36.2 or 2.0.0, matching the installed worker) does in its type generation step.
 //
-// `@microsoft/fabric-user-data-functions` 2.0.0 never parses source at runtime: `new
-// UserDataFunctions()` reads `<cwd>/runtimemetadata.json` (schema 3.0), which lists every
-// `udf.func(...)` registration with its delegate parameters (a context parameter's type is just
-// `RayfinContext`), the audiences declared on its `RayfinContext<Schema, Audiences>` annotation
-// and the capabilities intersected with it (`& WithSql` is `sql`). Type arguments are erased by
-// the compiler, so these can only come from a build-time pass with the TypeScript type checker.
+// Neither `@microsoft/fabric-user-data-functions` worker parses source at runtime: `new
+// UserDataFunctions()` reads `<cwd>/runtimemetadata.json`, which lists every `udf.func(...)`
+// registration with its delegate parameters and the audiences declared on its
+// `RayfinContext<Schema, Audiences>` annotation. Type arguments are erased by the compiler, so
+// these can only come from a build-time pass with the TypeScript type checker. The format
+// follows the installed worker:
+// - 1.36: schema 2.0; a context parameter's type is its annotation with the audiences spelled
+//   literally.
+// - 2.x: schema 3.0; a context parameter's type is just `RayfinContext` (also through aliases),
+//   and each function lists the capabilities intersected with its context (`& WithSql` is `sql`).
 //
-// The analysis follows the CLI's rules exactly, so the output is byte-for-byte what the CLI writes
-// for the same source:
+// The analysis follows the CLI's rules exactly, so the output is byte-for-byte what that CLI
+// writes for the same source:
 // - A TypeScript program from the package's `tsconfig.json`, created with the package's own
 //   `typescript`. Without a usable tsconfig, each `src/**/*.ts` file is parsed on its own and the
 //   audiences and capabilities are read from the annotation syntax.
@@ -28,7 +32,8 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-const SCHEMA_VERSION = '3.0';
+const SCHEMA_VERSION_V1 = '2.0';
+const SCHEMA_VERSION_V2 = '3.0';
 const CONTEXT_TYPE_NAME = 'RayfinContext';
 const UDF_PACKAGE_NAME = '@microsoft/fabric-user-data-functions';
 const WITH_SQL_MARKER_NAME = 'WithSql';
@@ -151,8 +156,16 @@ function isContextTypeNode(ts, node) {
   return (ts.isQualifiedName(typeName) ? typeName.right.text : typeName.text) === CONTEXT_TYPE_NAME;
 }
 
+/** Same test as the 1.36 worker's `isRayfinContextType`. */
+function isContextTypeText(typeText) {
+  return (
+    typeof typeText === 'string' &&
+    (typeText === CONTEXT_TYPE_NAME || typeText.startsWith(`${CONTEXT_TYPE_NAME}<`))
+  );
+}
+
 /**
- * The worker's `rayfinContextMember`: the `RayfinContext` member of an annotation, checked per
+ * The 2.0 worker's `rayfinContextMember`: the `RayfinContext` member of an annotation, checked per
  * top-level `&` member so that `RayfinContext<S> & WithSql` counts.
  */
 function contextMemberText(typeText) {
@@ -439,15 +452,59 @@ function analyzeSourceFile(ts, sourceFile, scriptFile, checker, diagnostics) {
   return functions;
 }
 
-function toRuntimeMetadata(functions) {
+/**
+ * Rewrites a context annotation so its audience argument is the resolved union spelled literally
+ * (`RayfinContext<M, SqlAlias>` -> `RayfinContext<M, AudienceType.Sql>`); other type arguments
+ * keep their source text. The 1.36 CLI's format.
+ */
+function normalizeContextAnnotation(ts, typeText, audiences) {
+  const prefix = 'type __A = ';
+  let sourceFile;
+  try {
+    sourceFile = ts.createSourceFile(
+      '__annotation__.ts',
+      `${prefix}${typeText};`,
+      ts.ScriptTarget.ES2022,
+      true,
+    );
+  } catch {
+    return typeText;
+  }
+  const alias = sourceFile.statements.find((statement) => ts.isTypeAliasDeclaration(statement));
+  if (!alias || !isContextTypeNode(ts, alias.type)) return typeText;
+  const typeArguments = alias.type.typeArguments;
+  const union =
+    audiences.length === 0
+      ? 'never'
+      : audiences.map((audience) => `AudienceType.${audience}`).join(' | ');
+  if (!typeArguments || typeArguments.length === 0) {
+    return audiences.length === 0 ? typeText : `${CONTEXT_TYPE_NAME}<Record<string, any>, ${union}>`;
+  }
+  const local = (position) => position - prefix.length;
+  if (typeArguments.length === 1) {
+    if (audiences.length === 0) return typeText;
+    const schemaEnd = local(typeArguments[0].getEnd());
+    return `${typeText.slice(0, schemaEnd)}, ${union}${typeText.slice(schemaEnd)}`;
+  }
+  const start = local(typeArguments[1].getStart(sourceFile));
+  const end = local(typeArguments[1].getEnd());
+  return `${typeText.slice(0, start)}${union}${typeText.slice(end)}`;
+}
+
+/** `v2`: the 2.x worker's format (CLI 2.0.0); otherwise the 1.36 one (CLI 1.36.2). */
+function toRuntimeMetadata(ts, functions, v2) {
   return {
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: v2 ? SCHEMA_VERSION_V2 : SCHEMA_VERSION_V1,
     functions: functions.map((fn) => ({
       functionName: fn.functionName,
       delegateParameters: fn.parameters.map((parameter) => {
-        const type = parameter.isContext ? CONTEXT_TYPE_NAME : parameter.typeText;
+        let type = parameter.typeText;
+        if (v2 && parameter.isContext) type = CONTEXT_TYPE_NAME;
+        else if (!v2 && isContextTypeText(type)) {
+          type = normalizeContextAnnotation(ts, type, fn.contextAudiences);
+        }
         // The worker rejects the whole file when `fabricParameterType` and `type` disagree, so a
-        // copy of the annotation is replaced with it.
+        // copy of the annotation is rewritten with it.
         const fabricParameterType =
           parameter.fabricParameterType !== undefined &&
           parameter.fabricParameterType === parameter.typeText
@@ -464,9 +521,25 @@ function toRuntimeMetadata(functions) {
         };
       }),
       contextAudiences: [...fn.contextAudiences],
-      capabilities: [...fn.capabilities],
+      ...(v2 ? { capabilities: [...fn.capabilities] } : {}),
     })),
   };
+}
+
+/** Whether the worker the functions package resolves is 2.x, which needs the 2.0 format. */
+function usesV2Worker(functionsDir) {
+  const require = createRequire(path.join(functionsDir, 'package.json'));
+  for (const dir of require.resolve.paths(UDF_PACKAGE_NAME) ?? []) {
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(dir, UDF_PACKAGE_NAME, 'package.json'), 'utf8'),
+      );
+      return typeof manifest.version === 'string' && manifest.version.startsWith('2.');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return false;
 }
 
 /** Writes `content` to `file` through a sibling temp file, unless it already has that content. */
@@ -507,10 +580,15 @@ function generate(input) {
     throw new Error(`No TypeScript source files found in ${srcDir}.`);
   }
 
-  const diagnostics = [];
+  const v2 = usesV2Worker(functionsDir);
+  const found = [];
   const functions = sources.flatMap(({ sourceFile, scriptFile }) =>
-    analyzeSourceFile(ts, sourceFile, scriptFile, project?.checker, diagnostics),
+    analyzeSourceFile(ts, sourceFile, scriptFile, project?.checker, found),
   );
+  // 1.36 has no capabilities.
+  const diagnostics = v2
+    ? found
+    : found.filter((diagnostic) => diagnostic.code !== 'unverified-context-capability');
   if (functions.length === 0) {
     throw new Error(
       `No udf.func() registrations found in ${srcDir}. ` +
@@ -518,7 +596,7 @@ function generate(input) {
     );
   }
 
-  const metadata = toRuntimeMetadata(functions);
+  const metadata = toRuntimeMetadata(ts, functions, v2);
   const json = JSON.stringify(metadata, null, 2);
   const written =
     typeof input.outputPath === 'string' && input.outputPath.length > 0

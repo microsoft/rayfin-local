@@ -6,7 +6,10 @@
 //! `FabricSemanticModelTabularResponse` envelope (the shape it was designed for), which the SDK
 //! runtime normalizes as it normalizes a decoded Arrow stream. What differs from the Arrow path:
 //!
-//! - columns have no `dataType` (the SDK reports `'unknown'`), and DateTimes no milliseconds;
+//! - columns' `dataType`s are read from their values, as `executeQueries` sends none: numbers are
+//!   `Int64` when every one is whole, else `Double` (Power BI's `Decimal` reads as one of those),
+//!   and a column of nulls or of mixed values has none (the SDK reports `'unknown'`);
+//! - DateTimes have no milliseconds;
 //! - an empty result has no columns;
 //! - Power BI caps results at 100,000 rows: more is an `overflow` error, unless
 //!   `resultSetRowCountLimit` asks for no more than that;
@@ -124,6 +127,7 @@ fn tables_of(mut answer: Value, row_limit: Option<u64>) -> (Vec<Value>, Option<V
             _ => return (Vec::new(), Some(query_error(error))),
         }
     }
+    let columns = columns_of(&rows);
     if let Some(limit) = row_limit {
         rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
@@ -133,7 +137,74 @@ fn tables_of(mut answer: Value, row_limit: Option<u64>) -> (Vec<Value>, Option<V
             None,
         );
     }
-    (vec![json!({ "rows": rows })], None)
+    let mut table = json!({ "rows": rows });
+    if !columns.is_empty() {
+        table["columns"] = Value::Array(columns);
+    }
+    (vec![table], None)
+}
+
+/// The first row's columns, in Power BI's order, each with the `dataType` the SDK's Arrow decoder
+/// reports when the column's values settle it. Read from every row Power BI sent, not only those
+/// a row limit keeps.
+fn columns_of(rows: &[Value]) -> Vec<Value> {
+    let Some(Value::Object(first)) = rows.first() else {
+        return Vec::new();
+    };
+    first
+        .keys()
+        .map(|name| {
+            let mut column = json!({ "name": name });
+            if let Some(data_type) = data_type(rows.iter().map(|row| &row[name])) {
+                column["dataType"] = data_type.into();
+            }
+            column
+        })
+        .collect()
+}
+
+/// The data type `values` share, nulls aside; `None` when they share none or are all null.
+fn data_type<'a>(values: impl Iterator<Item = &'a Value>) -> Option<&'static str> {
+    let mut shared = None;
+    for value in values {
+        let this = match value {
+            Value::Null => continue,
+            Value::Bool(_) => "Boolean",
+            Value::Number(number) if number.is_f64() => "Double",
+            Value::Number(_) => "Int64",
+            Value::String(text) if is_date_time(text) => "DateTime",
+            Value::String(_) => "String",
+            Value::Array(_) | Value::Object(_) => return None,
+        };
+        shared = Some(match (shared, this) {
+            (None, _) => this,
+            (Some(so_far), _) if so_far == this => so_far,
+            // Whole numbers among fractions, and DateTime-like text among other text.
+            (Some("Int64" | "Double"), "Int64" | "Double") => "Double",
+            (Some("DateTime" | "String"), "DateTime" | "String") => "String",
+            _ => return None,
+        });
+    }
+    shared
+}
+
+/// Whether `text` is a DateTime as `executeQueries` writes one: `2024-08-02T00:00:00`, perhaps
+/// with fractional seconds, and without a time zone (Analysis Services' DateTimes have none).
+fn is_date_time(text: &str) -> bool {
+    const SHAPE: &[u8] = b"0000-00-00T00:00:00";
+    let Some((stamp, fraction)) = text.as_bytes().split_at_checked(SHAPE.len()) else {
+        return false;
+    };
+    let stamp_fits = stamp.iter().zip(SHAPE).all(|(byte, shape)| match shape {
+        b'0' => byte.is_ascii_digit(),
+        _ => byte == shape,
+    });
+    let fraction_fits = match fraction {
+        [] => true,
+        [b'.', digits @ ..] => !digits.is_empty() && digits.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    stamp_fits && fraction_fits
 }
 
 /// An in-band error (`results[0].error`), with Analysis Services' code as the Arrow error table
@@ -225,12 +296,45 @@ mod tests {
     #[test]
     fn rows_become_the_first_table() {
         let rows = json!([{ "[x]": 1 }, { "[x]": 2 }, { "[x]": null }]);
+        let columns = json!([{ "name": "[x]", "dataType": "Int64" }]);
         let (tables, error) = tables_of(answer(json!({ "tables": [{ "rows": rows }] })), None);
-        assert_eq!(tables, [json!({ "rows": rows })]);
+        assert_eq!(tables, [json!({ "rows": rows, "columns": columns })]);
         assert_eq!(error, None);
 
         let (tables, _) = tables_of(answer(json!({ "tables": [{ "rows": rows }] })), Some(2));
-        assert_eq!(tables, [json!({ "rows": [{ "[x]": 1 }, { "[x]": 2 }] })]);
+        let kept = json!([{ "[x]": 1 }, { "[x]": 2 }]);
+        assert_eq!(tables, [json!({ "rows": kept, "columns": columns })]);
+    }
+
+    #[test]
+    fn columns_take_the_type_their_values_share() {
+        let rows = json!([
+            {
+                "s[Year]": 2020, "[Sales]": 11.5, "[Units]": 3, "s[Date]": "2020-01-01T00:00:00",
+                "s[Name]": "Asia", "[On]": true, "[Blank]": null, "[Variant]": 5,
+            },
+            {
+                "s[Year]": 2021, "[Sales]": 12, "[Units]": null,
+                "s[Date]": "2020-02-01T08:30:00.123", "s[Name]": "2020-01-01T00:00:00",
+                "[On]": false, "[Blank]": null, "[Variant]": "five",
+            },
+        ]);
+        let (tables, _) = tables_of(answer(json!({ "tables": [{ "rows": rows }] })), Some(1));
+        assert_eq!(
+            tables[0]["columns"],
+            json!([
+                { "name": "s[Year]", "dataType": "Int64" },
+                { "name": "[Sales]", "dataType": "Double" },
+                { "name": "[Units]", "dataType": "Int64" },
+                { "name": "s[Date]", "dataType": "DateTime" },
+                { "name": "s[Name]", "dataType": "String" },
+                { "name": "[On]", "dataType": "Boolean" },
+                { "name": "[Blank]" },
+                { "name": "[Variant]" },
+            ])
+        );
+        // The row limit keeps one row, but the types come from both.
+        assert_eq!(tables[0]["rows"].as_array().map(Vec::len), Some(1));
     }
 
     #[test]
@@ -258,7 +362,11 @@ mod tests {
             "error": { "code": MORE_THAN_ONE_RESULT_SET, "message": "More than 1 result set." },
         });
         let (tables, error) = tables_of(answer(two_result_sets), None);
-        assert_eq!(tables, [json!({ "rows": [{ "[a]": 1 }] })]);
+        let columns = json!([{ "name": "[a]", "dataType": "Int64" }]);
+        assert_eq!(
+            tables,
+            [json!({ "rows": [{ "[a]": 1 }], "columns": columns })]
+        );
         assert_eq!(error, None);
 
         let too_many_rows = json!({
@@ -271,7 +379,11 @@ mod tests {
         assert_eq!(error, None);
         // A row limit within the rows Power BI returned is honored instead.
         let (tables, error) = tables_of(answer(too_many_rows), Some(1));
-        assert_eq!(tables, [json!({ "rows": [{ "[Value]": 1 }] })]);
+        let columns = json!([{ "name": "[Value]", "dataType": "Int64" }]);
+        assert_eq!(
+            tables,
+            [json!({ "rows": [{ "[Value]": 1 }], "columns": columns })]
+        );
         assert_eq!(error, None);
 
         let big = json!({ "tables": [{ "rows": [{ "[big]": 9007199254740993u64 }] }] });

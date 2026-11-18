@@ -1,26 +1,24 @@
 {
-  "schemaVersion": "3.0",
+  "schemaVersion": "2.0",
   "functions": [
     {
       "functionName": "ping",
       "delegateParameters": [],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "whoAmI",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "addNote",
@@ -43,7 +41,7 @@
         },
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema, AudienceType.Sql>",
           "optional": false,
           "hasDefault": false,
           "position": 2,
@@ -52,8 +50,7 @@
       ],
       "contextAudiences": [
         "Sql"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "askAgent",
@@ -68,7 +65,7 @@
         },
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<\n      AppSchema,\n      AudienceType.ADO | AudienceType.AzureAI\n    >",
           "optional": false,
           "hasDefault": false,
           "position": 1,
@@ -78,8 +75,7 @@
       "contextAudiences": [
         "ADO",
         "AzureAI"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "search",
@@ -116,8 +112,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "filterItems",
@@ -163,8 +158,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "backlog",
@@ -179,7 +173,7 @@
         },
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema, AudienceType.AdoAccess>",
           "optional": false,
           "hasDefault": false,
           "position": 1,
@@ -188,27 +182,25 @@
       ],
       "contextAudiences": [
         "AdoAccess"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "legacyContext",
       "delegateParameters": [
         {
           "name": "context",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema, AudienceType.Fabric | AudienceType.Storage>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": true,
-          "fabricParameterType": "RayfinContext"
+          "fabricParameterType": "RayfinContext<AppSchema, AudienceType.Fabric | AudienceType.Storage>"
         }
       ],
       "contextAudiences": [
         "Fabric",
         "Storage"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "lakeFile",
@@ -238,8 +230,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "namespaced",
@@ -255,40 +246,35 @@
       ],
       "contextAudiences": [
         "Sql"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "nothingDeclared",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema, never>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "report",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema> & WithSql",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": [
-        "sql"
-      ]
+      "contextAudiences": []
     },
     {
       "functionName": "aliasedReport",
@@ -302,8 +288,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "destructured",
@@ -317,8 +302,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "legacyStyle",
@@ -333,7 +317,7 @@
         },
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<Record<string, unknown>, AudienceType.Fabric>",
           "optional": false,
           "hasDefault": false,
           "position": 1,
@@ -342,8 +326,7 @@
       ],
       "contextAudiences": [
         "Fabric"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "syncHandler",
@@ -357,8 +340,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "arrowNoAsync",
@@ -372,8 +354,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     }
   ]
 }

@@ -1,7 +1,7 @@
 import type { FabricAuthOptions } from '@microsoft/rayfin-auth-provider-fabric';
 import { resolveRayfinFunctionsBaseUrl } from '@microsoft/rayfin-local-dev';
 
-import { createAppClient, type AppClient } from './rayfinClient';
+import { AppClient } from './rayfinClient';
 
 export interface AppServices {
   client: AppClient;
@@ -31,7 +31,7 @@ export function bootstrap(): AppServices {
     );
   }
 
-  const client = createAppClient({
+  const client = new AppClient({
     baseUrl: apiUrl.endsWith('/') ? apiUrl : `${apiUrl}/`,
     publishableKey,
     functionsBaseUrl: resolveRayfinFunctionsBaseUrl(),

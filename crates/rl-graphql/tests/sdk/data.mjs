@@ -1,4 +1,4 @@
-// Runs the real Rayfin SDK 2.0.0 data client against rayfin-local's /graphql (rl-graphql behind
+// Runs the real Rayfin SDK 1.36.2 data client against rayfin-local's /graphql (rl-graphql behind
 // rl-server, with rl-auth's sign-in), on the explorer app's model. Started by tests/sdk.rs, which
 // seeds the database and passes the settings in RL_SDK_TEST (JSON).
 import assert from 'node:assert/strict';
@@ -6,21 +6,13 @@ import { pathToFileURL } from 'node:url';
 
 const cfg = JSON.parse(process.env.RL_SDK_TEST ?? '{}');
 const load = (path) => import(pathToFileURL(`${cfg.nodeModules}/${path}`).href);
-const { RayfinClient, suppliedToken } = await load('@microsoft/rayfin-client/dist/index.js');
-const { browserSession } = await load('@microsoft/rayfin-auth/dist/index.js');
-const { dataService } = await load('@microsoft/rayfin-data/dist/index.js');
+const { RayfinClient } = await load('@microsoft/rayfin-client/dist/index.js');
 
 // ApiClient logs every POST; keep the output to the results.
 console.log = () => {};
 const print = (line) => process.stdout.write(`${line}\n`);
 
-const client = (auth = browserSession()) =>
-  RayfinClient.create({
-    baseUrl: cfg.api,
-    publishableKey: cfg.publishableKey,
-    auth,
-    services: { data: dataService() },
-  });
+const client = () => new RayfinClient({ baseUrl: cfg.api, publishableKey: cfg.publishableKey });
 const alice = client();
 await alice.auth.signIn({ email: cfg.alice.email, password: cfg.password });
 const data = alice.data;
@@ -34,11 +26,11 @@ const messages = await data.AskMessage.select(['id', 'role', 'content', 'created
 out.messages = messages;
 assert.equal(messages.length, 2);
 assert.equal(messages[0].content, 'second question');
-assert.equal(typeof messages[0].createdAt, 'string');
+assert.ok(messages[0].createdAt instanceof Date);
 assert.deepEqual(messages[0].thread, { title: 'Alice one' });
 
 // A to-many dot path is unwrapped from its connection.
-const threads = await data.AskThread.select(['id', 'title', 'messages[].content'])
+const threads = await data.AskThread.select(['id', 'title', 'messages.content'])
   .orderBy({ createdAt: 'asc' })
   .execute();
 out.threads = threads.map((t) => ({ title: t.title, messages: t.messages.map((m) => m.content) }));
@@ -131,8 +123,8 @@ assert.deepEqual({ ...created, id: undefined }, {
   id: undefined,
   user_id: cfg.alice.id,
   title: 'New thread',
-  createdAt: now.toISOString(),
-  updatedAt: now.toISOString(),
+  createdAt: now,
+  updatedAt: now,
 });
 // A relationship object is sent as its foreign key, and nested again in the answer.
 const hello = await data.AskMessage.create({
@@ -153,7 +145,7 @@ await data.AskMessage.create({
 });
 const renamed = await data.AskThread.update({ id: created.id }, { title: 'Renamed', updatedAt: new Date() });
 assert.equal(renamed.title, 'Renamed');
-assert.equal(typeof renamed.updatedAt, 'string');
+assert.ok(renamed.updatedAt instanceof Date);
 // upsert: a read by key, then an update (or a create without the key).
 const upserted = await data.AskThread.upsert({ id: created.id }, {}, { responseId: 'resp_9' });
 assert.deepEqual(upserted, { id: created.id, responseId: 'resp_9' });
@@ -190,9 +182,8 @@ assert.equal(forged, 'GraphQL errors: Could not insert row with given values.');
 assert.equal((await data.AskThread.findMany()).length, 3);
 out.mutations = { created: created.title, renamed: renamed.title, blocked, bobUpdate, bobDelete, forged };
 
-// An anonymous supplied-token client receives a GraphQL authorization error, not a
-// refresh-triggering 401.
-const anonymous = client(suppliedToken());
+// An anonymous client receives a GraphQL authorization error, not a refresh-triggering 401.
+const anonymous = client();
 const anonymousError = await anonymous.data.AskThread.select(['id']).execute().then(
   () => null,
   (e) => ({ name: e.name, status: e.status, message: e.message }),
@@ -201,6 +192,6 @@ out.anonymous = anonymousError;
 assert.equal(anonymousError.message,
   'GraphQL errors: The current user is not authorized to access this resource.');
 
-for (const c of [alice, bob, anonymous]) c.dispose();
+for (const c of [alice, bob, anonymous]) c.auth.destroy();
 print('RESULT ' + JSON.stringify(out));
 process.exit(0);

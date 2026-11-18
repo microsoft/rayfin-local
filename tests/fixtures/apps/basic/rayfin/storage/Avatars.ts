@@ -1,5 +1,5 @@
 import { role } from '@microsoft/rayfin-core';
-import { blob } from '@microsoft/rayfin-core';
+import { blob } from '@microsoft/rayfin-core/experimental';
 
 /** The string form of `@blob` with defaults, and an action without a policy. */
 @blob('user-avatars')

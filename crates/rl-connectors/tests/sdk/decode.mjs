@@ -1,14 +1,23 @@
-// Runs the real Rayfin SDK 2.0.0 against rayfin-local's /connector-invoke route, and the SDK's own
+// Runs the real Rayfin SDK 1.36.2 against rayfin-local's /connector-invoke route, and the SDK's own
 // direct path (`rayfin connector invoke`) against the same mock Power BI, and checks that the
 // `fabricSemanticModel()` runtime normalizes both to the same results. Also checks the
 // executeQueries (JSON) fallback rayfin-local uses for Azure CLI tokens.
 //
 // Started by tests/sdk_decode.rs, which passes the servers in RL_SDK_TEST (JSON).
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const cfg = JSON.parse(process.env.RL_SDK_TEST ?? '{}');
 const load = (path) => import(pathToFileURL(`${cfg.nodeModules}/${path}`).href);
+const sdkMajor = Number(
+  JSON.parse(
+    readFileSync(
+      `${cfg.nodeModules}/@microsoft/rayfin-connector-fabric-semanticmodel/package.json`,
+      'utf8',
+    ),
+  ).version.split('.')[0],
+);
 const { ApiClient } = await load('@microsoft/rayfin-lib/dist/index.js');
 const { createConnectorsApi } = await load('@microsoft/rayfin-connectors/dist/index.js');
 const { fabricSemanticModel } = await load(
@@ -76,6 +85,13 @@ async function check(name, fn) {
 
 // Arrow answers decode to the same result, except `requestId`: it is a response header, and the
 // delegated path decodes the body alone (as on Fabric, where it is always '').
+const TYPED_COLUMNS = [
+  { name: 'Sales[Region]', dataType: 'String' },
+  { name: 'Sales[OrderDate]', dataType: 'DateTime' },
+  { name: '[Total]', dataType: 'Double' },
+  { name: '[Orders]', dataType: 'Int64' },
+  { name: '[HasProduct]', dataType: 'Boolean' },
+];
 const arrowCases = [
   [
     ROW,
@@ -90,13 +106,7 @@ const arrowCases = [
     {
       status: 'success',
       table: {
-        columns: [
-          { name: 'Sales[Region]', dataType: 'String' },
-          { name: 'Sales[OrderDate]', dataType: 'DateTime' },
-          { name: '[Total]', dataType: 'Double' },
-          { name: '[Orders]', dataType: 'Int64' },
-          { name: '[HasProduct]', dataType: 'Boolean' },
-        ],
+        columns: TYPED_COLUMNS,
         rows: [
           ['West', '2024-08-02T00:00:00.000', 1713.98, 12, true],
           ['East', '2023-09-27T01:12:12.000', 0.5, 3, false],
@@ -148,6 +158,13 @@ for (const query of ['EVALUATE BadRequest', 'EVALUATE Forbidden', 'EVALUATE Miss
     assert.equal(ours.status, 'error');
     assert.equal(ours.error.category, 'api');
     assert.match(ours.requestId, /^pbi-/);
+    // rayfin-local words the 403 hint as SDK 2.0 does; 1.36's direct path names other permissions.
+    if (sdkMajor < 2 && theirs.error?.recoveryHint) {
+      theirs.error.recoveryHint = theirs.error.recoveryHint.replace(
+        'workspace and semantic model permissions',
+        'Read and Build permissions on the semantic model',
+      );
+    }
     assert.deepEqual(ours, theirs);
   });
 }
@@ -203,15 +220,15 @@ await check('no developer token (api, with the hint)', async () => {
 });
 
 // An Azure CLI token: executeDaxQueries refuses it, so rayfin-local answers from executeQueries
-// (JSON) in the same envelope. The SDK normalizes it like the Arrow results above, without
-// dataTypes and with Power BI's request id.
+// (JSON) in the same envelope. The SDK normalizes it like the Arrow results above, with the same
+// dataTypes (read from the values), DateTimes without milliseconds and Power BI's request id.
 const az = viaRayfinLocal(cfg.azApi);
 const jsonCases = [
   [
     ROW,
     {
       status: 'success',
-      table: { columns: [{ name: '[x]', dataType: 'unknown' }], rows: [[1]] },
+      table: { columns: [{ name: '[x]', dataType: 'Int64' }], rows: [[1]] },
       requestId: 'pbi-json-row',
     },
   ],
@@ -220,9 +237,7 @@ const jsonCases = [
     {
       status: 'success',
       table: {
-        columns: ['Sales[Region]', 'Sales[OrderDate]', '[Total]', '[Orders]', '[HasProduct]'].map(
-          (name) => ({ name, dataType: 'unknown' }),
-        ),
+        columns: TYPED_COLUMNS,
         rows: [
           ['West', '2024-08-02T00:00:00', 1713.98, 12, true],
           ['East', '2023-09-27T01:12:12', 0.5, 3, false],
@@ -274,7 +289,7 @@ const jsonCases = [
     'EVALUATE Two',
     {
       status: 'success',
-      table: { columns: [{ name: '[a]', dataType: 'unknown' }], rows: [[1]] },
+      table: { columns: [{ name: '[a]', dataType: 'Int64' }], rows: [[1]] },
       requestId: 'pbi-json-two',
     },
   ],

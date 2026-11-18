@@ -1,11 +1,10 @@
 {
-  "schemaVersion": "3.0",
+  "schemaVersion": "2.0",
   "functions": [
     {
       "functionName": "ping",
       "delegateParameters": [],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "greet",
@@ -27,8 +26,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "echo",
@@ -42,45 +40,42 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "whoAmI",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "countTodos",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "tokenInfo",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema, AudienceType.Fabric>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
@@ -89,23 +84,21 @@
       ],
       "contextAudiences": [
         "Fabric"
-      ],
-      "capabilities": []
+      ]
     },
     {
       "functionName": "secretInfo",
       "delegateParameters": [
         {
           "name": "ctx",
-          "type": "RayfinContext",
+          "type": "RayfinContext<AppSchema>",
           "optional": false,
           "hasDefault": false,
           "position": 0,
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     },
     {
       "functionName": "fail",
@@ -119,8 +112,7 @@
           "isFabricParameter": false
         }
       ],
-      "contextAudiences": [],
-      "capabilities": []
+      "contextAudiences": []
     }
   ]
 }
