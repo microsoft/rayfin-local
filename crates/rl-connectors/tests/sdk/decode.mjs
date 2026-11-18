@@ -76,6 +76,13 @@ async function check(name, fn) {
 
 // Arrow answers decode to the same result, except `requestId`: it is a response header, and the
 // delegated path decodes the body alone (as on Fabric, where it is always '').
+const TYPED_COLUMNS = [
+  { name: 'Sales[Region]', dataType: 'String' },
+  { name: 'Sales[OrderDate]', dataType: 'DateTime' },
+  { name: '[Total]', dataType: 'Double' },
+  { name: '[Orders]', dataType: 'Int64' },
+  { name: '[HasProduct]', dataType: 'Boolean' },
+];
 const arrowCases = [
   [
     ROW,
@@ -90,13 +97,7 @@ const arrowCases = [
     {
       status: 'success',
       table: {
-        columns: [
-          { name: 'Sales[Region]', dataType: 'String' },
-          { name: 'Sales[OrderDate]', dataType: 'DateTime' },
-          { name: '[Total]', dataType: 'Double' },
-          { name: '[Orders]', dataType: 'Int64' },
-          { name: '[HasProduct]', dataType: 'Boolean' },
-        ],
+        columns: TYPED_COLUMNS,
         rows: [
           ['West', '2024-08-02T00:00:00.000', 1713.98, 12, true],
           ['East', '2023-09-27T01:12:12.000', 0.5, 3, false],
@@ -203,15 +204,15 @@ await check('no developer token (api, with the hint)', async () => {
 });
 
 // An Azure CLI token: executeDaxQueries refuses it, so rayfin-local answers from executeQueries
-// (JSON) in the same envelope. The SDK normalizes it like the Arrow results above, without
-// dataTypes and with Power BI's request id.
+// (JSON) in the same envelope. The SDK normalizes it like the Arrow results above, with the same
+// dataTypes (read from the values), DateTimes without milliseconds and Power BI's request id.
 const az = viaRayfinLocal(cfg.azApi);
 const jsonCases = [
   [
     ROW,
     {
       status: 'success',
-      table: { columns: [{ name: '[x]', dataType: 'unknown' }], rows: [[1]] },
+      table: { columns: [{ name: '[x]', dataType: 'Int64' }], rows: [[1]] },
       requestId: 'pbi-json-row',
     },
   ],
@@ -220,9 +221,7 @@ const jsonCases = [
     {
       status: 'success',
       table: {
-        columns: ['Sales[Region]', 'Sales[OrderDate]', '[Total]', '[Orders]', '[HasProduct]'].map(
-          (name) => ({ name, dataType: 'unknown' }),
-        ),
+        columns: TYPED_COLUMNS,
         rows: [
           ['West', '2024-08-02T00:00:00', 1713.98, 12, true],
           ['East', '2023-09-27T01:12:12', 0.5, 3, false],
@@ -274,7 +273,7 @@ const jsonCases = [
     'EVALUATE Two',
     {
       status: 'success',
-      table: { columns: [{ name: '[a]', dataType: 'unknown' }], rows: [[1]] },
+      table: { columns: [{ name: '[a]', dataType: 'Int64' }], rows: [[1]] },
       requestId: 'pbi-json-two',
     },
   ],

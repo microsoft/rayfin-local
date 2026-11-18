@@ -254,11 +254,15 @@ async fn tokens_without_a_dataset_scope_fall_back_to_execute_queries() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "application/json");
     assert_eq!(headers["requestid"], "pbi-json-row");
+    let table = json!({
+        "rows": [{ "[x]": 1 }],
+        "columns": [{ "name": "[x]", "dataType": "Int64" }],
+    });
     assert_eq!(
         json_body(&body),
         json!({
             "status": "Succeeded",
-            "output": { "tables": [{ "rows": [{ "[x]": 1 }] }], "requestId": "pbi-json-row" },
+            "output": { "tables": [table], "requestId": "pbi-json-row" },
             "errors": [],
         })
     );

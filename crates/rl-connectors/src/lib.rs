@@ -17,8 +17,8 @@
 //!   oversized values are inside that body, and the SDK reports them as `query` and `overflow`.
 //! - Power BI refuses `executeDaxQueries` to developer tokens without a dataset scope, which is
 //!   every Azure CLI token. Those queries run through `executeQueries` (JSON) instead and answer
-//!   the JSON envelope the SDK also accepts: the same tables, without `dataType`s (see
-//!   `semantic_model/json_fallback.rs` for the other differences).
+//!   the JSON envelope the SDK also accepts: the same tables, with `dataType`s read from the
+//!   values (see `semantic_model/json_fallback.rs` for the differences).
 //! - A Power BI failure (any non-2xx), an unreachable Power BI and a missing developer token
 //!   answer 200 with the JSON `FabricSemanticModelTabularResponse` envelope. Its
 //!   `output.responseError` carries the category (`api`, `network` or `unknown`), message, code,
