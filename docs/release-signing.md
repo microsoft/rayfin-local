@@ -41,6 +41,9 @@ crates.io with the existing AppDev `rayfin-official` Azure Artifacts Cargo feed.
 `CargoAuthenticate@0` authenticates using the pipeline's build identity; no PAT
 or new service connection is needed. The config is generated only in the official
 job so local development and public GitHub CI do not require internal feed access.
+The test fixtures' npm packages need no setup: each fixture's `.npmrc` points npm at the
+anonymous 1es-public feed (ms-feed-25), which the agents can reach; their network isolation
+blocks registry.npmjs.org.
 Normal runs preserve the lockfile; PR test runs update only the workspace package versions in their build checkout.
 The vendored TDS patch remains unchanged.
 
@@ -61,7 +64,7 @@ crates.io and npm publishing remain out of scope.
 
 An on-demand PR test release uses the `testReleasePr` queue parameter and requires the PR's explicit `release-test` label.
 That mode publishes a Windows-only prerelease named `v<base version>-alpha.<ADO build ID>` directly, never marking it latest.
-The current base version produces names such as `v0.3.1-alpha.21422341`.
+The current base version produces names such as `v0.3.2-alpha.21422341`.
 GitHub Actions release publishing has been removed; there is no unsigned publishing path.
 New releases require a verified signed Windows x64 artifact; no Unix assets are published while those paths are disabled.
 Stable main releases become latest; prerelease versions and PR-test alphas never do.
