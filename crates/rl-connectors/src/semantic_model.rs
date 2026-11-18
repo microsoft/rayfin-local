@@ -80,7 +80,8 @@ impl PowerBi {
                      connectors can't run. Fix it in rayfin-local's configuration."
                 )
             })?;
-        let client = reqwest::Client::builder()
+        let client = rl_http::client_builder()
+            .map_err(|error| format!("Couldn't configure TLS for Power BI: {error}."))?
             .connect_timeout(CONNECT_TIMEOUT)
             .user_agent(concat!("rayfin-local/", env!("CARGO_PKG_VERSION")))
             .build()

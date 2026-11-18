@@ -1,45 +1,9 @@
 //! Stopping `serve`: the stop signals, the end of stdin (`--json`), and the hooks that stop what
 //! `serve` started.
 
-use std::future::Future;
 use std::io::{self, Read};
-use std::pin::Pin;
-use std::time::Duration;
 
 use tokio::sync::oneshot;
-
-type HookFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type Hook = Box<dyn FnOnce() -> HookFuture + Send>;
-
-/// What to stop on shutdown (child processes, watchers), stopped newest first.
-#[derive(Default)]
-pub struct StopHooks {
-    hooks: Vec<(String, Hook)>,
-}
-
-impl StopHooks {
-    /// Registers `hook` (for example `move || async move { child.kill(grace).await; }`).
-    pub fn add<F, Fut>(&mut self, label: impl Into<String>, hook: F)
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.hooks.push((
-            label.into(),
-            Box::new(move || Box::pin(hook()) as HookFuture),
-        ));
-    }
-
-    /// Runs every hook, newest first, giving each up to `timeout`.
-    pub async fn run(self, timeout: Duration) {
-        for (label, hook) in self.hooks.into_iter().rev() {
-            tracing::debug!("stopping {label}");
-            if tokio::time::timeout(timeout, hook()).await.is_err() {
-                tracing::warn!("{label} did not stop within {} seconds", timeout.as_secs());
-            }
-        }
-    }
-}
 
 /// Completes on the next Ctrl+C (also Ctrl+Break and closing the console on Windows, and
 /// SIGTERM on Unix).
@@ -133,26 +97,9 @@ pub fn watch_eof(mut input: impl Read + Send + 'static) -> oneshot::Receiver<()>
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::*;
-
-    #[tokio::test]
-    async fn hooks_run_newest_first_and_a_stuck_one_does_not_block_the_rest() {
-        let order = Arc::new(Mutex::new(Vec::new()));
-        let mut hooks = StopHooks::default();
-        for label in ["backend", "stuck", "vite"] {
-            let order = Arc::clone(&order);
-            hooks.add(label, move || async move {
-                if label == "stuck" {
-                    std::future::pending::<()>().await;
-                }
-                order.lock().unwrap().push(label);
-            });
-        }
-        hooks.run(Duration::from_millis(50)).await;
-        assert_eq!(*order.lock().unwrap(), ["vite", "backend"]);
-    }
 
     /// A pipe whose writer is a channel: reads block until data comes or the sender is dropped.
     struct Pipe(std::sync::mpsc::Receiver<Vec<u8>>);

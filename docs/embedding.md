@@ -6,6 +6,12 @@ Contract version: **1**.
 Additive changes (new event types, new fields, new endpoints) keep the version; hosts ignore what they don't know.
 Anything else bumps it.
 
+For **in-process Node.js embedding**, the experimental
+[`@microsoft/rayfin-local-runtime`](../npm/rayfin-local-runtime/README.md) package exposes
+`createRuntime`, lifecycle/events, status and reload. Its `/binary` export instead returns the
+executable for the child-process contract documented here. Native embedding never reads stdin,
+installs signal handlers or enables this document's HTTP control API. The package is not yet published.
+
 ## Versions
 
 `rayfin-local version --json` prints one JSON object and exits 0:

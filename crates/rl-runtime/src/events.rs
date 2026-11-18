@@ -3,6 +3,7 @@
 //! `functions` and `vite` events).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -15,10 +16,128 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
+use tokio::sync::watch;
 use tracing::field::{Field, Visit};
 use tracing::{Level, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
+
+const EVENT_CAPACITY: usize = 1024;
+
+tokio::task_local! {
+    static INSTANCE: EventContext;
+}
+
+/// Instance-owned event routing. Child output captures this context explicitly.
+#[derive(Clone)]
+pub(crate) struct EventContext(Arc<InstanceEvents>);
+
+struct InstanceEvents {
+    live: LiveState,
+    queue: Mutex<EventQueue>,
+    changed: watch::Sender<u64>,
+    warnings: Mutex<HashSet<String>>,
+}
+
+#[derive(Default)]
+struct EventQueue {
+    lines: VecDeque<Value>,
+    dropped: u64,
+    closed: bool,
+}
+
+impl EventContext {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(InstanceEvents {
+            live: LiveState::default(),
+            queue: Mutex::default(),
+            changed: watch::channel(0).0,
+            warnings: Mutex::default(),
+        }))
+    }
+
+    pub(crate) async fn scope<F: std::future::Future>(&self, future: F) -> F::Output {
+        INSTANCE.scope(self.clone(), future).await
+    }
+
+    pub(crate) fn sync_scope<T>(&self, function: impl FnOnce() -> T) -> T {
+        INSTANCE.sync_scope(self.clone(), function)
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.0.changed.subscribe()
+    }
+
+    pub(crate) fn live(&self) -> LiveState {
+        self.0.live.clone()
+    }
+
+    pub(crate) fn first_warning(&self, key: String) -> bool {
+        lock(&self.0.warnings).insert(key)
+    }
+
+    fn record(&self, event: &Event, line: &Value, last: bool) {
+        let mut queue = lock(&self.0.queue);
+        if queue.closed {
+            return;
+        }
+        if LiveState::keeps(event) {
+            self.0.live.record(line);
+        }
+        if queue.lines.len() == EVENT_CAPACITY {
+            let log = queue.lines.iter().position(|line| line["type"] == "log");
+            queue.lines.remove(log.unwrap_or(0));
+            queue.dropped += 1;
+        }
+        queue.lines.push_back(line.clone());
+        queue.closed = last;
+        drop(queue);
+        self.0
+            .changed
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    pub(crate) fn emit(&self, event: Event) {
+        self.record(&event, &event.to_json(&now()), false);
+    }
+
+    pub(crate) fn drain(&self) -> Vec<Value> {
+        let mut queue = lock(&self.0.queue);
+        let mut lines = Vec::with_capacity(queue.lines.len() + 1);
+        if queue.dropped > 0 {
+            lines.push(serde_json::json!({
+                "v": CONTRACT_VERSION, "type": "overflow", "time": now(),
+                "dropped": std::mem::take(&mut queue.dropped),
+            }));
+        }
+        lines.extend(queue.lines.drain(..));
+        lines
+    }
+}
+
+pub(crate) fn current() -> Option<EventContext> {
+    INSTANCE.try_with(Clone::clone).ok()
+}
+
+/// Tokio does not inherit task-local state or tracing dispatchers.
+pub(crate) fn spawn<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    use tracing::instrument::WithSubscriber as _;
+    let context = current();
+    let dispatch = tracing::dispatcher::get_default(Clone::clone);
+    tokio::spawn(
+        async move {
+            match context {
+                Some(context) => context.scope(future).await,
+                None => future.await,
+            }
+        }
+        .with_subscriber(dispatch),
+    )
+}
 
 /// The version of the host contract.
 pub const CONTRACT_VERSION: u32 = 1;
@@ -312,6 +431,8 @@ pub struct Stopped {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StopReason {
+    /// Direct in-process API shutdown (never emitted by the CLI).
+    Closed,
     StdinClosed,
     Signal,
     Error,
@@ -631,7 +752,7 @@ pub fn init_json() {
 
 /// Whether events are written (`--json`) instead of the human output.
 pub fn is_json() -> bool {
-    OUTPUT.get().is_some()
+    current().is_some() || OUTPUT.get().is_some()
 }
 
 /// Emits `event`: written with `--json`, and kept in the [`live`] state when it is a `ready`,
@@ -653,12 +774,16 @@ pub fn finish(stopped: Stopped) {
 }
 
 fn publish(event: &Event, last: bool) {
-    if OUTPUT.get().is_some() || LiveState::keeps(event) {
+    if current().is_some() || OUTPUT.get().is_some() || LiveState::keeps(event) {
         record(event, &event.to_json(&now()), last);
     }
 }
 
 fn record(event: &Event, line: &Value, last: bool) {
+    if let Some(context) = current() {
+        context.record(event, line, last);
+        return;
+    }
     if LiveState::keeps(event) {
         live().record(line);
     }
@@ -693,7 +818,10 @@ pub fn warning(
 
 /// The live state of this process's `serve`.
 pub fn live() -> LiveState {
-    LIVE.get_or_init(LiveState::default).clone()
+    current().map_or_else(
+        || LIVE.get_or_init(LiveState::default).clone(),
+        |context| context.live(),
+    )
 }
 
 /// The last `ready`, `analysis`, `schema`, `functions` and `vite` events, as emitted (with or
@@ -837,6 +965,61 @@ mod tests {
     use super::*;
 
     const TIME: &str = "2026-10-30T03:12:09.512Z";
+
+    #[tokio::test]
+    async fn spawned_tasks_keep_instance_events_and_live_state_separate() {
+        let first = EventContext::new();
+        let second = EventContext::new();
+        for context in [&first, &second] {
+            context
+                .scope(async {
+                    emit(Event::Ready(Box::new(ready())));
+                    spawn(async {
+                        log(LogSource::RayfinLocal, LogLevel::Info, "child output");
+                    })
+                    .await
+                    .unwrap();
+                })
+                .await;
+        }
+        assert_eq!(first.drain().len(), 2);
+        assert!(first.drain().is_empty());
+        assert_eq!(second.drain().len(), 2);
+        assert!(first.live().snapshot().ready.is_some());
+        first.sync_scope(|| {
+            finish(Stopped {
+                reason: StopReason::Closed,
+                exit_code: 0,
+            })
+        });
+        first.emit(Event::Ready(Box::new(ready())));
+        assert_eq!(first.drain().len(), 1, "nothing follows stopped");
+        second.emit(Event::Ready(Box::new(ready())));
+        assert_eq!(
+            second.drain().len(),
+            1,
+            "one instance stopping does not close another"
+        );
+    }
+
+    #[test]
+    fn overflow_reports_drops_and_preserves_lifecycle_and_current_status() {
+        let context = EventContext::new();
+        context.emit(Event::Ready(Box::new(ready())));
+        for number in 0..EVENT_CAPACITY + 10 {
+            context.sync_scope(|| log(LogSource::RayfinLocal, LogLevel::Info, number.to_string()));
+        }
+        let lines = context.drain();
+        assert_eq!(lines.len(), EVENT_CAPACITY + 1);
+        assert_eq!(lines[0]["type"], "overflow");
+        assert_eq!(lines[0]["dropped"], 11);
+        assert_eq!(
+            lines[1]["type"], "ready",
+            "drop logs before lifecycle events"
+        );
+        assert!(context.live().snapshot().ready.is_some());
+        assert!(context.drain().is_empty(), "report a drop only once");
+    }
 
     fn line(event: Event) -> Value {
         event.to_json(TIME)

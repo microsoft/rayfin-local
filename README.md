@@ -34,6 +34,7 @@ rayfin-local serve
 
 - [Why use it](#why-use-it)
 - [How it works](#how-it-works)
+- [Embedding in Node.js](#embedding-in-nodejs)
 - [What works locally](#what-works-locally)
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -110,6 +111,28 @@ flowchart LR
 5. Starts your app's own Vite dev server with environment variables that point the SDK at the local backend; your `.env` files are not changed.
 
 [docs/architecture.md](docs/architecture.md) explains the design in depth.
+
+## Embedding in Node.js
+
+The experimental [`@microsoft/rayfin-local-runtime`](npm/rayfin-local-runtime/README.md)
+package runs the same Rust services **inside Node.js**, without launching the CLI:
+
+```js
+import { createRuntime } from '@microsoft/rayfin-local-runtime';
+
+const runtime = createRuntime({ projectDir: '/path/to/app', frontend: { mode: 'off' } });
+try {
+  const ready = await runtime.start();
+  console.log(ready.apiUrl);
+} finally {
+  await runtime.close();
+}
+```
+
+Its independent `/binary` export provides the CLI executable path without loading the native
+addon. Both ESM and CommonJS are supported. This package is not yet published; see
+[development.md](docs/development.md#native-npm-package) for building and testing it locally.
+The existing [child-process embedding contract](docs/embedding.md) remains supported.
 
 ## What works locally
 
