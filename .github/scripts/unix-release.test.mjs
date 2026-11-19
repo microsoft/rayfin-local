@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -116,6 +116,17 @@ function checkPackaging(platform) {
         'assert t.getmember(sys.argv[2]+"/README.md").mode == 0o644',
         archive, `rayfin-local-${version}-${target}`], { encoding: 'utf8' });
       assert.equal(modes.status, 0, modes.stderr);
+      // SignUnix stages the archive outside PIPELINE_WORKSPACE; a modified archive must still be caught there.
+      const staged = join(root, 'staged-signing');
+      mkdirSync(staged);
+      for (const file of [metadata.archiveFile, 'linux-source.json']) copyFileSync(join(output, file), join(staged, file));
+      appendFileSync(join(staged, metadata.archiveFile), 'modified');
+      const verification = spawnSync(process.execPath, [script, 'verify', platform], {
+        cwd: root, encoding: 'utf8',
+        env: { ...env, PIPELINE_WORKSPACE: join(root, 'missing'), UNIX_SIGNING_DIRECTORY: staged },
+      });
+      assert.notEqual(verification.status, 0);
+      assert.match(verification.stderr, /Signing must not modify the Linux archive/);
       writeFileSync(builtBinary, '#!/bin/sh\necho not-an-ELF\n');
       const wrongTarget = spawnSync(process.execPath, [script, 'package', platform],
         { cwd: root, encoding: 'utf8', env });
@@ -157,7 +168,7 @@ for (const platform of process.platform === 'darwin' ? ['macos', 'linux'] : ['li
   }, () => checkPackaging(platform));
 }
 
-test('publication requires every selected exact-build signed artifact and matching hashes', () => {
+test('publication requires all three exact-build signed artifacts and matching hashes', () => {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-assemble-'));
   const source = { commit: 'a'.repeat(40), buildId: '123', version: '0.2.9' };
   const expected = { commit: source.commit, buildId: source.buildId, tag: 'v0.2.9' };
@@ -177,13 +188,11 @@ test('publication requires every selected exact-build signed artifact and matchi
       if (platform === 'linux') {
         writeFileSync(join(directory, `${archive}.sig`), 'signature');
         writeFileSync(join(directory, 'microsoft.asc'), 'public-key-fixture');
+        writeFileSync(join(directory, 'install.sh'), 'installer-fixture');
         Object.assign(metadata, { signatureSha256: hash('signature'), fingerprint: linuxFingerprint });
       } else if (platform === 'macos') Object.assign(metadata, { notarized: true, teamId: 'UBF8T346G9' });
       else writeFileSync(join(directory, 'install.ps1'), 'installer-fixture');
-      if (platform !== 'windows') {
-        metadata.nativeExecutionTested = false;
-        writeFileSync(join(directory, 'install.sh'), 'installer-fixture');
-      }
+      if (platform !== 'windows') metadata.nativeExecutionTested = false;
       records[platform] = metadata;
       record(platform, metadata);
     }
@@ -199,14 +208,6 @@ test('publication requires every selected exact-build signed artifact and matchi
     record('macos', records.macos);
     rmSync(join(root, 'linux-signed', `${records.linux.archiveFile}.sig`));
     assert.throws(() => assemble(root, join(root, 'missing-signature'), expected));
-    rmSync(join(root, 'linux-signed'), { recursive: true });
-    assemble(root, join(root, 'windows-macos'), { ...expected, platforms: ['windows', 'macos'] });
-    assert.deepEqual(readFileSync(join(root, 'windows-macos', 'SHA256SUMS.txt'), 'utf8').trim().split('\n'),
-      [records.windows, records.macos].map(r => `${r.archiveSha256}  ${r.archiveFile}`));
-    assert.equal(existsSync(join(root, 'windows-macos', 'install.sh')), true);
-    assert.equal(existsSync(join(root, 'windows-macos', 'microsoft.asc')), false);
-    assert.throws(() => assemble(root, join(root, 'no-macos'), expected), /linux-signed/);
-    assert.throws(() => assemble(root, join(root, 'no-windows'), { ...expected, platforms: ['macos'] }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

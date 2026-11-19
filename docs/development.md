@@ -215,14 +215,13 @@ The essentials of [`AGENTS.md`](../AGENTS.md):
 ## Releasing
 
 The [official ADO pipeline](release-signing.md) automatically releases version increases merged into `main`.
-It builds and signs Windows x64 on the existing `1ES-AppDev/windows-2022` infrastructure, and builds Apple Silicon on hosted Intel macOS, signing and notarizing it through ESRP.
-Publication requires the verified `windows-signed` and `macos-signed` artifacts and all official output/source-security checks; there is no unsigned fallback.
-Linux build, signing, verification and publication paths are commented out for a separate PR after consulting the ESRP team.
-The [signing runbook](release-signing.md#linux-and-apple-silicon) describes the macOS path and retains the Linux cross-compilation design, authorization blocker and validation TODOs.
+It builds and signs Windows x64 on the existing `1ES-AppDev/windows-2022` infrastructure, cross-compiles Linux x64 there, and builds Apple Silicon on hosted Intel macOS; ESRP signs Linux and signs and notarizes macOS.
+Publication requires the verified `windows-signed`, `macos-signed` and `linux-signed` artifacts and all official output/source-security checks; there is no unsigned fallback.
+The [signing runbook](release-signing.md#linux-and-apple-silicon) describes the Linux and macOS paths and the remaining validation TODOs.
 To publish a signed test prerelease, label its PR `release-test` and queue that PR's exact head commit with `testReleasePr` set to the PR number.
 It publishes `v<base version>-alpha.<ADO build ID>`, never latest; see the [test-release runbook](release-signing.md#on-demand-pr-test-releases).
 GitHub Actions release publishing is removed: there is no unsigned fallback.
-While Linux releases are deferred, Linux and Intel macOS users must pin the existing unsigned `0.2.8` release or build from source.
+Intel macOS and Linux ARM64 users must pin the existing unsigned `0.2.8` release or build from source.
 
 1. Increase `[workspace.package].version` in the root `Cargo.toml`, and update `Cargo.lock` with `cargo update --workspace`.
 2. Merge that change into `main`; no tag push or manual queue is required.
@@ -230,15 +229,15 @@ While Linux releases are deferred, Linux and Intel macOS users must pin the exis
 The official pipeline then:
 
 - compares the version with the commit's first parent (the previous `main` tip); unchanged or decreased versions do not release;
-- tests and builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`, and cross-compiles `aarch64-apple-darwin` on Intel macOS;
+- tests and builds `rayfin-local` with Rust 1.96.0 for `x86_64-pc-windows-msvc`, cross-compiles `x86_64-unknown-linux-gnu` on Windows and `aarch64-apple-darwin` on Intel macOS;
 - signs through ESRP and independently verifies Windows Authenticode, timestamp and executable version;
 - signs and notarizes the macOS executable through ESRP, then independently verifies its Developer ID, hardened runtime, timestamp and notarization;
-- packages each executable with `README.md` and `LICENSE` (a ZIP for Windows, a `.tar.gz` for macOS);
+- signs the Linux archive with a detached PGP signature through ESRP, then independently verifies it against the pinned Microsoft key;
+- packages each executable with `README.md` and `LICENSE` (a ZIP for Windows, a `.tar.gz` for macOS and Linux);
 - waits for verification, build/output and source-security checks, then creates `v<version>` and its GitHub Release at the exact source commit;
-- attaches both archives, `windows-signing.json`, `macos-signing.json`, a combined `SHA256SUMS.txt`, `install.ps1` and `install.sh`; stable versions become latest, while prereleases never do.
+- attaches the three archives, the Linux `.sig` and `microsoft.asc`, each platform's `*-signing.json`, a combined `SHA256SUMS.txt`, `install.ps1` and `install.sh`; stable versions become latest, while prereleases never do.
 
 Native release-binary execution tests for Linux and Apple Silicon are deferred; the signing runbook tracks [Linux](release-signing.md#deferred-native-linux-testing) and [Apple Silicon](release-signing.md#deferred-native-apple-silicon-testing) TODOs.
-The separate Linux release PR must restore its signing checks and disclose any remaining execution-testing gaps.
 The retained Unix helpers require `nativeExecutionTested: false`; signature verification is not a native execution test.
 
 The README's one-line installers fetch `install.sh` and `install.ps1` from the `main` branch, and those install the latest release (prereleases excluded) unless `RAYFIN_LOCAL_VERSION` is set.

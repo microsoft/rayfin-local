@@ -98,11 +98,10 @@ extends:
                   displayName: Publish signed Windows release archive
                   targetPath: $(Build.ArtifactStagingDirectory)/windows-signed
                   artifactName: windows-signed
-                # TODO: Restore in a separate PR after ESRP key authorization and validation.
-                # - output: pipelineArtifact
-                #   displayName: Publish Windows-cross-compiled Linux archive for ESRP
-                #   targetPath: $(Build.ArtifactStagingDirectory)/unsigned-linux
-                #   artifactName: unsigned-linux
+                - output: pipelineArtifact
+                  displayName: Publish Windows-cross-compiled Linux archive for ESRP
+                  targetPath: $(Build.ArtifactStagingDirectory)/unsigned-linux
+                  artifactName: unsigned-linux
             steps:
               - checkout: self
                 clean: true
@@ -350,18 +349,15 @@ extends:
                   RUST_TARGET: $(Target)
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
 
-              # TODO: Restore Linux cross-compilation with the deferred Linux release.
-              # - task: UsePythonVersion@0
-              #   inputs:
-              #     versionSpec: '3.13'
-              # - pwsh: ./.azure-pipelines/scripts/Build-LinuxOnWindows.ps1
-              #   displayName: Cross-compile Linux x64 and package executable Unix permissions on Windows
-              #   env:
-              #     RUSTUP_TOOLCHAIN: $(RustVersion)
-              #     RUSTFLAGS: ''
+              - task: UsePythonVersion@0
+                inputs:
+                  versionSpec: '3.13'
+              - pwsh: ./.azure-pipelines/scripts/Build-LinuxOnWindows.ps1
+                displayName: Cross-compile Linux x64 and package executable Unix permissions on Windows
+                env:
+                  RUSTUP_TOOLCHAIN: $(RustVersion)
+                  RUSTFLAGS: ''
 
-      # TODO: Restore Linux releases in a separate PR after consulting the ESRP team.
-      # Run 21430420 built both targets, but CP-450779-Pgp denied this ESRP client.
       - stage: BuildUnix
         displayName: Cross-compile Apple Silicon on Intel macOS
         dependsOn: DetermineRelease
@@ -379,8 +375,8 @@ extends:
                 os: macOS
 
       - stage: SignUnix
-        displayName: Submit Apple signing/notarization from Windows
-        dependsOn: BuildUnix
+        displayName: Submit Linux signing and Apple signing/notarization from Windows
+        dependsOn: [ValidateWindows, BuildUnix]
         pool:
           name: 1ES-AppDev
           image: windows-2022
@@ -391,12 +387,18 @@ extends:
             templateContext:
               inputs:
                 - input: pipelineArtifact
+                  artifactName: unsigned-linux
+                  targetPath: $(Pipeline.Workspace)/unsigned-linux
+                - input: pipelineArtifact
                   artifactName: unsigned-macos
                   targetPath: $(Pipeline.Workspace)/unsigned-macos
               outputs:
                 - output: pipelineArtifact
                   artifactName: unix-signing
                   targetPath: $(Build.ArtifactStagingDirectory)/unix-signing
+                - output: pipelineArtifact
+                  artifactName: linux-signed
+                  targetPath: $(Build.ArtifactStagingDirectory)/linux-signed
             steps:
               - checkout: self
                 clean: true
@@ -404,10 +406,27 @@ extends:
               - pwsh: |
                   $ErrorActionPreference = 'Stop'
                   $output = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'unix-signing'
-                  New-Item -ItemType Directory -Path $output | Out-Null
+                  $linuxSign = Join-Path $env:AGENT_TEMPDIRECTORY 'linux-sign'
+                  New-Item -ItemType Directory -Path $output, $linuxSign | Out-Null
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $output
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/*.tar.gz" -Destination $linuxSign
+                  Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-linux/linux-source.json" -Destination $output
                   Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/*.zip" -Destination $output
                   Copy-Item "$env:PIPELINE_WORKSPACE/unsigned-macos/macos-source.json" -Destination $output
-                displayName: Stage macOS archive for ESRP
+                displayName: Stage archives for ESRP, preserving the Linux archive that detached signing replaces
+              - template: /.azure-pipelines/templates/sign-unix.yml@self
+                parameters:
+                  folder: $(Agent.TempDirectory)/linux-sign
+                  pattern: '*.tar.gz'
+                  keyCode: CP-450779-Pgp
+                  operation: LinuxSign
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $files = @(Get-ChildItem "$env:AGENT_TEMPDIRECTORY/linux-sign/*.tar.gz" -File)
+                  if ($files.Count -ne 1) { throw 'Expected exactly one ESRP Linux detached signature response.' }
+                  Copy-Item -LiteralPath $files[0].FullName `
+                    -Destination "$env:BUILD_ARTIFACTSTAGINGDIRECTORY/unix-signing/$($files[0].Name).sig"
+                displayName: Keep detached signature alongside unchanged Linux archive
               - template: /.azure-pipelines/templates/sign-unix.yml@self
                 parameters:
                   folder: $(Build.ArtifactStagingDirectory)/unix-signing
@@ -423,6 +442,33 @@ extends:
                   pattern: '*.zip'
                   keyCode: CP-401337-Apple
                   operation: MacAppNotarize
+              - task: UseNode@1
+                inputs:
+                  version: $(NodeVersion)
+              - task: UsePythonVersion@0
+                inputs:
+                  versionSpec: '3.13'
+              - pwsh: |
+                  $ErrorActionPreference = 'Stop'
+                  $env:GPG = Join-Path $env:ProgramFiles 'Git/usr/bin/gpg.exe'
+                  if (-not (Test-Path -LiteralPath $env:GPG -PathType Leaf)) {
+                    throw 'Git for Windows GPG is missing; install an approved GPG before Linux signature verification.'
+                  }
+                  if ([int]$env:TEST_RELEASE_PR -gt 0) {
+                    & node --input-type=module -e '
+                      import { readFileSync, writeFileSync } from "node:fs";
+                      import { alphaManifest } from "./.github/scripts/set-alpha-version.mjs";
+                      const result = alphaManifest(readFileSync("Cargo.toml", "utf8"), process.env.BUILD_BUILDID);
+                      writeFileSync("Cargo.toml", result.manifest);
+                    '
+                    if ($LASTEXITCODE -ne 0) { throw 'Cannot match the build-only alpha version.' }
+                  }
+                  & node .github/scripts/unix-release.mjs verify linux
+                  if ($LASTEXITCODE -ne 0) { throw 'Linux archive GPG/source/hash/ELF verification failed.' }
+                displayName: Independently verify Linux PGP signature and archive integrity on Windows
+                env:
+                  TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+                  UNIX_SIGNING_DIRECTORY: $(Build.ArtifactStagingDirectory)/unix-signing
 
       - stage: VerifyUnix
         displayName: Verify Apple Developer ID/notarization on Intel macOS
@@ -440,7 +486,7 @@ extends:
                 os: macOS
 
       - stage: StageGitHubRelease
-        displayName: Publish verified signed Windows and macOS releases
+        displayName: Publish verified signed Windows, macOS and Linux releases
         dependsOn: [DetermineRelease, ValidateWindows, VerifyUnix, SDLSources]
         condition: and(succeeded(), or(eq(dependencies.DetermineRelease.outputs['Version.detect.PublishRelease'], 'true'), gt(${{ parameters.testReleasePr }}, 0)))
         variables:
@@ -450,7 +496,7 @@ extends:
           MainRelease: $[stageDependencies.DetermineRelease.Version.outputs['detect.PublishRelease']]
         jobs:
           - job: UploadSignedPlatforms
-            displayName: Upload verified signed Windows and macOS release assets
+            displayName: Upload verified signed Windows, macOS and Linux release assets
             templateContext:
               type: releaseJob
               isProduction: true
@@ -461,9 +507,9 @@ extends:
                 - input: pipelineArtifact
                   artifactName: macos-signed
                   targetPath: $(Pipeline.Workspace)/macos-signed
-                # - input: pipelineArtifact
-                #   artifactName: linux-signed
-                #   targetPath: $(Pipeline.Workspace)/linux-signed
+                - input: pipelineArtifact
+                  artifactName: linux-signed
+                  targetPath: $(Pipeline.Workspace)/linux-signed
             steps:
               - checkout: none
               - pwsh: |
@@ -515,10 +561,8 @@ extends:
                 displayName: Require every signed platform and assemble combined release checksums
                 env:
                   RELEASE_TAG: $(ReleaseTag)
-                  # TODO: Add linux when Linux releases are restored.
-                  RELEASE_PLATFORMS: windows,macos
               - task: GitHubRelease@1
-                displayName: Create GitHub release with verified signed Windows and macOS assets
+                displayName: Create GitHub release with verified signed Windows, macOS and Linux assets
                 inputs:
                   gitHubConnection: github.com_christopheranderson
                   repositoryName: microsoft/rayfin-local
@@ -528,12 +572,12 @@ extends:
                   tag: $(ReleaseTag)
                   releaseNotesSource: inline
                   releaseNotesInline: |
-                    Signed Windows x64 and macOS Apple Silicon assets from official AppDev build $(Build.BuildId).
+                    Signed Windows x64, macOS Apple Silicon and Linux x64 assets from official AppDev build $(Build.BuildId).
                     Source: $(Build.SourceVersion).
                     Windows x64: ESRP Authenticode signature.
                     macOS Apple Silicon: Developer ID signature with hardened runtime, notarized by Apple.
-                    macOS Apple Silicon is cross-compiled on Intel macOS; the ARM64 release binary is not executed in CI.
-                    Linux releases are deferred to a separate PR pending ESRP authorization.
+                    Linux x64: detached PGP signature (.sig) from the Microsoft key in microsoft.asc, fingerprint BC528686B50D79E339D3721CEB3E94ADBE1229CF.
+                    macOS Apple Silicon is cross-compiled on Intel macOS and Linux x64 on Windows; neither release binary is executed in CI.
                     Prereleases are never marked latest.
                   assets: $(Pipeline.Workspace)/release/*
                   isDraft: false

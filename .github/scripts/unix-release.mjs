@@ -118,7 +118,7 @@ function main() {
     }, null, 2));
     return;
   }
-  const input = join(process.env.PIPELINE_WORKSPACE, 'unix-signing');
+  const input = process.env.UNIX_SIGNING_DIRECTORY || join(process.env.PIPELINE_WORKSPACE, 'unix-signing');
   const source = JSON.parse(readFileSync(join(input, `${platform}-source.json`), 'utf8'));
   checkSource(source, expected);
   assert.equal(source.nativeExecutionTested, false, 'Cross-compiled artifacts must disclose deferred native execution');

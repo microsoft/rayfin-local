@@ -138,19 +138,18 @@ Compatibility fixtures use the real 1.36.2 and 2.0.0 SDKs, including the Functio
 
 ## Install
 
-The official release pipeline publishes Windows x64 and macOS Apple Silicon binaries, signed through ESRP (and, for macOS, notarized by Apple) and independently verified before publication.
-Linux build/signing/publishing stages are commented out pending ESRP authorization and validation in a separate PR.
+The official release pipeline publishes Windows x64, macOS Apple Silicon and Linux x64 binaries, signed through ESRP (and, for macOS, notarized by Apple) and independently verified before publication.
 The signing guarantee applies to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
-The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) preserves the deferred Linux design, ESRP blocker and native Linux/ARM64 execution-testing TODOs.
+The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) describes the Linux and macOS signing and the native execution-testing TODOs.
 
-**macOS on Apple Silicon:**
+**macOS on Apple Silicon and Linux x64:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
 ```
 
-**Linux and Intel macOS (existing unsigned `0.2.8` release):**
+**Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.2.8 sh
@@ -183,11 +182,12 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
 | macOS on Apple Silicon | `aarch64-apple-darwin` |
-| Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
+| Linux x64 with glibc | `x86_64-unknown-linux-gnu` |
 | Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
 
-While Linux releases are deferred, Linux and Intel macOS must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+Intel macOS and Linux ARM64 must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
 The installers check archive checksums; that is not signature verification.
+To check a Linux archive's signature, import the release's `microsoft.asc`, confirm its fingerprint is `BC528686B50D79E339D3721CEB3E94ADBE1229CF`, and run `gpg --verify <archive>.sig <archive>`.
 
 Other ways to install:
 
