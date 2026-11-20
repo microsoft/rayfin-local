@@ -91,18 +91,16 @@ stages:
           templateContext:
             type: releaseJob
             isProduction: true
+            # 1ES disables automatic downloads itself. An explicit download: none would suppress these inputs.
+            inputs:
+              - input: pipelineArtifact
+                artifactName: npm-packages
+                targetPath: $(Pipeline.Workspace)/npm-packages
           strategy:
             runOnce:
               deploy:
                 steps:
                   - checkout: none
-                  - download: none
-                  - task: 1ES.DownloadPipelineArtifact@1
-                    displayName: Download this run's verified npm tarball
-                    inputs:
-                      buildType: current
-                      artifactName: npm-packages
-                      targetPath: $(Pipeline.Workspace)/npm-packages
                   - pwsh: |
                       $ErrorActionPreference = 'Stop'
                       foreach ($name in 'RELEASE_OWNERS', 'RELEASE_APPROVERS', 'RELEASE_ENDPOINT', 'RELEASE_PUBLISHER') {
@@ -111,12 +109,14 @@ stages:
                           throw "Ask the AppDev release owners to configure $name for this pipeline before npm publishing."
                         }
                       }
-                      $tarballs = @(Get-ChildItem "$env:PIPELINE_WORKSPACE/npm-packages" -File -Recurse)
+                      $tarballs = @(Get-ChildItem -LiteralPath "$env:PIPELINE_WORKSPACE/npm-packages" -Filter '*.tgz' -File -Recurse)
                       if ($env:RELEASE_TAG -cnotmatch '^v(\d+\.\d+\.\d+)$') { throw 'Expected a stable signed release tag.' }
                       if ($tarballs.Count -ne 1 -or $tarballs[0].Name -cne "microsoft-rayfin-local-$($Matches[1]).tgz") {
                         throw 'Expected exactly one verified Rayfin Local npm tarball for this version.'
                       }
-                    displayName: Check publisher configuration and preview input
+                      $publishDir = New-Item -ItemType Directory -Path "$env:AGENT_TEMPDIRECTORY/npm-release"
+                      Copy-Item -LiteralPath $tarballs[0].FullName -Destination $publishDir.FullName
+                    displayName: Check configuration and stage only the verified npm tarball
                     env:
                       RELEASE_TAG: $(ReleaseTag)
                       RELEASE_OWNERS: $(EsrpOwners)
@@ -134,7 +134,7 @@ stages:
                       ClientId: $(EsrpClientId)
                       KeyVaultName: $(EsrpKeyVaultName)
                       SignCertName: $(EsrpSignCertName)
-                      FolderLocation: $(Pipeline.Workspace)/npm-packages
+                      FolderLocation: $(Agent.TempDirectory)/npm-release
                       Owners: $(EsrpOwners)
                       Approvers: $(EsrpApprovers)
                       ServiceEndpointUrl: $(EsrpServiceEndpointUrl)
