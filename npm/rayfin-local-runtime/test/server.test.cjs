@@ -35,32 +35,37 @@ function fixture(t) {
   return { child, spawn, event, close, warnings };
 }
 
-test('defaults to loopback backend with no automatic or open sign-in despite inherited opt-in', async (t) => {
+test('defaults to loopback backend and closed sign-in without overriding CLI identity or state', async (t) => {
   const f = fixture(t);
   const old = process.env.RAYFIN_LOCAL_CONTROL_TOKEN;
   const oldOpen = process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
+  const oldState = process.env.RAYFIN_LOCAL_STATE_DIR;
   process.env.RAYFIN_LOCAL_CONTROL_TOKEN = 'do-not-inherit';
   process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = 'true';
+  process.env.RAYFIN_LOCAL_STATE_DIR = 'inherited-state';
   t.after(() => {
     if (old === undefined) delete process.env.RAYFIN_LOCAL_CONTROL_TOKEN;
     else process.env.RAYFIN_LOCAL_CONTROL_TOKEN = old;
     if (oldOpen === undefined) delete process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
     else process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = oldOpen;
+    if (oldState === undefined) delete process.env.RAYFIN_LOCAL_STATE_DIR;
+    else process.env.RAYFIN_LOCAL_STATE_DIR = oldState;
   });
   const starting = startRayfinLocal({ projectDir: 'project with spaces' });
   const [binary, args, options] = f.spawn.mock.calls[0].arguments;
   assert.equal(binary, '/packaged/rayfin-local');
   assert.deepEqual(args, ['serve', '--json',
     '-C', path.resolve('project with spaces'), '--host', '127.0.0.1', '--port', '0',
-    '--sign-in-as', 'none', '--no-frontend']);
+    '--no-frontend']);
   assert.equal(options.env.RAYFIN_LOCAL_CONTROL_TOKEN, undefined);
   assert.equal(options.env.RAYFIN_LOCAL_OPEN_SIGN_IN, undefined);
+  assert.equal(options.env.RAYFIN_LOCAL_STATE_DIR, 'inherited-state');
   assert.equal(options.env.RAYFIN_LOCAL_NODE, process.execPath);
   assert.equal(options.shell, undefined);
   f.child.stdout.write(JSON.stringify(ready).slice(0, 20));
   f.child.stdout.write(`${JSON.stringify(ready).slice(20)}\n`);
   const running = await starting;
-  assert.deepEqual(Object.keys(running).sort(), ['apiUrl', 'ready', 'stop']);
+  assert.deepEqual(Object.keys(running).sort(), ['apiUrl', 'closed', 'ready', 'stop']);
   assert.deepEqual(running.ready, ready);
   let stopped = false;
   const stop = running.stop();
@@ -71,6 +76,7 @@ test('defaults to loopback backend with no automatic or open sign-in despite inh
   assert(f.child.stdin.writableEnded);
   f.close();
   await stop;
+  await running.closed;
   assert.equal(stopped, true);
 });
 
@@ -80,12 +86,29 @@ test('invalid input never spawns', async (t) => {
     undefined, {}, { projectDir: '' }, { projectDir: '.', binary: 'bad' },
     ...[{ host: '0.0.0.0' }, { host: 'example.com' }, { port: -1 }, { port: 65536 },
       { port: 1.5 }, { frontend: 'static' }, { openSignIn: 'true' }, { signInAs: 'user:' },
-      { signInAs: 'user:name\ninjection' }, { signInAs: 'admin' }]
+      { signInAs: 'user:name\ninjection' }, { signInAs: 'admin' }, { stateDir: '' },
+      { stateDir: 1 }, { forceSchema: 'true' }, { reset: 1 }, { onEvent: true }]
       .map((option) => ({ projectDir: '.', ...option })),
   ]) {
     await assert.rejects(startRayfinLocal(options), { code: 'config-invalid' });
   }
   assert.equal(f.spawn.mock.callCount(), 0);
+});
+
+test('state and destructive flags are explicit and unspecified identity accepts CLI configuration', async (t) => {
+  const f = fixture(t);
+  const starting = startRayfinLocal({
+    projectDir: '.', stateDir: 'state with spaces', forceSchema: true, reset: true,
+  });
+  assert.deepEqual(f.spawn.mock.calls[0].arguments[1], [
+    'serve', '--json', '-C', path.resolve('.'), '--host', '127.0.0.1', '--port', '0',
+    '--state-dir', path.resolve('state with spaces'), '--force-schema', '--reset', '--no-frontend',
+  ]);
+  f.event({ ...ready, signInAs: { kind: 'user', username: 'configured@example.test' } });
+  const running = await starting;
+  const stopped = running.stop();
+  f.close();
+  await stopped;
 });
 
 test('honors caller-selected frontend, loopback host, port and explicit sign-in policy', async (t) => {
@@ -112,7 +135,7 @@ test('honors caller-selected frontend, loopback host, port and explicit sign-in 
 
 test('fatal startup errors reject only after cleanup, without copying child diagnostics', async (t) => {
   const f = fixture(t);
-  const starting = startRayfinLocal({ projectDir: '.' });
+  const starting = startRayfinLocal({ projectDir: '.', signInAs: 'none' });
   let settled = false;
   const rejection = assert.rejects(starting, (error) => {
     assert.equal(error.code, 'already-serving');
@@ -148,7 +171,7 @@ test('invalid readiness, malformed events and app build failures never resolve s
   ]) {
     await t.test(JSON.stringify(value), async (t) => {
       const f = fixture(t);
-      const starting = startRayfinLocal({ projectDir: '.' });
+      const starting = startRayfinLocal({ projectDir: '.', signInAs: 'none' });
       const rejected = assert.rejects(starting, { name: 'RayfinServerError' });
       if (value === 'malformed') f.child.stdout.write('not json\n');
       else f.event(value);
@@ -168,14 +191,36 @@ test('spawn failure and early exit are structured', async (t) => {
   await rejected;
 });
 
-test('unexpected ready backend exit is observable and stop rejects', async (t) => {
+test('unexpected exit rejects closed even if observed later and stop rejects with the same error', async (t) => {
   const f = fixture(t);
   const starting = startRayfinLocal({ projectDir: '.' });
   f.event(ready);
   const running = await starting;
   f.close(1);
+  await tick(); // An unobserved rejection would fail the Node test runner here.
+  await assert.rejects(running.closed, {
+    name: 'RayfinServerError', code: 'backend-exited', exitCode: 1, signal: null,
+  });
+  assert.equal(running.stop(), running.closed);
   await assert.rejects(running.stop(), { code: 'backend-exited', exitCode: 1 });
-  assert.equal(f.warnings.mock.callCount(), 1);
+  assert.equal(f.warnings.mock.callCount(), 0);
+});
+
+test('fatal runtime error rejects closed only after exit and preserves fatal code and exit metadata', async (t) => {
+  const f = fixture(t);
+  const starting = startRayfinLocal({ projectDir: '.' });
+  f.event(ready);
+  const running = await starting;
+  let closed = false;
+  const rejected = assert.rejects(running.closed, {
+    name: 'RayfinServerError', code: 'runtime-failed', fatal: true, exitCode: null, signal: 'SIGTERM',
+  }).then(() => { closed = true; });
+  f.event({ type: 'error', fatal: true, code: 'runtime-failed' });
+  await tick();
+  assert.equal(closed, false);
+  assert(f.child.stdin.writableEnded);
+  f.child.emit('close', null, 'SIGTERM');
+  await rejected;
 });
 
 test('startup and shutdown timeouts clean up before rejection', async (t) => {
@@ -208,16 +253,56 @@ test('parent signal stops all instances and retains existing host handlers', asy
   assert.equal(process.listenerCount('SIGTERM'), before + 1);
 });
 
-test('reload failures and restart-required are surfaced without forwarding child output', async (t) => {
+test('reload failures and restart-required are delivered as events without closing the backend', async (t) => {
   const f = fixture(t);
-  const starting = startRayfinLocal({ projectDir: '.' });
+  const events = [];
+  const starting = startRayfinLocal({ projectDir: '.', onEvent: (event) => events.push(event) });
   f.event({ type: 'functions', state: 'ready' });
   f.event({ ...ready, features: { functions: { enabled: true } } });
   const running = await starting;
-  f.event({ type: 'functions', state: 'failed', message: 'secret' });
+  events.length = 0;
+  const changes = [
+    { type: 'functions', state: 'failed' }, { type: 'analysis', ok: false },
+    { type: 'schema', result: 'refused' }, { type: 'schema', result: 'failed' },
+    { type: 'config-changed', restartRequired: true },
+  ];
+  for (const change of changes) f.event(change);
+  assert.deepEqual(events, changes.map((change) => ({ v: 1, ...change })));
+  assert.equal(f.warnings.mock.callCount(), 0);
+  assert.equal(f.child.stdin.writableEnded, false);
+  const stopped = running.stop();
+  f.close();
+  await stopped;
+});
+
+test('throwing event callbacks do not break readiness or later event delivery', async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  const starting = startRayfinLocal({
+    projectDir: '.', onEvent: () => { if (++calls === 1) throw new Error('callback failed'); },
+  });
+  f.event(ready);
+  const running = await starting;
   f.event({ type: 'config-changed', restartRequired: true });
-  assert.equal(f.warnings.mock.callCount(), 2);
-  assert(!JSON.stringify(f.warnings.mock.calls.map((call) => call.arguments)).includes('secret'));
+  assert.equal(calls, 2);
+  assert.equal(f.warnings.mock.calls[0].arguments[1].code, 'rayfin-event-callback-failed');
+  const stopped = running.stop();
+  f.close();
+  await stopped;
+});
+
+test('split and batched stdout events retain their order and are delivered once', async (t) => {
+  const f = fixture(t);
+  const events = [];
+  const starting = startRayfinLocal({ projectDir: '.', onEvent: (event) => events.push(event) });
+  const line = JSON.stringify(ready);
+  f.child.stdout.write(line.slice(0, 17));
+  assert.equal(events.length, 0);
+  const reload = { v: 1, type: 'analysis', ok: false };
+  const restart = { v: 1, type: 'config-changed', restartRequired: true };
+  f.child.stdout.write(`${line.slice(17)}\n${JSON.stringify(reload)}\n${JSON.stringify(restart)}\n`);
+  const running = await starting;
+  assert.deepEqual(events, [ready, reload, restart]);
   const stopped = running.stop();
   f.close();
   await stopped;

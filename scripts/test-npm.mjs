@@ -57,8 +57,11 @@ const ready: Promise<ReadyInfo> = runtime.start();
 const closed: Promise<StopInfo> = runtime.closed;
 const binary: string = binaryPath;
 void ready; void closed; void binary;
-const server: Promise<RayfinServer> = startRayfinLocal({ projectDir: '.' });
-void server;
+const server: Promise<RayfinServer> = startRayfinLocal({
+  projectDir: '.', stateDir: './state', forceSchema: false, reset: false,
+  onEvent(event) { const type: string = event.type; void type; },
+});
+server.then((running) => { const closed: Promise<void> = running.closed; void closed; });
 `;
   for (const extension of ['mts', 'cts']) await writeFile(path.join(temporary, `types.${extension}`), source);
   run(process.execPath, [
