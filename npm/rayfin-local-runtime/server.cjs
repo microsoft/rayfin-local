@@ -69,26 +69,31 @@ function readyUrl(event, options) {
     throw failure('unsupported-sdk', 'The app SDK is not supported by this Rayfin runtime.');
   }
   const identity = event.signInAs;
-  if (options.signInAs.startsWith('user:')
+  if (options.signInAs !== undefined && (options.signInAs.startsWith('user:')
     ? identity?.kind !== 'user' || identity.username !== options.signInAs.slice(5)
-    : identity?.kind !== options.signInAs) {
+    : identity?.kind !== options.signInAs)) {
     throw failure('invalid-ready', 'Rayfin reported a different sign-in identity than requested.');
   }
   return url.origin;
 }
 
 function settings(input) {
-  const keys = ['projectDir', 'frontend', 'host', 'port', 'signInAs', 'openSignIn'];
-  const options = { frontend: false, host: '127.0.0.1', port: 0, signInAs: 'none', openSignIn: false, ...input };
+  const keys = ['projectDir', 'frontend', 'host', 'port', 'signInAs', 'openSignIn',
+    'stateDir', 'forceSchema', 'reset', 'onEvent'];
+  const options = { frontend: false, host: '127.0.0.1', port: 0, openSignIn: false,
+    forceSchema: false, reset: false, ...input };
   if (!input || typeof input.projectDir !== 'string' || !input.projectDir.trim()
     || Object.keys(input).some((key) => !keys.includes(key))
     || typeof options.frontend !== 'boolean' || typeof options.openSignIn !== 'boolean'
     || !['localhost', '127.0.0.1', '::1'].includes(options.host)
     || !Number.isInteger(options.port) || options.port < 0 || options.port > 65535
-    || typeof options.signInAs !== 'string'
-    || (!['none', 'developer'].includes(options.signInAs)
-      && !/^user:\S[^\r\n\0]*$/.test(options.signInAs))) {
-    throw failure('config-invalid', 'Supply a project directory and valid Rayfin frontend, loopback host, port and sign-in options.');
+    || typeof options.forceSchema !== 'boolean' || typeof options.reset !== 'boolean'
+    || (options.stateDir !== undefined && (typeof options.stateDir !== 'string' || !options.stateDir.trim()))
+    || (options.onEvent !== undefined && typeof options.onEvent !== 'function')
+    || (options.signInAs !== undefined && (typeof options.signInAs !== 'string'
+      || (!['none', 'developer'].includes(options.signInAs)
+        && !/^user:\S[^\r\n\0]*$/.test(options.signInAs))))) {
+    throw failure('config-invalid', 'Supply a project directory and valid Rayfin server, state, sign-in and event options.');
   }
   return options;
 }
@@ -108,10 +113,10 @@ async function startRayfinLocal(input) {
     throw failure('binary-unavailable', 'Could not find a packaged Rayfin executable for this platform.', { cause });
   }
   const env = { ...process.env, RAYFIN_LOCAL_NODE: process.execPath };
-  // Host-owned admin credentials/state must not leak into an app backend or its children.
+  // Host-owned admin credentials must not leak into an app backend or its children.
   for (const key of [
     'RAYFIN_LOCAL_CONTROL_TOKEN', 'RAYFIN_LOCAL_SIGN_IN_SECRET',
-    'RAYFIN_LOCAL_STATE_DIR', 'RAYFIN_LOCAL_OPEN_SIGN_IN',
+    'RAYFIN_LOCAL_OPEN_SIGN_IN',
   ]) {
     delete env[key];
   }
@@ -119,7 +124,11 @@ async function startRayfinLocal(input) {
   try {
     child = childProcess.spawn(binaryPath, [
       'serve', '--json', '-C', projectDir,
-      '--host', options.host, '--port', String(options.port), '--sign-in-as', options.signInAs,
+      '--host', options.host, '--port', String(options.port),
+      ...(options.signInAs !== undefined ? ['--sign-in-as', options.signInAs] : []),
+      ...(options.stateDir !== undefined ? ['--state-dir', path.resolve(options.stateDir)] : []),
+      ...(options.forceSchema ? ['--force-schema'] : []),
+      ...(options.reset ? ['--reset'] : []),
       ...(!options.frontend ? ['--no-frontend'] : []),
       ...(options.openSignIn ? ['--open-sign-in'] : []),
     ], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -140,6 +149,11 @@ async function startRayfinLocal(input) {
   let stopTimer;
   let buffer = '';
   let functionsReady = false;
+  const backendClosed = exited.then(() => {
+    if (error) throw error;
+  });
+  // Observation is optional, but awaiting the original promise still exposes failure.
+  void backendClosed.catch(() => {});
 
   function end() {
     if (!child.stdin.destroyed) child.stdin.end();
@@ -155,23 +169,26 @@ async function startRayfinLocal(input) {
         child.kill('SIGKILL');
       }, STOP_TIMEOUT_MS);
     }
-    stopPromise = exited.then(() => {
-      if (error) throw error;
-    });
+    stopPromise = backendClosed;
     return stopPromise;
   }
   const instance = { stop, end };
   function fail(reason) {
     error ??= reason;
-    if (settled && !stopping) {
-      process.emitWarning('The Rayfin server failed; stop and restart it.', { code: error.code });
-    }
     // Startup rejection is delayed until the child releases its listeners and project lock.
     void stop().catch(rejectStart);
   }
   function event(value) {
     if (!value || value.v !== 1 || typeof value.type !== 'string') {
       throw failure('invalid-event', 'Rayfin emitted an unsupported event envelope.');
+    }
+    if (options.onEvent) {
+      try { options.onEvent(value); }
+      catch {
+        process.emitWarning('Rayfin server event callback threw; event delivery continues.', {
+          code: 'rayfin-event-callback-failed',
+        });
+      }
     }
     if (value.type === 'error' && value.fatal) {
       throw failure(typeof value.code === 'string' ? value.code : 'backend-error',
@@ -195,19 +212,8 @@ async function startRayfinLocal(input) {
         }
         settled = true;
         clearTimeout(timer);
-        resolveStart({ ready: value, apiUrl, stop });
+        resolveStart({ ready: value, apiUrl, closed: backendClosed, stop });
       }
-    } else if (settled && !stopping
-      && ((value.type === 'error') || (value.type === 'analysis' && !value.ok)
-        || (value.type === 'functions' && value.state === 'failed')
-        || (value.type === 'schema' && ['failed', 'refused'].includes(value.result)))) {
-      process.emitWarning('Rayfin reported an app reload failure; correct the app and retry.', {
-        code: 'rayfin-reload-failed',
-      });
-    } else if (settled && !stopping && value.type === 'config-changed' && value.restartRequired) {
-      process.emitWarning('Rayfin configuration changed; stop and restart the server to apply it.', {
-        code: 'rayfin-restart-required',
-      });
     }
   }
   register(instance);
@@ -247,13 +253,10 @@ async function startRayfinLocal(input) {
     if (!stopping || exitCode !== 0 || signal) {
       error ??= failure('backend-exited', 'Rayfin exited unexpectedly.', { exitCode, signal });
     }
+    if (error) Object.assign(error, { exitCode, signal });
     if (!settled) {
       settled = true;
       rejectStart(error ?? failure('startup-stopped', 'Rayfin stopped before becoming ready.'));
-    } else if (!stopping) {
-      process.emitWarning('The Rayfin server exited; stop and restart it.', {
-        code: error.code,
-      });
     }
     resolveExit();
   });

@@ -20,8 +20,9 @@ try {
 }
 ```
 
-The client defaults to a backend-only listener on an available loopback port, with no automatic
-identity or open sign-in. It waits for the [versioned `ready` event](https://github.com/microsoft/rayfin-local/blob/main/docs/embedding.md#ready)
+The client defaults to a backend-only listener on an available loopback port, with open sign-in off.
+Unless you set `signInAs`, automatic sign-in follows the project's `rayfin-local.toml`, then the
+CLI default (`developer`). It waits for the [versioned `ready` event](https://github.com/microsoft/rayfin-local/blob/main/docs/embedding.md#ready)
 and gracefully stops the child by closing stdin. Use `frontend: true` to run the app's frontend too.
 The child uses the host's standalone Node executable. CommonJS and TypeScript are supported.
 `@microsoft/rayfin-local/binary` exports `binaryPath` for hosts managing their own child process.
