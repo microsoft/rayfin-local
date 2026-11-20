@@ -42,8 +42,8 @@ try {
   const installed = path.join(temporary, 'node_modules/@microsoft/rayfin-local-runtime');
   run(process.execPath, ['--test',
     path.join(root, 'npm/rayfin-local-runtime/test/runtime.test.cjs'),
-    path.join(root, 'npm/rayfin-local-runtime/test/managed-dev.test.cjs'),
-    path.join(root, 'npm/rayfin-local-runtime/test/managed-dev-installed.test.cjs'),
+    path.join(root, 'npm/rayfin-local-runtime/test/server.test.cjs'),
+    path.join(root, 'npm/rayfin-local-runtime/test/server-installed.test.cjs'),
   ], {
     stdio: 'inherit',
     env: { ...process.env, RAYFIN_LOCAL_TEST_PACKAGE: installed, RAYFIN_LOCAL_TEST_PROJECT: fixture },
@@ -51,14 +51,14 @@ try {
   const source = `
 import { createRuntime, type StopInfo, type ReadyInfo } from '@microsoft/rayfin-local-runtime';
 import { binaryPath } from '@microsoft/rayfin-local-runtime/binary';
-import { startRayfinLocal, type ManagedDev } from '@microsoft/rayfin-local-runtime/managed-dev';
+import { startRayfinLocal, type RayfinServer } from '@microsoft/rayfin-local-runtime/server';
 const runtime = createRuntime({ projectDir: '.', server: { port: 0 }, frontend: { mode: 'off' } });
 const ready: Promise<ReadyInfo> = runtime.start();
 const closed: Promise<StopInfo> = runtime.closed;
 const binary: string = binaryPath;
 void ready; void closed; void binary;
-const managed: Promise<ManagedDev> = startRayfinLocal({ projectDir: '.' });
-void managed;
+const server: Promise<RayfinServer> = startRayfinLocal({ projectDir: '.' });
+void server;
 `;
   for (const extension of ['mts', 'cts']) await writeFile(path.join(temporary, `types.${extension}`), source);
   run(process.execPath, [

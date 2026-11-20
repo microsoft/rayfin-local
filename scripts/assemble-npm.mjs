@@ -43,6 +43,8 @@ for (const name of await readdir(source)) {
   }
 }
 await copyFile(path.join(root, 'LICENSE'), path.join(wrapper, 'LICENSE'));
+await mkdir(path.join(wrapper, 'examples'), { recursive: true });
+await copyFile(path.join(source, 'examples/server.mjs'), path.join(wrapper, 'examples/server.mjs'));
 await copyFile(path.join(root, 'LICENSE'), path.join(platform, 'LICENSE'));
 await copyFile(path.resolve(values.binary), path.join(platform, os === 'win32' ? 'rayfin-local.exe' : 'rayfin-local'));
 await copyFile(path.resolve(values.addon), path.join(platform, 'rayfin_local.node'));

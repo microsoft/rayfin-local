@@ -16,20 +16,21 @@ const fixture = process.env.RAYFIN_LOCAL_TEST_PROJECT;
 assert(installed && fixture, 'Set RAYFIN_LOCAL_TEST_PACKAGE and RAYFIN_LOCAL_TEST_PROJECT; installed tests must not skip.');
 const packageRequire = createRequire(path.join(installed, 'package.json'));
 // Importing either subpath must never try to load the native addon.
-require.extensions['.node'] = () => { throw new Error('managed-dev loaded a native addon'); };
-const { startRayfinLocal } = packageRequire('@microsoft/rayfin-local-runtime/managed-dev');
+require.extensions['.node'] = () => { throw new Error('server loaded a native addon'); };
+const { startRayfinLocal } = packageRequire('@microsoft/rayfin-local-runtime/server');
+const signIn = { openSignIn: true, signInAs: 'user:example@example.test' };
 
 async function project(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rayfin-managed-package-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rayfin-server-package-'));
   await fs.mkdir(path.join(root, 'rayfin', 'data'), { recursive: true });
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
-    name: 'managed-installed-test', private: true, type: 'module',
+    name: 'server-installed-test', private: true, type: 'module',
     dependencies: { '@microsoft/rayfin-core': '2.0.0' },
   }));
   for (const relative of ['tsconfig.json', 'rayfin/tsconfig.json']) {
     await fs.copyFile(path.join(fixture, relative), path.join(root, relative));
   }
-  await fs.writeFile(path.join(root, 'rayfin', 'rayfin.yml'), `name: managed-installed-test
+  await fs.writeFile(path.join(root, 'rayfin', 'rayfin.yml'), `name: server-installed-test
 services:
   auth:
     enabled: true
@@ -59,16 +60,50 @@ export class Note {
   return root;
 }
 
-test('packed ESM/CJS managed exports agree without loading native addon', async () => {
-  const esm = await import(pathToFileURL(path.join(installed, 'managed-dev.mjs')));
+test('packed ESM/CJS server exports agree without loading native addon', async () => {
+  const esm = await import(pathToFileURL(path.join(installed, 'server.mjs')));
   assert.equal(esm.startRayfinLocal, startRayfinLocal);
+});
+
+test('default server does not opt into open sign-in or an automatic identity', { timeout: 120_000 }, async (t) => {
+  const projectDir = await project(t);
+  const old = process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
+  process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = 'true';
+  let running;
+  try {
+    running = await startRayfinLocal({ projectDir });
+    assert.equal(running.ready.openSignIn, false);
+    assert.deepEqual(running.ready.signInAs, { kind: 'none' });
+    assert.equal(running.ready.appUrl, null);
+    for (const route of ['session-token', 'session-stamp']) {
+      assert.equal((await fetch(`${running.apiUrl}/.rayfin-local/dev/${route}`)).status, 403);
+    }
+  } finally {
+    if (old === undefined) delete process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
+    else process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = old;
+    await running?.stop();
+  }
+});
+
+test('caller can start Rayfin frontend and select automatic identity without opening sign-in', { timeout: 120_000 }, async (t) => {
+  const projectDir = await project(t);
+  await fs.writeFile(path.join(projectDir, 'index.html'), '<!doctype html><title>Standalone Rayfin server</title>');
+  const running = await startRayfinLocal({
+    projectDir, frontend: true, host: 'localhost', signInAs: 'user:standalone@example.test',
+  });
+  try {
+    assert.equal(running.ready.openSignIn, false);
+    assert.deepEqual(running.ready.signInAs, { kind: 'user', username: 'standalone@example.test' });
+    assert.equal((await fetch(running.ready.appUrl)).status, 200);
+    assert.equal((await fetch(`${running.apiUrl}/.rayfin-local/dev/session-token`)).status, 403);
+  } finally { await running.stop(); }
 });
 
 test('installed backend sessions, exclusive lock, idempotent awaited stop and restart', { timeout: 180_000 }, async (t) => {
   const projectDir = await project(t);
   let running;
   try {
-    running = await startRayfinLocal({ projectDir });
+    running = await startRayfinLocal({ projectDir, ...signIn });
     const first = running.apiUrl;
     assert.equal((await fetch(`${first}/.rayfin-local/health`)).status, 200);
     const stamp = await (await fetch(`${first}/.rayfin-local/dev/session-stamp`)).json();
@@ -83,7 +118,7 @@ test('installed backend sessions, exclusive lock, idempotent awaited stop and re
     assert.equal(stop, running.stop());
     await stop;
     await assert.rejects(fetch(`${first}/.rayfin-local/health`, { signal: AbortSignal.timeout(2000) }));
-    running = await startRayfinLocal({ projectDir });
+    running = await startRayfinLocal({ projectDir, ...signIn });
     assert.deepEqual(await (await fetch(`${running.apiUrl}/.rayfin-local/dev/session-stamp`)).json(), stamp);
     const refresh = await fetch(`${running.apiUrl}/api/auth/v1/token`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-publishable-key': config.publishableKey },
@@ -125,11 +160,16 @@ udf.func('ping', async (): Promise<string> => '${answer}', []);
   await fs.writeFile(configPath, (await fs.readFile(configPath, 'utf8'))
     .replace('functions:\n    enabled: false', 'functions:\n    enabled: true\n    buildCommand: npm run build'));
   const dependencyLink = path.join(functions, 'node_modules');
-  await fs.symlink(path.join(fixture, 'rayfin', 'functions', 'node_modules'), dependencyLink, 'junction');
+  const workerModules = path.join(fixture, 'rayfin', 'functions', 'node_modules');
+  const modules = await fs.stat(workerModules).then(() => workerModules, (error) => {
+    if (error.code !== 'ENOENT') throw error;
+    return path.join(fixture, 'node_modules'); // Workspace fixtures can hoist worker dependencies.
+  });
+  await fs.symlink(modules, dependencyLink, 'junction');
   let running;
   let client;
   try {
-    running = await startRayfinLocal({ projectDir });
+    running = await startRayfinLocal({ projectDir, ...signIn });
     const config = await (await fetch(`${running.apiUrl}/rayfin.config.json`)).json();
     const load = (name) => import(pathToFileURL(path.join(fixture, 'node_modules/@microsoft', name, 'dist/index.js')));
     const { RayfinClient } = await load('rayfin-client');
@@ -166,7 +206,7 @@ udf.func('ping', async (): Promise<string> => '${answer}', []);
 test('parent exit closes stdin and releases the real project lock', { timeout: 180_000 }, async (t) => {
   const projectDir = await project(t);
   const child = spawn(process.execPath, ['-e', `
-    const { startRayfinLocal } = require(${JSON.stringify(path.join(installed, 'managed-dev.cjs'))});
+    const { startRayfinLocal } = require(${JSON.stringify(path.join(installed, 'server.cjs'))});
     startRayfinLocal({projectDir: ${JSON.stringify(projectDir)}}).then(
       ({apiUrl}) => { process.send(apiUrl); },
       (error) => { process.send({code:error.code}); process.exitCode = 1; }

@@ -20,15 +20,15 @@
       "import": { "types": "./binary.d.mts", "default": "./binary.mjs" },
       "require": { "types": "./binary.d.cts", "default": "./binary.cjs" }
     },
-    "./managed-dev": {
-      "import": { "types": "./managed-dev.d.mts", "default": "./managed-dev.mjs" },
-      "require": { "types": "./managed-dev.d.cts", "default": "./managed-dev.cjs" }
+    "./server": {
+      "import": { "types": "./server.d.mts", "default": "./server.mjs" },
+      "require": { "types": "./server.d.cts", "default": "./server.cjs" }
     }
   },
-  "files": ["*.cjs", "*.mjs", "*.cts", "*.mts", "README.md"],
+  "files": ["*.cjs", "*.mjs", "*.cts", "*.mts", "examples/*.mjs", "README.md"],
   "scripts": {
     "test": "node --test test/*.test.cjs",
-    "test:managed-dev": "node --test test/managed-dev.test.cjs"
+    "test:server": "node --test test/server.test.cjs"
   },
   "optionalDependencies": {
     "@microsoft/rayfin-local-runtime-darwin-arm64": "0.3.1",

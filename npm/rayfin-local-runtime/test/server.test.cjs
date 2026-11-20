@@ -8,11 +8,11 @@ const { test } = require('node:test');
 const path = require('node:path');
 const { setImmediate: tick } = require('node:timers/promises');
 
-const { startRayfinLocal } = require('../managed-dev.cjs');
+const { startRayfinLocal } = require('../server.cjs');
 const binaryModule = require.resolve('../binary.cjs');
 const ready = {
-  v: 1, type: 'ready', openSignIn: true, appUrl: null, embedUrl: null,
-  apiUrl: 'http://localhost:12345', sdk: { supported: true }, features: {},
+  v: 1, type: 'ready', openSignIn: false, appUrl: null, embedUrl: null,
+  apiUrl: 'http://localhost:12345', sdk: { supported: true }, signInAs: { kind: 'none' }, features: {},
 };
 
 function fixture(t) {
@@ -35,27 +35,33 @@ function fixture(t) {
   return { child, spawn, event, close, warnings };
 }
 
-test('starts packaged binary with fixed backend arguments and sanitized child environment', async (t) => {
+test('defaults to loopback backend with no automatic or open sign-in despite inherited opt-in', async (t) => {
   const f = fixture(t);
   const old = process.env.RAYFIN_LOCAL_CONTROL_TOKEN;
+  const oldOpen = process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
   process.env.RAYFIN_LOCAL_CONTROL_TOKEN = 'do-not-inherit';
+  process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = 'true';
   t.after(() => {
     if (old === undefined) delete process.env.RAYFIN_LOCAL_CONTROL_TOKEN;
     else process.env.RAYFIN_LOCAL_CONTROL_TOKEN = old;
+    if (oldOpen === undefined) delete process.env.RAYFIN_LOCAL_OPEN_SIGN_IN;
+    else process.env.RAYFIN_LOCAL_OPEN_SIGN_IN = oldOpen;
   });
   const starting = startRayfinLocal({ projectDir: 'project with spaces' });
   const [binary, args, options] = f.spawn.mock.calls[0].arguments;
   assert.equal(binary, '/packaged/rayfin-local');
-  assert.deepEqual(args, ['serve', '--json', '--no-frontend', '--open-sign-in',
+  assert.deepEqual(args, ['serve', '--json',
     '-C', path.resolve('project with spaces'), '--host', '127.0.0.1', '--port', '0',
-    '--sign-in-as', 'user:managed-dev@example.test']);
+    '--sign-in-as', 'none', '--no-frontend']);
   assert.equal(options.env.RAYFIN_LOCAL_CONTROL_TOKEN, undefined);
+  assert.equal(options.env.RAYFIN_LOCAL_OPEN_SIGN_IN, undefined);
   assert.equal(options.env.RAYFIN_LOCAL_NODE, process.execPath);
   assert.equal(options.shell, undefined);
   f.child.stdout.write(JSON.stringify(ready).slice(0, 20));
   f.child.stdout.write(`${JSON.stringify(ready).slice(20)}\n`);
   const running = await starting;
-  assert.deepEqual(Object.keys(running).sort(), ['apiUrl', 'stop']);
+  assert.deepEqual(Object.keys(running).sort(), ['apiUrl', 'ready', 'stop']);
+  assert.deepEqual(running.ready, ready);
   let stopped = false;
   const stop = running.stop();
   assert.equal(stop, running.stop());
@@ -70,10 +76,38 @@ test('starts packaged binary with fixed backend arguments and sanitized child en
 
 test('invalid input never spawns', async (t) => {
   const f = fixture(t);
-  for (const options of [undefined, {}, { projectDir: '' }, { projectDir: '.', binary: 'bad' }]) {
+  for (const options of [
+    undefined, {}, { projectDir: '' }, { projectDir: '.', binary: 'bad' },
+    ...[{ host: '0.0.0.0' }, { host: 'example.com' }, { port: -1 }, { port: 65536 },
+      { port: 1.5 }, { frontend: 'static' }, { openSignIn: 'true' }, { signInAs: 'user:' },
+      { signInAs: 'user:name\ninjection' }, { signInAs: 'admin' }]
+      .map((option) => ({ projectDir: '.', ...option })),
+  ]) {
     await assert.rejects(startRayfinLocal(options), { code: 'config-invalid' });
   }
   assert.equal(f.spawn.mock.callCount(), 0);
+});
+
+test('honors caller-selected frontend, loopback host, port and explicit sign-in policy', async (t) => {
+  const f = fixture(t);
+  const starting = startRayfinLocal({
+    projectDir: '.', frontend: true, host: '::1', port: 54321,
+    signInAs: 'user:example@example.test', openSignIn: true,
+  });
+  const args = f.spawn.mock.calls[0].arguments[1];
+  assert.deepEqual(args, ['serve', '--json', '-C', path.resolve('.'),
+    '--host', '::1', '--port', '54321', '--sign-in-as', 'user:example@example.test', '--open-sign-in']);
+  const chosen = {
+    ...ready, apiUrl: 'http://[::1]:54321', appUrl: 'http://localhost:5173',
+    openSignIn: true, signInAs: { kind: 'user', username: 'example@example.test' },
+  };
+  f.event(chosen);
+  const server = await starting;
+  assert.equal(server.apiUrl, chosen.apiUrl);
+  assert.deepEqual(server.ready, chosen);
+  const stopped = server.stop();
+  f.close();
+  await stopped;
 });
 
 test('fatal startup errors reject only after cleanup, without copying child diagnostics', async (t) => {
@@ -101,7 +135,8 @@ test('invalid readiness, malformed events and app build failures never resolve s
     { ...ready, apiUrl: 'http://localhost.evil:12345' },
     { ...ready, apiUrl: 'http://localhost:12345/path' },
     { ...ready, apiUrl: 'http://user:secret@localhost:12345' },
-    { ...ready, openSignIn: false },
+    { ...ready, openSignIn: true },
+    { ...ready, signInAs: { kind: 'developer' } },
     { ...ready, v: 2 },
     { ...ready, appUrl: 'http://localhost:5173' },
     { ...ready, sdk: { supported: false } },
@@ -114,7 +149,7 @@ test('invalid readiness, malformed events and app build failures never resolve s
     await t.test(JSON.stringify(value), async (t) => {
       const f = fixture(t);
       const starting = startRayfinLocal({ projectDir: '.' });
-      const rejected = assert.rejects(starting, { name: 'RayfinManagedDevError' });
+      const rejected = assert.rejects(starting, { name: 'RayfinServerError' });
       if (value === 'malformed') f.child.stdout.write('not json\n');
       else f.event(value);
       assert(f.child.stdin.writableEnded);

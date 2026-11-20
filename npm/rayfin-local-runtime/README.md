@@ -59,30 +59,53 @@ APIs for users, data, secrets, and storage are not yet exposed by this package.
 
 ## CLI executable without the addon
 
-### Managed development backend
+### Supervised server
 
 ```js
-import { startRayfinLocal } from '@microsoft/rayfin-local-runtime/managed-dev';
+import { startRayfinLocal } from '@microsoft/rayfin-local-runtime/server';
 
-const backend = await startRayfinLocal({ projectDir: '/absolute/path/to/app' });
+const server = await startRayfinLocal({
+  projectDir: '/absolute/path/to/app',
+  frontend: false,
+  host: '127.0.0.1',
+  port: 0,
+  signInAs: 'none',
+  openSignIn: false,
+});
 try {
-  // Start the host's frontend only after this resolves; use backend.apiUrl for Rayfin.
+  console.log(server.apiUrl, server.ready);
+  // Use the server here.
 } finally {
-  await backend.stop();
+  await server.stop();
 }
 ```
 
 This binary-only ESM/CommonJS subpath never imports the native addon. It launches this package's
-exact-version `/binary` with `serve --json --no-frontend --open-sign-in -C <root>
---host 127.0.0.1 --port 0 --sign-in-as user:managed-dev@example.test`. It uses the host's Node
+exact-version `/binary` with `serve --json -C <root>` and explicit, validated options. It uses the host's Node
 executable for app helpers (standalone Node required), not a globally installed Rayfin CLI.
 SDK 2.0.x is required (tested 2.0.0); local support does not certify deployment compatibility.
 
-The only input is `projectDir`, whose `rayfin/rayfin.yml` and dependencies must already exist.
-The only result is `{apiUrl, stop}`. Startup resolves on validated v1, supported-SDK, open-sign-in,
-backend-only readiness with an allocated HTTP loopback origin. Analysis/schema/function build
+`projectDir` must contain `rayfin/rayfin.yml` with dependencies already installed. All other
+options are optional:
+
+| Option | Type | Default |
+| --- | --- | --- |
+| `frontend` | boolean; whether Rayfin starts its own frontend dev server | `false` |
+| `host` | `'127.0.0.1'`, `'localhost'`, or `'::1'` (loopback only) | `'127.0.0.1'` |
+| `port` | integer from 0 to 65535; 0 selects an available backend port | `0` |
+| `signInAs` | `'none'`, `'developer'`, or `'user:<username>'` | `'none'` |
+| `openSignIn` | boolean; permit secretless local session issuance | `false` |
+
+Unknown options and arbitrary CLI arguments are rejected. Defaults override project automatic
+identity configuration; inherited `RAYFIN_LOCAL_OPEN_SIGN_IN` cannot enable open sign-in.
+Explicit `developer` may use the developer's Entra identity when open sign-in is off, following
+the CLI contract. No caller identity is hard-coded.
+
+The result is `{ready, apiUrl, stop}`. `ready` is the versioned Rayfin readiness descriptor;
+`apiUrl` is its validated direct HTTP loopback origin. Startup verifies the selected frontend,
+port, identity and open-sign-in policy against readiness, and requires a supported SDK. Analysis/schema/function build
 failures reject instead of resolving with a stale backend. Startup is limited to 120 seconds.
-Errors have name `RayfinManagedDevError` and a stable `code`, including upstream fatal codes;
+Errors have name `RayfinServerError` and a stable `code`, including upstream fatal codes;
 raw events, compiler output and application logs are not forwarded, since they may contain secrets.
 Run the app's compiler separately for detailed diagnostics.
 
@@ -101,16 +124,18 @@ Unexpected exits and live reload failures emit credential-free Node warnings; `s
 after an unexpected exit. Watchers remain enabled. `rayfin-restart-required` warns that the host
 must stop and recreate the backend to apply a configuration change; it never resets state.
 
-**Open sign-in is a local development trust boundary, not caller isolation.** Any local process
+**Open sign-in is opt-in and a local development trust boundary, not caller isolation.** When enabled, any local process
 can obtain a full access/refresh session from `GET /.rayfin-local/dev/session-token`; the
 `session-stamp` endpoint exposes the app/epoch stamp. Foreign Origin and Host checks remain.
-A player on another origin must use a trusted host-side broker (omit Origin), not cross-origin
-browser bootstrap. Session refresh stays on the backend's public auth API. The frontend and
-Managed Apps connector routing remain the host's responsibility.
+A page on another origin must use a trusted server-side broker (omit Origin), not cross-origin
+browser bootstrap. Session refresh stays on the backend's public auth API.
 
-`npm run test:managed-dev` runs lifecycle unit tests. `scripts/test-npm.mjs` also validates the
+`npm run test:server` runs lifecycle unit tests. `scripts/test-npm.mjs` also validates the
 actual installed tarballs: no addon load, sessions/refresh, lock contention, startup failure
 recovery, restart and parent-exit cleanup, plus both TypeScript export forms.
+
+See `examples/server.mjs` for a standalone Node program that runs until Enter is pressed and
+awaits cleanup. It requires no application host integration.
 
 ### Direct binary access
 

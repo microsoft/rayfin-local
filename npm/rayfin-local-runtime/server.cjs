@@ -11,7 +11,7 @@ const signals = { SIGINT: 130, SIGTERM: 143 };
 let shuttingDown = false;
 
 function failure(code, message, metadata = {}) {
-  return Object.assign(new Error(message), { name: 'RayfinManagedDevError', code, ...metadata });
+  return Object.assign(new Error(message), { name: 'RayfinServerError', code, ...metadata });
 }
 
 function onExit() {
@@ -23,7 +23,7 @@ async function onSignal(signal) {
   shuttingDown = true;
   const stopped = await Promise.allSettled([...active].map((instance) => instance.stop()));
   if (stopped.some((result) => result.status === 'rejected')) {
-    process.emitWarning('Rayfin managed backend shutdown failed.', { code: 'rayfin-stop-failed' });
+    process.emitWarning('Rayfin server shutdown failed.', { code: 'rayfin-stop-failed' });
   }
   shuttingDown = false;
   // Do not replace a host's shutdown policy. With no host handler, preserve signal exit semantics.
@@ -50,34 +50,56 @@ function unregister(instance) {
   }
 }
 
-function readyUrl(event) {
-  if (event.v !== 1 || event.openSignIn !== true || event.appUrl !== null || event.embedUrl !== null) {
-    throw failure('invalid-ready', 'Rayfin did not report the managed backend readiness contract.');
+function readyUrl(event, options) {
+  if (event.v !== 1 || event.openSignIn !== options.openSignIn
+    || (!options.frontend && (event.appUrl !== null || event.embedUrl !== null))
+    || (options.frontend && typeof event.appUrl !== 'string')) {
+    throw failure('invalid-ready', 'Rayfin readiness does not match the requested server settings.');
   }
   let url;
   try { url = new URL(event.apiUrl); }
   catch { throw failure('invalid-ready', 'Rayfin reported an invalid backend URL.'); }
-  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname)
+  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
     || !url.port || Number(url.port) === 0 || url.username || url.password
-    || url.search || url.hash || event.apiUrl !== url.origin) {
+    || url.search || url.hash || event.apiUrl !== url.origin
+    || (options.port !== 0 && Number(url.port) !== options.port)) {
     throw failure('invalid-ready', 'Rayfin must report a direct HTTP loopback origin with an allocated port.');
   }
   if (event.sdk?.supported !== true) {
     throw failure('unsupported-sdk', 'The app SDK is not supported by this Rayfin runtime.');
   }
+  const identity = event.signInAs;
+  if (options.signInAs.startsWith('user:')
+    ? identity?.kind !== 'user' || identity.username !== options.signInAs.slice(5)
+    : identity?.kind !== options.signInAs) {
+    throw failure('invalid-ready', 'Rayfin reported a different sign-in identity than requested.');
+  }
   return url.origin;
 }
 
-/**
- * Start this package's CLI as a managed backend. The returned stop promise settles only after exit.
- * @param {{projectDir: string}} options
- * @returns {Promise<{apiUrl: string, stop(): Promise<void>}>}
- */
-async function startRayfinLocal(options) {
-  if (!options || typeof options.projectDir !== 'string' || !options.projectDir.trim()
-    || Object.keys(options).some((key) => key !== 'projectDir')) {
-    throw failure('config-invalid', 'Supply startRayfinLocal({projectDir}) with a nonempty project directory.');
+function settings(input) {
+  const keys = ['projectDir', 'frontend', 'host', 'port', 'signInAs', 'openSignIn'];
+  const options = { frontend: false, host: '127.0.0.1', port: 0, signInAs: 'none', openSignIn: false, ...input };
+  if (!input || typeof input.projectDir !== 'string' || !input.projectDir.trim()
+    || Object.keys(input).some((key) => !keys.includes(key))
+    || typeof options.frontend !== 'boolean' || typeof options.openSignIn !== 'boolean'
+    || !['localhost', '127.0.0.1', '::1'].includes(options.host)
+    || !Number.isInteger(options.port) || options.port < 0 || options.port > 65535
+    || typeof options.signInAs !== 'string'
+    || (!['none', 'developer'].includes(options.signInAs)
+      && !/^user:\S[^\r\n\0]*$/.test(options.signInAs))) {
+    throw failure('config-invalid', 'Supply a project directory and valid Rayfin frontend, loopback host, port and sign-in options.');
   }
+  return options;
+}
+
+/**
+ * Start this package's CLI. The returned stop promise settles only after exit.
+ * @param {import('./server.cjs').ServerOptions} input
+ * @returns {Promise<import('./server.cjs').RayfinServer>}
+ */
+async function startRayfinLocal(input) {
+  const options = settings(input);
   if (shuttingDown) throw failure('host-stopping', 'The host is shutting down.');
   const projectDir = path.resolve(options.projectDir);
   let binaryPath;
@@ -87,14 +109,19 @@ async function startRayfinLocal(options) {
   }
   const env = { ...process.env, RAYFIN_LOCAL_NODE: process.execPath };
   // Host-owned admin credentials/state must not leak into an app backend or its children.
-  for (const key of ['RAYFIN_LOCAL_CONTROL_TOKEN', 'RAYFIN_LOCAL_SIGN_IN_SECRET', 'RAYFIN_LOCAL_STATE_DIR']) {
+  for (const key of [
+    'RAYFIN_LOCAL_CONTROL_TOKEN', 'RAYFIN_LOCAL_SIGN_IN_SECRET',
+    'RAYFIN_LOCAL_STATE_DIR', 'RAYFIN_LOCAL_OPEN_SIGN_IN',
+  ]) {
     delete env[key];
   }
   let child;
   try {
     child = childProcess.spawn(binaryPath, [
-      'serve', '--json', '--no-frontend', '--open-sign-in', '-C', projectDir,
-      '--host', '127.0.0.1', '--port', '0', '--sign-in-as', 'user:managed-dev@example.test',
+      'serve', '--json', '-C', projectDir,
+      '--host', options.host, '--port', String(options.port), '--sign-in-as', options.signInAs,
+      ...(!options.frontend ? ['--no-frontend'] : []),
+      ...(options.openSignIn ? ['--open-sign-in'] : []),
     ], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   } catch (cause) {
     throw failure('spawn-failed', 'Could not start the packaged Rayfin executable.', { cause });
@@ -137,7 +164,7 @@ async function startRayfinLocal(options) {
   function fail(reason) {
     error ??= reason;
     if (settled && !stopping) {
-      process.emitWarning('The Rayfin managed backend failed; restart the app dev server.', { code: error.code });
+      process.emitWarning('The Rayfin server failed; stop and restart it.', { code: error.code });
     }
     // Startup rejection is delayed until the child releases its listeners and project lock.
     void stop().catch(rejectStart);
@@ -162,13 +189,13 @@ async function startRayfinLocal(options) {
         if (value.state === 'failed') throw failure('functions-failed', 'The app functions failed to build.');
       }
       if (value.type === 'ready') {
-        const apiUrl = readyUrl(value);
+        const apiUrl = readyUrl(value, options);
         if (value.features?.functions?.enabled && !functionsReady) {
           throw failure('functions-not-ready', 'Rayfin announced readiness before app functions were ready.');
         }
         settled = true;
         clearTimeout(timer);
-        resolveStart({ apiUrl, stop });
+        resolveStart({ ready: value, apiUrl, stop });
       }
     } else if (settled && !stopping
       && ((value.type === 'error') || (value.type === 'analysis' && !value.ok)
@@ -178,7 +205,7 @@ async function startRayfinLocal(options) {
         code: 'rayfin-reload-failed',
       });
     } else if (settled && !stopping && value.type === 'config-changed' && value.restartRequired) {
-      process.emitWarning('Rayfin configuration changed; restart the app dev server to apply it.', {
+      process.emitWarning('Rayfin configuration changed; stop and restart the server to apply it.', {
         code: 'rayfin-restart-required',
       });
     }
@@ -224,7 +251,7 @@ async function startRayfinLocal(options) {
       settled = true;
       rejectStart(error ?? failure('startup-stopped', 'Rayfin stopped before becoming ready.'));
     } else if (!stopping) {
-      process.emitWarning('The Rayfin managed backend exited; restart the app dev server.', {
+      process.emitWarning('The Rayfin server exited; stop and restart it.', {
         code: error.code,
       });
     }
