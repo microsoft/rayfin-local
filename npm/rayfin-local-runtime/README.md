@@ -59,6 +59,61 @@ APIs for users, data, secrets, and storage are not yet exposed by this package.
 
 ## CLI executable without the addon
 
+### Managed development backend
+
+```js
+import { startRayfinLocal } from '@microsoft/rayfin-local-runtime/managed-dev';
+
+const backend = await startRayfinLocal({ projectDir: '/absolute/path/to/app' });
+try {
+  // Start the host's frontend only after this resolves; use backend.apiUrl for Rayfin.
+} finally {
+  await backend.stop();
+}
+```
+
+This binary-only ESM/CommonJS subpath never imports the native addon. It launches this package's
+exact-version `/binary` with `serve --json --no-frontend --open-sign-in -C <root>
+--host 127.0.0.1 --port 0 --sign-in-as user:managed-dev@example.test`. It uses the host's Node
+executable for app helpers (standalone Node required), not a globally installed Rayfin CLI.
+SDK 2.0.x is required (tested 2.0.0); local support does not certify deployment compatibility.
+
+The only input is `projectDir`, whose `rayfin/rayfin.yml` and dependencies must already exist.
+The only result is `{apiUrl, stop}`. Startup resolves on validated v1, supported-SDK, open-sign-in,
+backend-only readiness with an allocated HTTP loopback origin. Analysis/schema/function build
+failures reject instead of resolving with a stale backend. Startup is limited to 120 seconds.
+Errors have name `RayfinManagedDevError` and a stable `code`, including upstream fatal codes;
+raw events, compiler output and application logs are not forwarded, since they may contain secrets.
+Run the app's compiler separately for detailed diagnostics.
+
+`stop()` is idempotent (the same promise), closes stdin and waits for child exit and project-lock
+release before resolving. Startup rejection also waits for cleanup. An unsuccessful exit rejects;
+after 30 seconds shutdown requests forced termination and rejects rather than claiming success.
+Call and await `stop()` before starting a replacement. A second backend for the same project is
+rejected by the upstream lock; state persists under `<app>/.rayfin-local`, with no automatic reset.
+Inherited admin credentials and `RAYFIN_LOCAL_STATE_DIR` are not passed to the backend.
+
+SIGINT/SIGTERM request cleanup for owned children, preserving existing host signal handlers.
+With no other handler, the host exits with the conventional signal exit code after cleanup.
+Normal parent exit closes child stdin; abrupt host termination relies on OS pipe closure and
+the CLI's existing EOF supervision. Awaited `stop()` is the deterministic release boundary.
+Unexpected exits and live reload failures emit credential-free Node warnings; `stop()` rejects
+after an unexpected exit. Watchers remain enabled. `rayfin-restart-required` warns that the host
+must stop and recreate the backend to apply a configuration change; it never resets state.
+
+**Open sign-in is a local development trust boundary, not caller isolation.** Any local process
+can obtain a full access/refresh session from `GET /.rayfin-local/dev/session-token`; the
+`session-stamp` endpoint exposes the app/epoch stamp. Foreign Origin and Host checks remain.
+A player on another origin must use a trusted host-side broker (omit Origin), not cross-origin
+browser bootstrap. Session refresh stays on the backend's public auth API. The frontend and
+Managed Apps connector routing remain the host's responsibility.
+
+`npm run test:managed-dev` runs lifecycle unit tests. `scripts/test-npm.mjs` also validates the
+actual installed tarballs: no addon load, sessions/refresh, lock contention, startup failure
+recovery, restart and parent-exit cleanup, plus both TypeScript export forms.
+
+### Direct binary access
+
 ```js
 import { binaryPath } from '@microsoft/rayfin-local-runtime/binary';
 import { spawn } from 'node:child_process';
