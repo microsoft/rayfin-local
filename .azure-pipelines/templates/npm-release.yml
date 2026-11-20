@@ -91,17 +91,16 @@ stages:
           templateContext:
             type: releaseJob
             isProduction: true
+            inputs:
+              - input: pipelineArtifact
+                artifactName: npm-packages
+                targetPath: $(Pipeline.Workspace)/npm-packages
           strategy:
             runOnce:
               deploy:
                 steps:
                   - checkout: none
                   - download: none
-                  - task: DownloadPipelineArtifact@2
-                    inputs:
-                      buildType: current
-                      artifactName: npm-packages
-                      targetPath: $(Pipeline.Workspace)/npm-packages
                   - pwsh: |
                       $ErrorActionPreference = 'Stop'
                       foreach ($name in 'RELEASE_OWNERS', 'RELEASE_APPROVERS', 'RELEASE_ENDPOINT', 'RELEASE_PUBLISHER') {
