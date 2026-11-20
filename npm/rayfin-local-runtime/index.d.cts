@@ -1,3 +1,6 @@
+import type { ReadyInfo, RuntimeEvent } from './events.cjs';
+export type { ReadyInfo, RuntimeEvent } from './events.cjs';
+
 export type RuntimeState = 'created' | 'starting' | 'running' | 'stopping' | 'stopped';
 
 export interface RuntimeOptions {
@@ -11,22 +14,6 @@ export interface RuntimeOptions {
   forceSchema?: boolean;
   seed?: boolean;
   verbose?: boolean;
-}
-
-export interface RuntimeEvent {
-  v: number;
-  type: string;
-  time: string;
-  [key: string]: unknown;
-}
-
-export interface ReadyInfo extends RuntimeEvent {
-  type: 'ready';
-  apiUrl: string;
-  appUrl: string | null;
-  embedUrl: string | null;
-  portalUrl: string | null;
-  dataDir: string;
 }
 
 export interface RuntimeFailure {

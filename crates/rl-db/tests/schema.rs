@@ -16,6 +16,14 @@ fn basic() -> AppModel {
     ))
 }
 
+/// The fixture app analyzed by `@microsoft/rayfin-core` 2.0.0, whose enum CHECKs compare
+/// binary (`COLLATE Latin1_General_100_BIN2`) and whose `min`/`max` become `_range` CHECKs.
+fn basic_v2() -> AppModel {
+    model(include_str!(
+        "../../rl-model/tests/fixtures/basic.v2.analysis.json"
+    ))
+}
+
 fn explorer() -> AppModel {
     model(include_str!(
         "../../rl-model/tests/fixtures/explorer.analysis.json"
@@ -49,7 +57,19 @@ fn strings(conn: &Connection, sql: &str) -> Vec<String> {
 
 #[test]
 fn ddl_of_the_fixture_apps() {
-    let model = basic();
+    // SDK 1.36: enum CHECKs take the column's case-insensitive collation, and there are no range
+    // CHECKs.
+    let todo_v1 = create_table_sql(basic().entity("Todo").unwrap()).unwrap();
+    assert!(
+        todo_v1.contains(
+            "CONSTRAINT \"CK_Todos_status\" CHECK (\"status\" IN ('its new', 'doing', 'done', \
+             'its archived'))"
+        ),
+        "{todo_v1}"
+    );
+    assert!(!todo_v1.contains("_range"), "{todo_v1}");
+
+    let model = basic_v2();
     let todo = create_table_sql(model.entity("Todo").unwrap()).unwrap();
     for expected in [
         "CREATE TABLE \"Todos\" (",
@@ -97,7 +117,7 @@ fn ddl_of_the_fixture_apps() {
         "{category}"
     );
 
-    for model in [basic(), explorer()] {
+    for model in [basic(), basic_v2(), explorer()] {
         let db = database(&model);
         let tables = db.call_blocking(|conn| {
             strings(
@@ -118,7 +138,14 @@ fn ddl_of_the_fixture_apps() {
 
 #[test]
 fn constraints_behave_like_fabric() {
-    let db = database(&basic());
+    // SDK 1.36's enum CHECK compares with the database's case-insensitive collation, as on Fabric.
+    constraints_behave_like_fabric_on(&basic(), None);
+    constraints_behave_like_fabric_on(&basic_v2(), Some(ConstraintKind::Check));
+}
+
+/// `other_case`: what storing an enum value in another case does.
+fn constraints_behave_like_fabric_on(model: &AppModel, other_case: Option<ConstraintKind>) {
+    let db = database(model);
     db.call_blocking(|conn| {
         conn.execute_batch("INSERT INTO Categories (name) VALUES ('Work')")
             .unwrap();
@@ -146,7 +173,7 @@ fn constraints_behave_like_fabric() {
 
         let cases = [
             (todo(", status", ", 'doing'"), None),
-            (todo(", status", ", 'DOING'"), Some(ConstraintKind::Check)),
+            (todo(", status", ", 'DOING'"), other_case),
             (todo(", status", ", 'its new'"), None),
             (
                 todo(", status", ", 'archived'"),

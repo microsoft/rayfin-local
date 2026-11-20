@@ -1,4 +1,4 @@
-import type { ReadyInfo } from './index.cjs';
+import type { ReadyInfo } from './events.cjs';
 
 export interface ServerOptions {
   projectDir: string;

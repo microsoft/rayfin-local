@@ -17,7 +17,8 @@ assert(installed && fixture, 'Set RAYFIN_LOCAL_TEST_PACKAGE and RAYFIN_LOCAL_TES
 const packageRequire = createRequire(path.join(installed, 'package.json'));
 // Importing either subpath must never try to load the native addon.
 require.extensions['.node'] = () => { throw new Error('server loaded a native addon'); };
-const { startRayfinLocal } = packageRequire('@microsoft/rayfin-local-runtime/server');
+const { name } = packageRequire('./package.json');
+const { startRayfinLocal } = packageRequire(`${name}/server`);
 const signIn = { openSignIn: true, signInAs: 'user:example@example.test' };
 
 async function project(t) {

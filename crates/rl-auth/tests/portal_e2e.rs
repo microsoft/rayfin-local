@@ -1,14 +1,14 @@
 //! The sign-in popup end to end: a real browser (Playwright) runs the real
-//! `ensureSignedInWithFabric` (SDK 2.0.0) against the auth routes behind `rl-server`, and signs
-//! in with a password, by signing up, with "Continue as" (a fake developer token), then cancels
-//! and closes the popup. It also runs the real `initEmbeddedAuth` in the local Fabric host's frame:
-//! signs in on the host, reloads the page and the app, and switches to a new account. A second
-//! test signs in through the popup without asking, as the backend's sign-in identity.
+//! `ensureSignedInWithFabric` (SDK 1.36.2 and 2.0.0) against the auth routes behind `rl-server`,
+//! and signs in with a password, by signing up, with "Continue as" (a fake developer token), then
+//! cancels and closes the popup. It also runs the real `initEmbeddedAuth` in the local Fabric
+//! host's frame: signs in on the host, reloads the page and the app, and switches to a new account.
+//! A second test signs in through the popup without asking, as the backend's sign-in identity.
 //!
 //! Ignored by default. Set up once: `npm install` and `npx playwright install chromium` in
-//! `tests/e2e/portal` (without the Chromium download it falls back to the installed Edge). The
-//! SDK comes from `RAYFIN_SDK_NODE_MODULES`, by default the basic fixture app
-//! (`tests/fixtures/apps/basic/node_modules`). Run with
+//! `tests/e2e/portal` (without the Chromium download it falls back to the installed Edge). Each SDK
+//! line comes from its fixture's `node_modules`, the basic (1.36) and `sdk-v2` (2.0) fixtures'
+//! (`RAYFIN_SDK_NODE_MODULES` and `RAYFIN_SDK_V2_NODE_MODULES` override them). Run with
 //! `cargo test -p rl-auth --test portal_e2e -- --ignored --nocapture`.
 
 use std::{
@@ -64,32 +64,29 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn sdk_node_modules() -> PathBuf {
-    std::env::var_os("RAYFIN_SDK_NODE_MODULES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join("tests/fixtures/apps/basic/node_modules"))
-}
+/// An SDK line to run on: its version, major version and `node_modules`.
+type Line = (&'static str, u64, PathBuf);
 
-/// Where `run.mjs` and the SDK are, or `None` (the test skipped) when one is missing.
-fn prerequisites() -> Option<(PathBuf, PathBuf)> {
+/// `run.mjs`'s folder, and each SDK line's `node_modules` with its major version; `None` (the
+/// test skipped) when Playwright is missing. A line without the SDK is skipped on its own.
+fn prerequisites() -> Option<(PathBuf, Vec<Line>)> {
     let harness = repo_root().join("tests/e2e/portal");
-    let sdk = sdk_node_modules();
-    for (needed, what) in [
-        (
-            harness.join("node_modules/playwright"),
-            "run `npm install` in tests/e2e/portal",
-        ),
-        (
-            sdk.join("@microsoft/rayfin-auth-provider-fabric"),
-            "set RAYFIN_SDK_NODE_MODULES to a node_modules with the Rayfin SDK 2.0.0",
-        ),
-    ] {
-        if !needed.exists() {
-            rl_test_support::skip(format_args!("{} is missing: {what}", needed.display()));
-            return None;
-        }
+    let playwright = harness.join("node_modules/playwright");
+    if !playwright.exists() {
+        rl_test_support::skip(format_args!(
+            "{} is missing: run `npm install` in tests/e2e/portal",
+            playwright.display()
+        ));
+        return None;
     }
-    Some((harness, sdk))
+    let lines = rl_test_support::sdk_lines()
+        .iter()
+        .filter_map(|line| {
+            let sdk = line.with("@microsoft/rayfin-auth-provider-fabric")?;
+            Some((line.version, line.major(), sdk.to_path_buf()))
+        })
+        .collect();
+    Some((harness, lines))
 }
 
 /// The auth routes behind `rl-server` on a free port, with a password user, signing in
@@ -150,8 +147,9 @@ async fn start(identity: SignInAs) -> Backend {
     }
 }
 
-/// Runs `run.mjs`'s `scenarios` (comma-separated) against `backend`; returns what they observed.
-async fn run(backend: &Backend, harness: &Path, sdk: &Path, scenarios: &str) -> Value {
+/// Runs `run.mjs`'s `scenarios` (comma-separated) against `backend` with the SDK in `sdk`, of
+/// major version `major`; returns what they observed.
+async fn run(backend: &Backend, harness: &Path, sdk: &Path, major: u64, scenarios: &str) -> Value {
     let output = tokio::process::Command::new("node")
         .arg(harness.join("run.mjs"))
         .current_dir(harness)
@@ -160,6 +158,7 @@ async fn run(backend: &Backend, harness: &Path, sdk: &Path, scenarios: &str) -> 
         .env("RL_WORKSPACE_ID", WORKSPACE_ID)
         .env("RL_ITEM_ID", APP_ID)
         .env("RL_SDK_NODE_MODULES", sdk)
+        .env("RL_SDK_MAJOR", major.to_string())
         .env("RL_USER", USER)
         .env("RL_PASSWORD", PASSWORD)
         .env("RL_NEW_USER", NEW_USER)
@@ -185,15 +184,22 @@ async fn run(backend: &Backend, harness: &Path, sdk: &Path, scenarios: &str) -> 
 }
 
 #[tokio::test]
-#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 2.0.0 (see the module docs)"]
+#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 1.36.2 and 2.0.0 (see the module docs)"]
 async fn the_sdk_signs_in_through_the_portal_popup() {
-    let Some((harness, sdk)) = prerequisites() else {
+    let Some((harness, lines)) = prerequisites() else {
         return;
     };
+    for (version, major, sdk) in lines {
+        println!("SDK {version}");
+        signs_in_through_the_portal_popup(&harness, &sdk, major).await;
+    }
+}
+
+async fn signs_in_through_the_portal_popup(harness: &Path, sdk: &Path, major: u64) {
     // Nobody to sign in as automatically, so the popup asks.
     let backend = start(SignInAs::None).await;
     let scenarios = "password,signup,entra,cancel,closed,noOpener,embedded";
-    let out = run(&backend, &harness, &sdk, scenarios).await;
+    let out = run(&backend, harness, sdk, major, scenarios).await;
     let (auth, user) = (&backend.auth, &backend.user);
     let password = &out["password"];
     assert_eq!(password["target"], out["appOrigin"]);
@@ -266,13 +272,20 @@ async fn the_sdk_signs_in_through_the_portal_popup() {
 }
 
 #[tokio::test]
-#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 2.0.0 (see the module docs)"]
+#[ignore = "needs Node, Playwright in tests/e2e/portal and the SDK 1.36.2 and 2.0.0 (see the module docs)"]
 async fn the_popup_signs_in_as_the_sign_in_identity_without_asking() {
-    let Some((harness, sdk)) = prerequisites() else {
+    let Some((harness, lines)) = prerequisites() else {
         return;
     };
+    for (version, major, sdk) in lines {
+        println!("SDK {version}");
+        signs_in_as_the_sign_in_identity(&harness, &sdk, major).await;
+    }
+}
+
+async fn signs_in_as_the_sign_in_identity(harness: &Path, sdk: &Path, major: u64) {
     let backend = start(SignInAs::User(PREVIEW_USER.into())).await;
-    let out = run(&backend, &harness, &sdk, "identity").await;
+    let out = run(&backend, harness, sdk, major, "identity").await;
     let identity = &out["identity"];
     let result = &identity["result"];
     assert_eq!(result["ok"], true, "{identity}");

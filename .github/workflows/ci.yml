@@ -39,8 +39,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: "**/package-lock.json"
-      - name: Check release routing, platform verification and packaging
-        run: node --test .github/scripts/set-alpha-version.test.mjs .github/scripts/main-release.test.mjs .github/scripts/unix-release.test.mjs
+      - name: Check release routing, platform verification, packaging and npm registries
+        run: node --test .github/scripts/*.test.mjs
       - name: Check PR test-release opt-in
         if: runner.os == 'Windows'
         shell: pwsh
@@ -102,10 +102,7 @@ jobs:
         run: cargo build --release --locked -p rl-napi --target ${{ matrix.target }}
       - name: Install the real SDK fixture
         run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: tests/fixtures/apps/basic
-      - name: Install the fixture's functions
-        run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: tests/fixtures/apps/basic/rayfin/functions
+        working-directory: tests/fixtures/apps/sdk-v2
       - name: Assemble platform and wrapper packages
         run: >-
           node scripts/assemble-npm.mjs --target ${{ matrix.target }}
@@ -115,7 +112,7 @@ jobs:
         run: >-
           node scripts/test-npm.mjs
           --platform .artifacts/npm/rayfin-local-runtime-${{ matrix.package }}
-          --project tests/fixtures/apps/basic
+          --project tests/fixtures/apps/sdk-v2
       - uses: actions/upload-artifact@v7
         with:
           name: npm-runtime-${{ matrix.target }}
@@ -146,8 +143,9 @@ jobs:
           if-no-files-found: ignore
   sql-connectors:
     # Category A (SQL) connectors against a real SQL Server: crates/rl-connectors/tests/sql_server.rs
-    # and sql_sdk.rs (the real SDK, from the connectors fixture's packages). The password only
-    # guards this job's throwaway container.
+    # and sql_sdk.rs (the real SDK on both lines: 1.36 from the connectors fixture's packages, 2.0
+    # from the sdk-v2 fixture's), strict so neither line can skip. The password only guards this
+    # job's throwaway container.
     runs-on: ubuntu-latest
     services:
       mssql:
@@ -171,6 +169,9 @@ jobs:
       - name: Install the connectors fixture's packages
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: tests/fixtures/apps/connectors
+      - name: Install the sdk-v2 fixture's packages
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: tests/fixtures/apps/sdk-v2
       - name: Wait for SQL Server
         run: |
           for attempt in $(seq 1 60); do
@@ -185,3 +186,4 @@ jobs:
       - run: cargo test -p rl-connectors --test sql_server --test sql_sdk
         env:
           RAYFIN_LOCAL_TEST_MSSQL: localhost,1433;sa;${{ env.MSSQL_SA_PASSWORD }}
+          RAYFIN_LOCAL_TEST_STRICT: "1"

@@ -15,9 +15,9 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
 
 ### Goals
 
-- **Unmodified apps.** Any Rayfin project on SDK 2.0.x runs with `rayfin-local serve`, without code or config changes.
+- **Unmodified apps.** Rayfin SDK 1.36.x and 2.0.x apps run with `rayfin-local serve`, without code or config changes.
 - **Wire compatibility.** For every supported feature, the SDK sees the same status codes, headers, bodies and errors as from Fabric.
-  The real SDK 2.0.0 is the oracle in tests.
+  The real SDKs 1.36.2 and 2.0.0 are the oracles in tests.
 - **No Fabric dependency** for the core services: auth, data, functions and storage run entirely on the machine.
 - **Real data where needed.** Functions and connectors reach real Azure and Fabric resources, Fabric SQL databases included, with the developer's own identity.
 - **A fast inner loop.** Schema changes migrate the database live, functions rebuild and reload, and Vite hot-reloads the UI.
@@ -33,7 +33,7 @@ The app is unchanged: the SDK receives a different URL, and everything behind it
 ## Design principles
 
 1. **The SDK's wire contract is the specification.**
-   rayfin-local implements what `@microsoft/rayfin-*` 2.0.x sends and expects, not the internals of the Fabric services.
+   rayfin-local implements what `@microsoft/rayfin-*` 1.36.x and 2.0.x send and expect, not the internals of the Fabric services.
    Where the SDK depends on a detail, such as 403 rather than 401 for a bad publishable key, or HTTP 200 envelopes for failed functions, rayfin-local reproduces it.
    The tests run the real SDK against rayfin-local.
 2. **Run the project's own packages instead of reimplementing them.**
@@ -403,7 +403,8 @@ A missing token doesn't fail the invocation: reading that audience's token throw
 
 `rl-connectors` looks up the connector in `rayfin.yml` and checks the operation is declared, in the deployed route's order.
 For `fabric-semanticmodel`, it requires a signed-in caller, gets a Power BI token from the `TokenSource`, and sends the query to Power BI's `executeDaxQueries` the way the SDK's direct path does, streaming the Arrow answer back unchanged.
-Power BI refuses `executeDaxQueries` to tokens without a dataset scope (Azure CLI tokens), so those queries go to `executeQueries` and come back in the JSON envelope the SDK also accepts.
+Like the SDK since 2.0, it queries the model's own route (`/v1.0/myorg/datasets/{item}`), so Read and Build on the model are enough: Power BI turns down the workspace's route (`/groups/{workspace}/datasets/{item}`) for someone with no role in the workspace.
+Power BI refuses `executeDaxQueries` to tokens without a dataset scope (Azure CLI tokens), so those queries go to `executeQueries` and come back in the JSON envelope the SDK also accepts, with each column's type read from its values, as `executeQueries` sends none.
 When Power BI turns the token down altogether (401), the query is retried once with another sign-in's token (`TokenSource::another_token`, below); a 401 that remains has a hint that says how to consent to the Rayfin CLI querying Power BI.
 Failures come back in the envelope the SDK's normalizer reads, so the app sees the same `QueryError`s as on Fabric.
 
@@ -480,14 +481,14 @@ rayfin-local is a development tool for one person, but it holds the keys to that
 - **A new route.** Add it to the owning feature crate's router.
   Routes the SDK calls without a publishable key belong in that crate's exempt list (as `rl_auth::PUBLISHABLE_KEY_EXEMPT_PATHS` does for auth).
 - **A new Node helper.** Add the script to `js/`, declare it with `rl_node::Helper::new(name, include_str!(...))` in the crate that uses it (with the modules it imports, written next to it by `rl_node::materialize_bundle`, as for `vite-dev.mjs`), and run it with `run_helper` (one-shot) or `ManagedChild` (long-running).
-- **A new SDK version.** Compare its wire contract with 2.0.0 (routes, bodies, headers, error shapes), update the version check in `rl-project`, and run the conformance tests and the e2e suites with the new packages.
+- **A new SDK version.** Compare its wire contract with the supported lines, 1.36.2 and 2.0.0 (routes, bodies, headers, error shapes), update the version check in `rl-project`, and run the conformance tests and the e2e suites with the new packages.
   The analysis runs the project's own `@microsoft/rayfin-core`, so changes to the analyzer's output show up as `rl-model` parse errors and in its golden tests.
 
 ## Testing
 
 - **Unit and integration tests** in each crate (`cargo test --workspace`): the GraphQL compiler, policies, migrations, auth flows, storage and the token broker run against SQLite and fakes.
 - **SQL connectors** against a real SQL Server (`rl-connectors`' `sql_server.rs` and `sql_sdk.rs`, with `RAYFIN_LOCAL_TEST_MSSQL`; CI runs them in a SQL Server container), and their T-SQL on a fake database (`rl-graphql`'s `tsql.rs`).
-- **SDK conformance**: the `sdk.rs` tests of `rl-auth`, `rl-graphql` and `rl-storage`, `rl-connectors`' `sdk_decode.rs` and `rl-functions`' `host.rs` drive rayfin-local with the real `@microsoft/rayfin-*` 2.0.0 packages from the fixture app, and skip when Node.js or the packages are missing.
+- **SDK conformance**: the `sdk.rs` tests of `rl-auth`, `rl-graphql` and `rl-storage`, `rl-connectors`' `sdk_decode.rs` and `rl-functions`' `host.rs` drive rayfin-local with the real `@microsoft/rayfin-*` 1.36.2 packages from the fixture app; `rl-auth`'s `sdk.rs` and `portal_e2e.rs` (auth and auth-provider-fabric) and `rl-connectors`' `sdk_decode.rs` and `sql_sdk.rs` (both connector-fabric packages) also run on the 2.0.0 packages of `tests/fixtures/apps/sdk-v2`, as do SDK 2.0 analysis, functions metadata and a composed 2.0 client. They skip when Node.js or the packages are missing.
 - **The host contract**: `crates/rayfin-local/tests/host_contract.rs` runs the built binary: `version --json`, fatal errors of `serve --json`, and a `serve --json` of the fixture app from its events to the end of stdin (it skips without the fixture's packages).
   `control_api.rs` drives the control API and automatic sign-in of the fixture app the same way.
 - **Live reload**: `crates/rayfin-local/tests/live_reload.rs` runs `serve --json` on a copy of the fixture app: `rayfin.yml` edits applied on the same ports, a data package built before its entities are analyzed again, `secret set` restarting the function host, Vite started again after it is killed, and the control API, its `POST /reload` and automatic sign-in across changes, with seed data checked against the entities served now.

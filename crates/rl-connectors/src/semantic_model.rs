@@ -1,13 +1,13 @@
 //! `fabric-semanticmodel`: DAX through Power BI's `executeDaxQueries`, as the developer.
 //!
 //! This is the SDK's direct path (`directExecute.js` in
-//! `@microsoft/rayfin-connector-fabric-semanticmodel` 2.0.0) moved behind the route: the same
-//! request to Power BI, and its failures reported in the same `FabricSemanticModelTabularResponse`
-//! envelope, so `toQueryResult` turns them into the same `QueryError`s. Tokens `executeDaxQueries`
-//! refuses for want of a dataset scope (the Azure CLI's) are served by [`json_fallback`]. When
-//! Power BI turns the developer's token down (401), the query is retried once with another
-//! sign-in's ([`TokenSource::another_token`]): the Rayfin CLI's, which may ask the developer to
-//! consent to it querying Power BI.
+//! `@microsoft/rayfin-connector-fabric-semanticmodel` 2.0) moved behind the route: the same
+//! request to Power BI, on the model's own route, and its failures reported in the same
+//! `FabricSemanticModelTabularResponse` envelope, so `toQueryResult` turns them into the same
+//! `QueryError`s. Tokens `executeDaxQueries` refuses for want of a dataset scope (the Azure CLI's)
+//! are served by [`json_fallback`]. When Power BI turns the developer's token down (401), the
+//! query is retried once with another sign-in's ([`TokenSource::another_token`]): the Rayfin
+//! CLI's, which may ask the developer to consent to it querying Power BI.
 
 mod json_fallback;
 
@@ -43,16 +43,17 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_ERROR_BODY: usize = 1 << 20;
 
 /// `directExecute.js` `parseErrorBody`'s hint for a 401 or 403 with a body.
-const ACCESS_HINT: &str = "Sign in again, and confirm you have at least Viewer access to the \
-     workspace/semantic model (Builder access if you also need to query it).";
+const ACCESS_HINT: &str =
+    "Sign in again, and confirm you have Read and Build permissions on the semantic model.";
 /// `directExecute.js` `parseErrorBody`'s hint for a 401 or 403 with an empty body.
 const EMPTY_ACCESS_HINT: &str = "The request was rejected before Power BI evaluated model access, \
      so check the token first: confirm the caller sends one and that it carries the \
-     https://analysis.windows.net/powerbi/api audience. Only then check Read and Build permissions \
-     on the semantic model.";
+     https://analysis.windows.net/powerbi/api audience. Only then check Read and Build \
+     permissions on the semantic model.";
 /// The delegated scopes `executeDaxQueries` requires.
 const DATASET_SCOPES: [&str; 2] = ["Dataset.Read.All", "Dataset.ReadWrite.All"];
-/// The Rayfin CLI's Entra app (`DEFAULT_RAYFIN_CLIENT_ID` in `@microsoft/rayfin-cli/_internal/auth`).
+/// The Rayfin CLI's Entra app (`DEFAULT_RAYFIN_CLIENT_ID` in `@microsoft/rayfin-cli/_internal/auth`,
+/// `/auth` before 2.0).
 const RAYFIN_CLI_APP_ID: &str = "2f844663-8e82-4a34-8b65-09d9d14b0fb6";
 /// The input file for a `rayfin connector invoke` that only needs to sign in.
 const PROBE_INPUT: &str = r#"{"query": "EVALUATE {1}"}"#;
@@ -95,17 +96,20 @@ impl PowerBi {
         })
     }
 
-    /// `/v1.0/myorg/groups/{ws}/datasets/{item}/{operation}`, without `/groups/{ws}` for My
-    /// Workspace (`me`).
+    /// `/v1.0/myorg/datasets/{item}/{operation}`, the model's own route, which the SDK's direct
+    /// path uses since 2.0. Power BI answers `/groups/{ws}/datasets/{item}` with a bare 401 to a
+    /// caller who has Read and Build on the model but no role in its workspace.
     fn dataset_url(&self, target: &Target<'_>, operation: &str) -> Url {
         let mut url = self.base.clone();
         // `new` only accepts URLs that can be a base.
         if let Ok(mut segments) = url.path_segments_mut() {
-            segments.pop_if_empty().extend(["v1.0", "myorg"]);
-            if target.workspace_id != "me" {
-                segments.extend(["groups", target.workspace_id]);
-            }
-            segments.extend(["datasets", target.item_id, operation]);
+            segments.pop_if_empty().extend([
+                "v1.0",
+                "myorg",
+                "datasets",
+                target.item_id,
+                operation,
+            ]);
         }
         url
     }
@@ -134,9 +138,9 @@ impl PowerBi {
     }
 }
 
-/// The semantic model a connector queries: `config.workspaceId` and `config.itemId`.
+/// The semantic model a connector queries: `config.itemId`. `config.workspaceId` is required as
+/// the SDK requires it, but queries don't use it.
 pub(crate) struct Target<'a> {
-    workspace_id: &'a str,
     item_id: &'a str,
 }
 
@@ -150,10 +154,7 @@ impl<'a> Target<'a> {
                 .filter(|v| !v.is_empty())
         };
         match (get("workspaceId"), get("itemId")) {
-            (Some(workspace_id), Some(item_id)) => Ok(Self {
-                workspace_id,
-                item_id,
-            }),
+            (Some(_), Some(item_id)) => Ok(Self { item_id }),
             _ => Err(format!(
                 "Connector '{}' needs `config.workspaceId` and `config.itemId` in \
                  rayfin/rayfin.yml; add them, or re-run `npx rayfin connector add` to fill them in.",

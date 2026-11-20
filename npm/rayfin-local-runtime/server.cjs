@@ -105,7 +105,7 @@ async function startRayfinLocal(input) {
   let binaryPath;
   try { ({ binaryPath } = require('./binary.cjs')); }
   catch (cause) {
-    throw failure('binary-unavailable', 'Install the matching Rayfin runtime platform package.', { cause });
+    throw failure('binary-unavailable', 'Could not find a packaged Rayfin executable for this platform.', { cause });
   }
   const env = { ...process.env, RAYFIN_LOCAL_NODE: process.execPath };
   // Host-owned admin credentials/state must not leak into an app backend or its children.

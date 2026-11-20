@@ -1,6 +1,6 @@
-// The declarations of `@microsoft/fabric-user-data-functions` 2.0.0 that metadata generation
-// resolves: `RayfinContext`'s type parameters, the `AudienceType` string enum, the `WithSql`
-// marker, and `func`.
+// The declarations of `@microsoft/fabric-user-data-functions` that metadata generation resolves:
+// `RayfinContext`'s type parameters, the `AudienceType` string enum, 2.0.0's `WithSql` marker and
+// `func`. package.json says 1.36.2; the 2.0 tests change that to 2.0.0, which picks the 2.0 format.
 
 export declare enum AudienceType {
   Sql = 'Sql',

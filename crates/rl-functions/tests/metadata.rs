@@ -1,9 +1,13 @@
 //! `runtimemetadata.json` generation with `js/udf-metadata.mjs` on Node and TypeScript.
 //!
-//! The expected files under `tests/fixtures` were produced by the Rayfin CLI 2.0.0 generator on
-//! the same sources. Tests skip (with a note) when Node or TypeScript is unavailable: TypeScript
-//! comes from `RAYFIN_LOCAL_TYPESCRIPT_DIR` (a folder `typescript` resolves from) or from the
-//! explorer app (`RAYFIN_LOCAL_EXPLORER`, else `fabric-apps/apps/explorer` beside this repository).
+//! The format follows the worker the functions package resolves: the UDF stub says 1.36.2, and
+//! the 2.0 tests change it to 2.0.0. `udf-app.expected.json` and its no-tsconfig variant are what
+//! the Rayfin CLI 1.36.2 generator writes for the same sources (except `report` and
+//! `aliasedReport`, whose `WithSql` 1.36 doesn't have); the `.v2.` files are what the Rayfin CLI
+//! 2.0.0 generator writes. Tests skip (with a note) when Node or TypeScript is unavailable:
+//! TypeScript comes from `RAYFIN_LOCAL_TYPESCRIPT_DIR` (a folder `typescript` resolves from) or
+//! from the explorer app (`RAYFIN_LOCAL_EXPLORER`, else `fabric-apps/apps/explorer` beside this
+//! repository).
 
 use std::{
     fs,
@@ -98,6 +102,14 @@ fn fixture_app(dir: &Path) -> PathBuf {
     app
 }
 
+/// Makes the fixture's UDF package the 2.0.0 worker.
+fn use_v2_worker(app: &Path) {
+    let manifest = app.join("node_modules/@microsoft/fabric-user-data-functions/package.json");
+    let mut package = json(&fs::read_to_string(&manifest).unwrap());
+    package["version"] = "2.0.0".into();
+    fs::write(manifest, package.to_string()).unwrap();
+}
+
 fn expected(name: &str) -> String {
     fs::read_to_string(fixtures().join(name))
         .unwrap()
@@ -159,11 +171,20 @@ async fn explorer_metadata_matches_the_cli() {
 
 #[tokio::test]
 async fn fixture_metadata_matches_the_cli() {
+    for v2 in [false, true] {
+        fixture_metadata_matches(v2).await;
+    }
+}
+
+async fn fixture_metadata_matches(v2: bool) {
     let Some((node, typescript)) = toolchain().await else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let app = fixture_app(dir.path());
+    if v2 {
+        use_v2_worker(&app);
+    }
     let generated = metadata::generate(
         &node,
         &input(&app, &typescript),
@@ -173,7 +194,12 @@ async fn fixture_metadata_matches_the_cli() {
     .await
     .unwrap();
 
-    assert_eq!(generated.json, expected("udf-app.expected.json"));
+    let name = if v2 {
+        "udf-app.v2.expected.json"
+    } else {
+        "udf-app.expected.json"
+    };
+    assert_eq!(generated.json, expected(name));
     assert!(generated.type_checked);
     assert!(generated.diagnostics.is_empty());
     assert_eq!(
@@ -221,16 +247,109 @@ async fn fixture_metadata_matches_the_cli() {
     assert!(ask.delegate_parameters[1].is_context());
     assert!(!ask.delegate_parameters[0].is_context());
     let report = metadata.function("aliasedReport").unwrap();
-    assert_eq!(report.capabilities, Some(vec!["sql".to_owned()]));
+    let sql = v2.then(|| vec!["sql".to_owned()]);
+    assert_eq!(report.capabilities, sql);
 }
 
 #[tokio::test]
-async fn without_tsconfig_audiences_come_from_the_annotation_text() {
+async fn v2_metadata_recognizes_context_aliases_and_qualified_names() {
     let Some((node, typescript)) = toolchain().await else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let app = fixture_app(dir.path());
+    use_v2_worker(&app);
+    fs::write(
+        app.join("src/aliases.ts"),
+        "import { AudienceType, type RayfinContext } \
+         from '@microsoft/fabric-user-data-functions';\n\
+         import { udf } from './udf.js';\n\
+         type AppContext = RayfinContext<Record<string, never>, AudienceType.Fabric>;\n\
+         udf.func('aliased', async (ctx: AppContext) => typeof ctx);\n",
+    )
+    .unwrap();
+    let generated = metadata::generate(
+        &node,
+        &input(&app, &typescript),
+        &dir.path().join("cache"),
+        sink(),
+    )
+    .await
+    .unwrap();
+    generated.metadata.validate().unwrap();
+    for (name, audiences) in [
+        ("aliased", vec![Audience::Fabric]),
+        ("namespaced", vec![Audience::Sql]),
+        ("backlog", vec![Audience::Ado]),
+        ("legacyContext", vec![Audience::Fabric, Audience::Storage]),
+    ] {
+        let function = generated.metadata.function(name).unwrap();
+        assert!(
+            function
+                .delegate_parameters
+                .iter()
+                .any(|parameter| parameter.is_context()),
+            "{name}: {function:?}"
+        );
+        assert_eq!(function.audiences(), audiences, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn upgrading_the_worker_refreshes_current_v1_metadata() {
+    let Some((node, typescript)) = toolchain().await else {
+        return;
+    };
+    for with_stamp in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let app = fixture_app(dir.path());
+        let request = input(&app, &typescript);
+        let original_cache = dir.path().join("cache");
+        let legacy = metadata::ensure_fresh_with(&node, &request, &original_cache, sink())
+            .await
+            .unwrap();
+        assert_eq!(legacy.schema_version, metadata::SCHEMA_VERSION_V1);
+        use_v2_worker(&app);
+        assert!(!metadata::is_stale(&app, &metadata::metadata_path(&app)));
+
+        let cache = if with_stamp {
+            original_cache
+        } else {
+            dir.path().join("without-stamp")
+        };
+        let upgraded = metadata::ensure_fresh_with(&node, &request, &cache, sink())
+            .await
+            .unwrap();
+        assert_ne!(upgraded, legacy, "with_stamp={with_stamp}");
+        assert_eq!(upgraded.schema_version, metadata::SCHEMA_VERSION_V2);
+        assert!(
+            upgraded
+                .function("namespaced")
+                .unwrap()
+                .delegate_parameters
+                .iter()
+                .any(|parameter| parameter.is_context())
+        );
+        assert_eq!(upgraded.audiences("namespaced"), [Audience::Sql]);
+    }
+}
+
+#[tokio::test]
+async fn without_tsconfig_audiences_come_from_the_annotation_text() {
+    for v2 in [false, true] {
+        without_tsconfig(v2).await;
+    }
+}
+
+async fn without_tsconfig(v2: bool) {
+    let Some((node, typescript)) = toolchain().await else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let app = fixture_app(dir.path());
+    if v2 {
+        use_v2_worker(&app);
+    }
     fs::remove_file(app.join("tsconfig.json")).unwrap();
     let generated = metadata::generate(
         &node,
@@ -241,10 +360,12 @@ async fn without_tsconfig_audiences_come_from_the_annotation_text() {
     .await
     .unwrap();
 
-    assert_eq!(
-        generated.json,
-        expected("udf-app.no-tsconfig.expected.json")
-    );
+    let name = if v2 {
+        "udf-app.no-tsconfig.v2.expected.json"
+    } else {
+        "udf-app.no-tsconfig.expected.json"
+    };
+    assert_eq!(generated.json, expected(name));
     assert!(!generated.type_checked);
     let warned: Vec<_> = generated
         .diagnostics
@@ -252,18 +373,21 @@ async fn without_tsconfig_audiences_come_from_the_annotation_text() {
         .map(|diagnostic| (diagnostic.function_name.as_str(), diagnostic.code.as_str()))
         .collect();
     let audience = "unverified-context-audience";
-    assert_eq!(
-        warned,
-        [
-            ("addNote", audience),
-            ("askAgent", audience),
-            ("backlog", audience),
-            ("legacyContext", audience),
-            ("namespaced", audience),
-            ("report", "unverified-context-capability"),
-            ("legacyStyle", audience),
-        ]
-    );
+    // 1.36 has no capabilities to verify.
+    let capability = v2.then_some(("report", "unverified-context-capability"));
+    let expected_warnings: Vec<_> = [
+        Some(("addNote", audience)),
+        Some(("askAgent", audience)),
+        Some(("backlog", audience)),
+        Some(("legacyContext", audience)),
+        Some(("namespaced", audience)),
+        capability,
+        Some(("legacyStyle", audience)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    assert_eq!(warned, expected_warnings);
     // An alias cannot be resolved without the checker; the runtime binds nothing for it.
     assert_eq!(generated.metadata.audiences("backlog"), []);
 }

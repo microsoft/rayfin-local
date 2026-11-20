@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { assemble } from './assemble-release.mjs';
-import { verifyAppleIdentity, verifyGpgStatus, verifyLinuxElf, linuxFingerprint, targets } from './unix-release.mjs';
+import { gpgPath, verifyAppleIdentity, verifyGpgStatus, verifyLinuxElf, linuxFingerprint, targets } from './unix-release.mjs';
 
 function elfFixture() {
   const binary = Buffer.alloc(64);
@@ -64,6 +64,12 @@ test('Apple identity must have expected Developer ID, team, hardened runtime and
   ]) assert.throws(() => verifyAppleIdentity(invalid));
 });
 
+test('GPG paths use the MSYS form on Windows', () => {
+  assert.equal(gpgPath('D:\\a\\_work\\_temp\\gnupg', 'win32'), '/d/a/_work/_temp/gnupg');
+  assert.equal(gpgPath('C:/keys/microsoft.asc', 'win32'), '/c/keys/microsoft.asc');
+  assert.equal(gpgPath('/tmp/gnupg', 'linux'), '/tmp/gnupg');
+});
+
 function checkPackaging(platform) {
   const root = mkdtempSync(join(tmpdir(), 'rayfin-package-'));
   const target = targets[platform];
@@ -116,6 +122,17 @@ function checkPackaging(platform) {
         'assert t.getmember(sys.argv[2]+"/README.md").mode == 0o644',
         archive, `rayfin-local-${version}-${target}`], { encoding: 'utf8' });
       assert.equal(modes.status, 0, modes.stderr);
+      // SignUnix stages the archive outside PIPELINE_WORKSPACE; a modified archive must still be caught there.
+      const staged = join(root, 'staged-signing');
+      mkdirSync(staged);
+      for (const file of [metadata.archiveFile, 'linux-source.json']) copyFileSync(join(output, file), join(staged, file));
+      appendFileSync(join(staged, metadata.archiveFile), 'modified');
+      const verification = spawnSync(process.execPath, [script, 'verify', platform], {
+        cwd: root, encoding: 'utf8',
+        env: { ...env, PIPELINE_WORKSPACE: join(root, 'missing'), UNIX_SIGNING_DIRECTORY: staged },
+      });
+      assert.notEqual(verification.status, 0);
+      assert.match(verification.stderr, /Signing must not modify the Linux archive/);
       writeFileSync(builtBinary, '#!/bin/sh\necho not-an-ELF\n');
       const wrongTarget = spawnSync(process.execPath, [script, 'package', platform],
         { cwd: root, encoding: 'utf8', env });
