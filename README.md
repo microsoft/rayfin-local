@@ -6,7 +6,7 @@
 Even `rayfin dev` keeps that backend in Fabric, so before you can run anything you need a workspace, a capacity and a deployed app backend.
 
 `rayfin-local` runs that backend locally instead.
-It answers the same requests as the Fabric backend, so the Rayfin SDK 2.0 in your app can't tell the difference, and your code runs unchanged:
+It answers the same requests as the Fabric backend, so your Rayfin SDK 1.36 or 2.0 app runs unchanged:
 
 ```sh
 cd my-rayfin-app
@@ -155,19 +155,24 @@ The existing [child-process embedding contract](docs/embedding.md) remains suppo
 | Passwordless sign-in, email verification, password-reset email | No | |
 | GraphQL introspection | No | |
 
-rayfin-local implements the contract of `@microsoft/rayfin-*` 2.0.x.
-It is tested with the real 2.0.0 SDK, and end to end with real apps.
+rayfin-local implements the contracts of `@microsoft/rayfin-*` 1.36.x and 2.0.x, including 2.0's `RayfinClient.create()` with explicit auth adapters and service factories.
+Compatibility fixtures use the real 1.36.2 and 2.0.0 SDKs, including the Functions worker.
 [docs/differences.md](docs/differences.md) lists every difference from Fabric.
 
 ## Install
 
-The official release pipeline currently publishes only Windows x64 binaries, signed through ESRP and independently verified before publication.
-Linux and Apple Silicon build/signing/publishing stages are commented out pending ESRP authorization and validation in a separate PR.
-The Windows signing guarantee applies to new official releases, not the existing unsigned multi-platform `0.2.8` release.
+The official release pipeline publishes Windows x64, macOS Apple Silicon and Linux x64 binaries, signed through ESRP (and, for macOS, notarized by Apple) and independently verified before publication.
+The signing guarantee applies to new official releases, not the existing unsigned multi-platform `0.2.8` release.
 Existing release assets are not retroactively signed.
-The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) preserves the deferred Unix design, ESRP blocker and native Linux/ARM64 execution-testing TODOs.
+The [signing runbook](docs/release-signing.md#linux-and-apple-silicon) describes the Linux and macOS signing and the native execution-testing TODOs.
 
-**macOS and Linux (existing unsigned `0.2.8` release):**
+**macOS on Apple Silicon and Linux x64:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | sh
+```
+
+**Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/rayfin-local/main/install.sh | RAYFIN_LOCAL_VERSION=0.2.8 sh
@@ -199,17 +204,18 @@ $env:RAYFIN_LOCAL_VERSION = '0.1.0'; irm https://raw.githubusercontent.com/micro
 | Platform | Release build |
 | --- | --- |
 | Windows x64 (and Windows on ARM, through emulation) | `x86_64-pc-windows-msvc` |
-| macOS on Apple Silicon (existing unsigned `0.2.8` release only) | `aarch64-apple-darwin` |
-| Linux x64 with glibc (existing unsigned `0.2.8` release only) | `x86_64-unknown-linux-gnu` |
+| macOS on Apple Silicon | `aarch64-apple-darwin` |
+| Linux x64 with glibc | `x86_64-unknown-linux-gnu` |
 | Intel macOS and Linux ARM64 (existing unsigned `0.2.8` release only) | `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` |
 
-While Unix releases are deferred, all macOS and Linux platforms must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
+Intel macOS and Linux ARM64 must pin `RAYFIN_LOCAL_VERSION=0.2.8` as above, or build from source.
 The installers check archive checksums; that is not signature verification.
+To check a Linux archive's signature, import the release's `microsoft.asc`, confirm its fingerprint is `BC528686B50D79E339D3721CEB3E94ADBE1229CF`, and run `gpg --verify <archive>.sig <archive>`.
 
 Other ways to install:
 
 - **Download** the archive for your platform from the [releases page](https://github.com/microsoft/rayfin-local/releases), check it against `SHA256SUMS.txt` (`sha256sum -c --ignore-missing SHA256SUMS.txt`, or `Get-FileHash` in PowerShell), and put `rayfin-local` on your `PATH`.
-  The existing `0.2.8` macOS binaries are not notarized.
+  The existing `0.2.8` macOS binaries are not notarized; newer Apple Silicon releases are.
 - **From source**, with [Rust](https://rustup.rs) 1.96 or later, for other platforms such as Alpine Linux:
   `cargo install --locked --git https://github.com/microsoft/rayfin-local rayfin-local`.
 
@@ -623,9 +629,9 @@ Run `rayfin-local doctor` first: it checks what `serve` needs and says what to f
   With the `auto` token source, rayfin-local asks the Rayfin CLI for a token itself, and the first time it may open a browser window to sign in or consent: finish it there.
   Otherwise, run `npx rayfin connector invoke <connector> executeQuery --file query.json` once in a terminal in the project folder, with `{"query": "EVALUATE {1}"}` in `query.json`, and finish signing in in the browser it opens; or ask a tenant administrator to consent to the Rayfin CLI app (`2f844663-8e82-4a34-8b65-09d9d14b0fb6`) for Power BI Service.
   If it still fails, check that your account can query the model (Build permission) in the model's tenant.
-- **"… is not the 2.0 SDK rayfin-local implements".**
-  rayfin-local implements the wire contract of `@microsoft/rayfin-*` 2.0.x; with another version, behavior may differ from Fabric.
-  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's `@microsoft/rayfin-*` packages to 2.0.
+- **"… is not a supported SDK".**
+  rayfin-local implements the wire contracts of `@microsoft/rayfin-*` 1.36.x and 2.0.x, including their prereleases; with another version, behavior may differ from Fabric.
+  Before 1.36, `@microsoft/rayfin-core` can't describe database policies to rayfin-local, so apps with `@role` policies fail to analyze: upgrade the app's packages to a supported SDK line.
 - **"Cannot find type definition file for …" (TS2688) when the entities are analyzed.**
   TypeScript also loads the `@types` packages in the `node_modules` of every parent folder; set `"types"` (or `"typeRoots"`) in `rayfin/tsconfig.json`, or remove the stray folder the message names.
 - **"rayfin-local serve is already running this project".**

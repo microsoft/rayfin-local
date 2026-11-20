@@ -1,5 +1,6 @@
 //! The `runtimemetadata.json` document (schema 2.x or 3.x), checked the way
-//! `@microsoft/fabric-user-data-functions` 2.0.0 checks it (`validateRuntimeMetadata`).
+//! `@microsoft/fabric-user-data-functions` 2.0.0 checks it (`validateRuntimeMetadata`); 1.36.2
+//! accepts the same documents without `capabilities`.
 
 use std::{
     collections::{BTreeSet, HashSet},

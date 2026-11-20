@@ -4,6 +4,8 @@
 //!
 //! # How the 2.0.0 packages work (sources: the installed dists)
 //!
+//! 1.36.2 differences are listed after this description.
+//!
 //! - **Registration.** `new UserDataFunctions()` reads `runtimemetadata.json` from
 //!   `join(dirname(resolve('./src')), 'runtimemetadata.json')`, which is
 //!   `<cwd>/runtimemetadata.json`: the host's working directory must be the functions package.
@@ -57,6 +59,16 @@
 //!   the 2.0 runtime and returned as a `Failed` envelope with an internal error.
 //! - **Logs.** The UDF package replaces `console.*`; inside an invocation each call goes to the
 //!   invocation's `context.log` unchanged (the package's own messages say `[UserDataFunctions]`).
+//!
+//! The 1.36.2 package reads the same headers and settings, with these differences:
+//! - It requires metadata schema `2.0` with only `functionName`, `delegateParameters` and
+//!   `contextAudiences` per function (`capabilities` is rejected), so [`crate::metadata`] writes
+//!   the Rayfin CLI 1.36.2 format for it.
+//! - A parameter is the context when its type text starts with `RayfinContext`; there is no
+//!   `WithSql`.
+//! - A return value `JSON.stringify` can't handle (a `BigInt`) throws outside the UDF try/catch:
+//!   there is no envelope, and the invocation fails ([`HostError::Failed`]).
+//! - Console output is prefixed `[UserDataFunctions]` in the invocation's log.
 //!
 //! # What callers supply
 //!

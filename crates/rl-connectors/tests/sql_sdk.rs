@@ -1,9 +1,11 @@
-//! The real Rayfin SDK 2.0.0 Category A client against rayfin-local's
+//! The real Rayfin SDK Category A client, 1.36.2 and 2.0.0, against rayfin-local's
 //! `/connectors/<name>/graphql` over a real SQL Server (`tests/sdk/category-a.mjs`), with the
-//! `connectors` fixture app's entity classes compiled by `js/analyze.mjs`.
+//! `connectors` fixture app's entity classes compiled by `js/analyze.mjs` against each line's
+//! packages: the `connectors` fixture's (1.36) and the `sdk-v2` fixture's (2.0).
 //!
-//! Needs `RAYFIN_LOCAL_TEST_MSSQL` (see `sql_server.rs`), Node.js, and the fixture's packages
-//! (`npm install` in `tests/fixtures/apps/connectors`); skipped without them.
+//! Needs `RAYFIN_LOCAL_TEST_MSSQL` (see `sql_server.rs`), Node.js, and the fixtures' packages
+//! (`npm ci` in `tests/fixtures/apps/connectors` and `tests/fixtures/apps/sdk-v2`); skipped
+//! without them.
 
 mod common;
 
@@ -15,17 +17,49 @@ use rl_model::{ConnectorSource, ConnectorsAnalyzeInput};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-fn fixture() -> PathBuf {
+fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/apps/connectors")
+        .join("../../tests/fixtures/apps")
+        .join(name)
         .canonicalize()
         .unwrap()
 }
 
-/// Compiles the fixture's connector entities with the analysis helper, into the project's
-/// `.rayfin-local/` so they import its packages; returns their folder.
-async fn compile_entities(project: &Path) -> PathBuf {
-    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-connectors-sql-sdk");
+/// Each SDK line's major version and the fixture whose packages it takes.
+fn lines() -> [(u64, PathBuf); 2] {
+    [(1, fixture("connectors")), (2, fixture("sdk-v2"))]
+}
+
+/// A project with the `connectors` fixture's entities, under `packages`' `.rayfin-local/` so that
+/// they compile against and import that fixture's `node_modules`.
+fn project_on(packages: &Path) -> PathBuf {
+    let source = fixture("connectors").join("rayfin");
+    let project = packages.join(".rayfin-local/sdk-test-project");
+    let _ = std::fs::remove_dir_all(&project);
+    let entities = project.join("rayfin/connectors/inventory");
+    std::fs::create_dir_all(&entities).unwrap();
+    std::fs::write(
+        project.join("package.json"),
+        r#"{ "private": true, "type": "module" }"#,
+    )
+    .unwrap();
+    std::fs::copy(
+        source.join("tsconfig.json"),
+        project.join("rayfin/tsconfig.json"),
+    )
+    .unwrap();
+    for file in std::fs::read_dir(source.join("connectors/inventory")).unwrap() {
+        let file = file.unwrap();
+        std::fs::copy(file.path(), entities.join(file.file_name())).unwrap();
+    }
+    project
+}
+
+/// Compiles the project's connector entities with the analysis helper, into its `.rayfin-local/`
+/// so they import its packages; returns their folder.
+async fn compile_entities(project: &Path, major: u64) -> PathBuf {
+    let scratch =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("rl-connectors-sql-sdk-{major}"));
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
     let mut input = ConnectorsAnalyzeInput::for_project(
@@ -62,12 +96,6 @@ async fn the_sdk_reads_and_writes_through_rayfin_local() {
     let Some(server) = server() else {
         return;
     };
-    let project = fixture();
-    let node_modules = project.join("node_modules");
-    if !node_modules.join("@microsoft/rayfin-connectors").is_dir() {
-        rl_test_support::skip(format_args!("run `npm install` in {}", project.display()));
-        return;
-    }
     if Command::new("node")
         .arg("--version")
         .output()
@@ -77,10 +105,30 @@ async fn the_sdk_reads_and_writes_through_rayfin_local() {
         rl_test_support::skip("node isn't on PATH");
         return;
     }
-    let compiled = compile_entities(&project).await;
-    let database = Database::create(&server, "sdk").await;
+    for (major, packages) in lines() {
+        let node_modules = packages.join("node_modules");
+        if !node_modules
+            .join("@microsoft/rayfin-connector-fabric-graphql")
+            .is_dir()
+        {
+            rl_test_support::skip(format_args!("run `npm ci` in {}", packages.display()));
+            continue;
+        }
+        println!("SDK {major}");
+        reads_and_writes(&server, &project_on(&packages), &node_modules, major).await;
+    }
+}
+
+async fn reads_and_writes(
+    server: &common::sql::Server,
+    project: &Path,
+    node_modules: &Path,
+    major: u64,
+) {
+    let compiled = compile_entities(project, major).await;
+    let database = Database::create(server, &format!("sdk{major}")).await;
     let api = serve(router(
-        &server,
+        server,
         &database.name,
         &[
             ("inventory", "fabric-sqldatabase"),
@@ -93,6 +141,7 @@ async fn the_sdk_reads_and_writes_through_rayfin_local() {
 
     let settings = json!({
         "nodeModules": node_modules,
+        "sdkMajor": major,
         "compiled": compiled,
         "api": api,
         "hammer": HAMMER,

@@ -11,10 +11,14 @@
 //          by name, downloads Playwright's Chromium (not when PLAYWRIGHT_CHANNEL picks a browser).
 //   lint   cargo fmt --check, and clippy with warnings as errors.
 //   rust   cargo test --workspace in strict mode (RAYFIN_LOCAL_TEST_STRICT=1: a test whose Node,
-//          fixture packages or SDK are missing fails instead of skipping), and the SDK auth test.
+//          fixture packages or SDK are missing fails instead of skipping; the SDK conformance tests
+//          run on both lines, 1.36 and 2.0), the SDK auth test, and the SDK 2.0 fixture's typecheck.
 //   js     node --test js/test (the helper scripts rayfin-local embeds).
 //   e2e    the browser suites (tests/e2e: the fixture and static projects) against a real
 //          `rayfin-local serve`, and the sign-in portal test (crates/rl-auth/tests/portal_e2e.rs).
+//
+// Cargo runs with --locked, as the official release build does: a Cargo.lock that Cargo.toml has
+// moved on from (a version bump without the lockfile) fails here, not only at release time.
 //
 // rust, js and e2e run setup first, which takes seconds once done; --no-setup skips it.
 // Needs Rust 1.96 or later, Node.js 22 or later and npm.
@@ -33,19 +37,24 @@ const NPM_DIRS = [
   'tests/fixtures/apps/basic',
   'tests/fixtures/apps/basic/rayfin/functions',
   'tests/fixtures/apps/connectors',
+  'tests/fixtures/apps/sdk-v2',
   'tests/fixtures/functions/basic',
   'crates/rl-storage/tests/sdk',
   'tests/e2e',
   'tests/e2e/portal',
 ];
 
-/** Where the Rust tests that run the real SDK find it: the basic fixture has every package. */
+/**
+ * Where the Rust tests that run the real SDK find each line: the basic fixture (SDK 1.36) and the
+ * sdk-v2 fixture (SDK 2.0) have every package those tests use.
+ */
 const SDK_NODE_MODULES = at('tests/fixtures/apps/basic/node_modules');
+const SDK_V2_NODE_MODULES = at('tests/fixtures/apps/sdk-v2/node_modules');
 
 const STEPS = {
   setup: { run: setup, about: 'npm ci the test fixtures and harnesses, build the functions fixture, get Chromium for e2e' },
   lint: { run: lint, about: 'cargo fmt --check, cargo clippy -D warnings' },
-  rust: { run: rust, needsSetup: true, about: 'cargo test --workspace, strict (an SDK test cannot skip)' },
+  rust: { run: rust, needsSetup: true, about: 'cargo test --workspace, strict (an SDK test cannot skip), typecheck the SDK 2.0 fixture' },
   js: { run: js, needsSetup: true, about: 'node --test js/test' },
   e2e: { run: e2e, needsSetup: true, about: 'Playwright fixture and static suites, the sign-in portal test' },
 };
@@ -98,12 +107,15 @@ function setup({ browser }) {
 
 function lint() {
   exec('cargo', ['fmt', '--all', '--check']);
-  exec('cargo', ['clippy', '--workspace', '--all-targets', '--', '-D', 'warnings']);
+  exec('cargo', ['clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings']);
 }
 
 function rust() {
-  exec('cargo', ['test', '--workspace'], { env: strictEnv() });
-  exec('cargo', ['test', '-p', 'rl-auth', '--test', 'sdk', '--', '--ignored'], { env: strictEnv() });
+  exec('cargo', ['test', '--workspace', '--locked'], { env: strictEnv() });
+  exec('cargo', ['test', '--locked', '-p', 'rl-auth', '--test', 'sdk', '--', '--ignored'], { env: strictEnv() });
+  // The SDK 2.0 fixture compiles against the 2.0 packages (its analysis, metadata and host
+  // contract run in the workspace tests above).
+  exec('npm', ['run', 'typecheck'], { cwd: at('tests/fixtures/apps/sdk-v2') });
 }
 
 function js() {
@@ -119,13 +131,14 @@ function e2e() {
   exec(process.execPath, [playwrightCli(), 'test', '--project=fixture', '--project=static'], {
     cwd: at('tests/e2e'),
   });
-  exec('cargo', ['test', '-p', 'rl-auth', '--test', 'portal_e2e', '--', '--ignored'], { env: strictEnv() });
+  exec('cargo', ['test', '--locked', '-p', 'rl-auth', '--test', 'portal_e2e', '--', '--ignored'], { env: strictEnv() });
 }
 
 function strictEnv() {
   return {
     RAYFIN_LOCAL_TEST_STRICT: '1',
     RAYFIN_SDK_NODE_MODULES: process.env.RAYFIN_SDK_NODE_MODULES || SDK_NODE_MODULES,
+    RAYFIN_SDK_V2_NODE_MODULES: process.env.RAYFIN_SDK_V2_NODE_MODULES || SDK_V2_NODE_MODULES,
   };
 }
 

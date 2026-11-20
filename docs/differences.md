@@ -1,6 +1,6 @@
 # Differences from Fabric
 
-rayfin-local runs an unmodified Rayfin app (SDK 2.0.x) against local stand-ins for the Rayfin services.
+rayfin-local runs an unmodified Rayfin app (SDK 1.36.x or 2.0.x) against local stand-ins for the Rayfin services.
 It answers the SDK with the same routes, bodies, statuses and errors as Fabric wherever it can.
 This page lists where it can't, per SDK surface.
 
@@ -100,7 +100,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | `ctx.getDataClient()` | Supported | Calls the local data API as the caller. |
 | `ctx.Tokens.<Audience>` (`Sql`, `Storage`, `Fabric`, `AzureAI`, `ADO`) | Differs | Tokens for you, not the app's identity. A token that can't be minted is left out: the function still runs, reading it throws "No token available for audience…", and `serve` logs why. Custom audiences (`api://…`, `https://…`) get no token. |
 | `ctx.Secrets.<NAME>` | Differs | Local values, from `local.settings.json` `Values`, the environment, or `.rayfin-local/secrets.json` (`rayfin-local secret set`). |
-| `ctx.sql` (`RayfinContext & WithSql`) | Not supported | rayfin-local issues no SQL ticket, so its calls throw `InvalidInput`. |
+| `ctx.sql` (`RayfinContext & WithSql`, SDK 2.0) | Not supported | rayfin-local issues no SQL ticket, so its calls throw `InvalidInput`. Use the app's SQL connectors or `ctx.Tokens.Sql` with a database client instead. |
 | Error messages | Supported | Service-generated 5xx responses hide their cause behind Fabric's `InternalServerError`; the original diagnostic is logged with credentials redacted. Client errors and app-authored upstream responses are preserved. See [hosting.md](hosting.md#system-errors). |
 | Limits | Differs | The 250-second timeout (408) is the UDF ceiling, and results over 30 MiB fail with `ResponseTooLarge`, as deployed. Request bodies over 30 MiB get 413, a limit of rayfin-local's own. |
 | Logs | Differs | `console.*` output goes to `serve`'s output, prefixed `[fn]`, not to Fabric's monitoring. |
@@ -110,7 +110,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | Feature | Status | Notes |
 | --- | --- | --- |
 | `fabric-semanticmodel` queries | Differs | Sent to the real semantic model through Power BI, as you rather than the signed-in user. The app user must still be signed in, as deployed. Results, DAX errors and Power BI failures reach the SDK in the shapes it normalizes on Fabric. |
-| `fabric-semanticmodel` with an Azure CLI token | Differs | Power BI refuses `executeDaxQueries` (Arrow) to tokens without a dataset scope, which includes every Azure CLI token, so these queries run through `executeQueries` (JSON). Columns then have no `dataType` (the SDK reports `'unknown'`), DateTimes lose their milliseconds, and empty results have no columns. Results are capped at 100,000 rows (an `overflow` error beyond that), and `culture`, `schemaOnly` and `queryTimeout` are ignored. |
+| `fabric-semanticmodel` with an Azure CLI token | Differs | Power BI refuses `executeDaxQueries` (Arrow) to tokens without a dataset scope, which includes every Azure CLI token, so these queries run through `executeQueries` (JSON), which sends no column types. Each column's `dataType` is read from its values instead: numbers are `Int64` when every one is whole and `Double` otherwise (never `Decimal`), and a column of nulls or of mixed values has none (the SDK reports `'unknown'`). DateTimes lose their milliseconds, and empty results have no columns. Results are capped at 100,000 rows (an `overflow` error beyond that), and `culture`, `schemaOnly` and `queryTimeout` are ignored. |
 | `fabric-semanticmodel` when Power BI turns down your sign-in (401) | Differs | With the `auto` token source, the query is retried once with the Rayfin CLI's sign-in, which may open a browser window to sign in or consent; Power BI queries use it from then on. A 401 that remains has a `recoveryHint` that says how to consent to the Rayfin CLI querying Power BI, where the SDK's direct path says to check access. |
 | Category A SQL connectors (`fabric-sqldatabase`, `fabric-warehouse`, `fabric-sqlanalytics`): queries, keys, relationships, filters, `orderBy`, cursor pagination | Differs | The DAB-style GraphQL API that `rayfin up` would deploy, answered by rayfin-local over the connector's real Fabric item. They run as you, with your Entra token, even for `auth: application` connectors (see [Who acts](#who-acts)); a `delegated` connector still needs a signed-in user. [sql-connectors.md](sql-connectors.md) has the details. |
 | Category A mutations | Differs | Run as you on the real item. A SQL database answers the row, a Warehouse `DbOperationResult`, and a SQL analytics endpoint has no mutations, as on Fabric. A create on a keyless entity of a SQL database answers `null` (the row is written). |
@@ -124,7 +124,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Upload, download, list and delete (`StorageFolderClient`) | Supported | The 2.0.0 routes and answers, on files under `.rayfin-local/storage`. |
+| Upload, download, list and delete (`StorageFolderClient`) | Supported | The SDK's routes and answers, on files under `.rayfin-local/storage`. |
 | `@blob` folder rules and checks | Supported | BaaS storage profile: `eq`, `neq`, `and`, `or`; claims `sub`, `email`, `role`; `owner_id` and declared metadata only, with matching operand types and no null literals. Anonymous grants and invalid checks fail admission (`config-invalid`), including reloads (the previous model stays active). |
 | Storage rule evaluation | Supported | Matching rules are OR-ed; a checkless rule allows. `eq` requires two non-null values; `neq` allows exactly one null, not two. Missing allowed claims bind null. Create checks prospective caller-owned metadata; overwrite checks only stored metadata, before conflict handling. Policy denials use HTTP 403 `PERMISSION_DENIED`; lists omit hidden objects. |
 | Storage string comparison | Differs | Local checks compare strings exactly, without coercion or lowercasing. BaaS emits SQL `=`/`<>`, so actual case, accent and trailing-space behavior follows its backing database/collation; no universal Fabric case-insensitive or ordinal contract is implied. |
@@ -148,7 +148,7 @@ rayfin-local builds your functions package and runs it on your Node.js, with the
 | --- | --- | --- |
 | Deployment (`rayfin up`), Fabric items, workspaces and their permissions | Not supported | Nothing is deployed, and no Fabric item is created or changed. |
 | Workspace, item and tenant ids | Differs | Taken from `rayfin/.env` when the app was deployed, else generated. The app id and the publishable key (`pk-local-…`) are local. |
-| SDK versions | Differs | rayfin-local implements 2.0.x; with another version, `serve` warns that behavior may differ. Before 1.36, apps with database policies (`@role` with `policy`) can't be analyzed, and `serve` says to upgrade. |
+| SDK versions | Differs | rayfin-local implements 1.36.x and 2.0.x, including prereleases; with another version, `serve` warns that behavior may differ. Before 1.36, apps with database policies (`@role` with `policy`) can't be analyzed, and `serve` says to upgrade. |
 
 ## Local only
 

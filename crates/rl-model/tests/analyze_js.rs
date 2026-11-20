@@ -190,7 +190,7 @@ fn warnings(result: &Value) -> Vec<String> {
 
 const FOLDER: &str = "\
 import { role } from '@microsoft/rayfin-core';
-import { blob, StorageObject } from '@microsoft/rayfin-core';
+import { blob, StorageObject } from '@microsoft/rayfin-core/experimental';
 
 @blob({ name: 'Files' })
 @role('authenticated', ['create', 'read'])
@@ -347,15 +347,15 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// Before SDK 1.37, `@microsoft/rayfin-core/_internal/schema` and `/_internal/analysis` were
-/// `/schema` and `/analysis`, with the same exports. The fixture's model analyzes the same with its
+/// SDK 1.37 moved `@microsoft/rayfin-core/schema` and `/analysis` to `/_internal/schema` and
+/// `/_internal/analysis`, with the same exports. The fixture's model analyzes the same with its
 /// rayfin-core exported that way.
 #[test]
-fn analyze_js_loads_the_analyzer_where_sdk_1_36_had_it() {
+fn analyze_js_loads_the_analyzer_where_sdk_1_37_moved_it() {
     let Some((node, fixture)) = prerequisites() else {
         return;
     };
-    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-1-36");
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-1-37");
     let project = scratch.join("project");
     let _ = fs::remove_dir_all(&project);
     for folder in ["rayfin/data", "rayfin/storage"] {
@@ -387,8 +387,8 @@ fn analyze_js_loads_the_analyzer_where_sdk_1_36_had_it() {
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     let exports = manifest["exports"].as_object_mut().unwrap();
     for name in ["schema", "analysis"] {
-        let target = exports.remove(&format!("./_internal/{name}")).unwrap();
-        exports.insert(format!("./{name}"), target);
+        let target = exports.remove(&format!("./{name}")).unwrap();
+        exports.insert(format!("./_internal/{name}"), target);
     }
     fs::write(&manifest_path, manifest.to_string()).unwrap();
     // The helper imports TypeScript from the project: the fixture's.
@@ -418,6 +418,84 @@ fn analyze_js_loads_the_analyzer_where_sdk_1_36_had_it() {
             output["result"][key]
         );
     }
+}
+
+#[test]
+fn analyze_js_supports_v2_data_storage_and_connector_metadata() {
+    let project = fixture_project().parent().unwrap().join("sdk-v2");
+    if !project.join("node_modules/@microsoft/rayfin-core").is_dir() {
+        eprintln!("skipped: run `npm ci` in {}", project.display());
+        return;
+    }
+    let Some(node) = node() else {
+        eprintln!("skipped: Node.js was not found (set RAYFIN_LOCAL_NODE)");
+        return;
+    };
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rl-model-analyze-sdk-v2");
+    let mut input = AnalyzeInput::for_project(&project, Dialect::Mssql, true);
+    input.out_dir = scratch.join("compiled");
+    let output = run(&node, &project, &input.to_json(), &scratch.join("data"));
+    assert_eq!(output["ok"], true, "{output}");
+    let model = AppModel::from_analysis(&output["result"]).unwrap();
+    let todo = model
+        .entities
+        .iter()
+        .find(|entity| entity.name == "Todo")
+        .unwrap();
+    assert_eq!(
+        todo.columns
+            .iter()
+            .find(|column| column.name == "done")
+            .unwrap()
+            .default,
+        Some(false.into())
+    );
+    let comment = model
+        .entities
+        .iter()
+        .find(|entity| entity.name == "Comment")
+        .unwrap();
+    assert_eq!(comment.foreign_keys.len(), 1);
+    assert!(model.storage.is_some());
+
+    let mut input = ConnectorsAnalyzeInput::for_project(
+        &project,
+        vec![ConnectorSource {
+            name: "inventory".into(),
+            dir: project.join("rayfin/connectors/inventory"),
+            dialect: "mssql".into(),
+        }],
+    );
+    input.out_dir = scratch.join("compiled-connectors");
+    let output = run(
+        &node,
+        &project,
+        &input.to_json(),
+        &scratch.join("connectors"),
+    );
+    assert_eq!(output["ok"], true, "{output}");
+    let analysis = ConnectorsAnalysis::from_result(&output["result"]).unwrap();
+    let model = analysis.connectors[0].model.as_ref().unwrap();
+    let product = &model.entities[0];
+    assert_eq!(product.table, "inventory.products");
+    assert_eq!(product.primary_key.columns, ["product-id"]);
+    assert!(
+        product
+            .columns
+            .iter()
+            .any(|column| column.name == "product-title" && column.field == "title")
+    );
+    let permission = &product.permissions[0].actions[0];
+    let fields = permission.fields.as_ref().unwrap();
+    for field in ["productId", "title", "quantity"] {
+        assert!(fields.allows(field), "{field}: {fields:?}");
+    }
+    assert!(!fields.allows("ownerId"));
+    assert!(!fields.allows("internalTitle"));
+    assert_eq!(
+        permission.policy.as_ref().unwrap().expr.fields(),
+        ["ownerId"]
+    );
 }
 
 /// The `connectors` fixture app (the `inventory` SQL connector), with its packages installed.

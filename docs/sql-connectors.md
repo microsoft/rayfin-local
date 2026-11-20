@@ -2,7 +2,7 @@
 
 This note is the design of rayfin-local's Category A connectors: `fabric-sqldatabase`, `fabric-warehouse` and `fabric-sqlanalytics`.
 It covers the contract the SDK expects, how the GraphQL schema derives from the connector's files, how rayfin-local finds and signs in to the database, and where it differs from Fabric.
-The sources of truth are the SDK 2.0.0 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
+The sources of truth are the supported SDK 1.36 and 2.0 packages: `@microsoft/rayfin-connectors` (`dist/category-a/`), `@microsoft/rayfin-connector-fabric-graphql` (its `assets/docs/`), `@microsoft/rayfin-core` (`ConnectorSchemaAnalyzer`, `ConnectorConfigGenerator`) and `@microsoft/rayfin-cli` (`connector add`, `rayfin up connector apply`).
 
 ## Contents
 
@@ -72,6 +72,10 @@ The answers are DAB's, as for the data API (`/graphql`):
 ## The schema
 
 rayfin-local builds the schema DAB generates from the DAB config `rayfin up` would apply, so the same documents validate and resolve.
+
+SDK 2.0's connector analyzer emits field-permission lists in backing-column names; SDK 1.36 emitted exposed GraphQL names.
+The IR normalizes 2.0 lists through the column mappings before checking access, without reinterpreting 1.36 lists.
+This matters when one field's exposed name is another field's backing column.
 
 1. `js/analyze.mjs` (connectors mode) compiles `rayfin/` with the project's TypeScript and `rayfin/tsconfig.json`, imports each connector's modules, and runs the project's `ConnectorSchemaAnalyzer` and `ConnectorConfigGenerator` with the type's dialect (`mssql`, `fabric-warehouse` or `fabric-sqlanalytics`), as `rayfin up connector apply` does.
    It also serializes each `@role` policy's expression tree, as for data entities.
@@ -206,7 +210,7 @@ Keep `serve` on loopback (the default): anyone who can reach the backend acts on
 - `crates/rl-model/tests/connector_model.rs` and `analyze_js.rs`: the model of the `inventory` connector of `tests/fixtures/apps/connectors`, and the helper against its golden analysis.
 - `crates/rl-graphql/tests/tsql.rs`: the schema of that connector per type, and the statements its documents become, on a fake database.
 - `crates/rl-connectors/tests/sql_server.rs`: the routes against a real SQL Server (queries, roles and policies, composite and keyless keys, mutations per type, failures).
-- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK 2.0.0 client with the fixture's entity classes against the same.
+- `crates/rl-connectors/tests/sql_sdk.rs`: the real SDK client (1.36.2 and 2.0.0) with the fixture's entity classes against the same.
 - `crates/rl-connectors/tests/real_fabric_sql.rs` (ignored): a read-only query of a real Fabric SQL database, Warehouse or SQL analytics endpoint as you.
 - `crates/rl-connectors/src/sql/tds.rs`'s unit tests: the driver patches are in place (the PRELOGIN's `TRACEID`, an empty `TRACEID` in the server's answer, the routed host).
 
