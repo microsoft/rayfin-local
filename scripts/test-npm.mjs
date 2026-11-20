@@ -40,18 +40,28 @@ try {
   await writeFile(path.join(temporary, 'package.json'), '{"name":"rayfin-runtime-smoke","version":"0.0.0","private":true}\n');
   run(npm, [...npmArgs, 'install', '--offline', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', platformTarball, wrapperTarball]);
   const installed = path.join(temporary, 'node_modules/@microsoft/rayfin-local-runtime');
-  run(process.execPath, ['--test', path.join(root, 'npm/rayfin-local-runtime/test/runtime.test.cjs')], {
+  run(process.execPath, ['--test',
+    path.join(root, 'npm/rayfin-local-runtime/test/runtime.test.cjs'),
+    path.join(root, 'npm/rayfin-local-runtime/test/server.test.cjs'),
+    path.join(root, 'npm/rayfin-local-runtime/test/server-installed.test.cjs'),
+  ], {
     stdio: 'inherit',
     env: { ...process.env, RAYFIN_LOCAL_TEST_PACKAGE: installed, RAYFIN_LOCAL_TEST_PROJECT: fixture },
   });
   const source = `
 import { createRuntime, type StopInfo, type ReadyInfo } from '@microsoft/rayfin-local-runtime';
 import { binaryPath } from '@microsoft/rayfin-local-runtime/binary';
+import { startRayfinLocal, type RayfinServer } from '@microsoft/rayfin-local-runtime/server';
 const runtime = createRuntime({ projectDir: '.', server: { port: 0 }, frontend: { mode: 'off' } });
 const ready: Promise<ReadyInfo> = runtime.start();
 const closed: Promise<StopInfo> = runtime.closed;
 const binary: string = binaryPath;
 void ready; void closed; void binary;
+const server: Promise<RayfinServer> = startRayfinLocal({
+  projectDir: '.', stateDir: './state', forceSchema: false, reset: false,
+  onEvent(event) { const type: string = event.type; void type; },
+});
+server.then((running) => { const closed: Promise<void> = running.closed; void closed; });
 `;
   for (const extension of ['mts', 'cts']) await writeFile(path.join(temporary, `types.${extension}`), source);
   run(process.execPath, [
