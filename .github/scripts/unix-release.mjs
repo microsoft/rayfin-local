@@ -31,6 +31,14 @@ export function verifyGpgStatus(status) {
   assert.ok(['8', '9', '10'].includes(signatures[0].split(' ')[9]), 'Linux signature must use SHA-256 or stronger');
 }
 
+// Git for Windows' gpg is an MSYS program: it treats `D:\x` as relative, so pass `/d/x` instead.
+export function gpgPath(path, platform = process.platform) {
+  if (platform !== 'win32') return path;
+  const drive = /^([A-Za-z]):[\\/]/.exec(path);
+  const posix = path.replaceAll('\\', '/');
+  return drive ? `/${drive[1].toLowerCase()}${posix.slice(2)}` : posix;
+}
+
 export function verifyAppleIdentity(details) {
   assert.match(details, new RegExp(`^TeamIdentifier=${appleTeam}$`, 'm'), 'Unexpected Apple Team ID');
   assert.match(details, /^Authority=Developer ID Application: Microsoft Corporation \(UBF8T346G9\)$/m);
@@ -130,9 +138,10 @@ function main() {
     const keyHome = join(temp, 'gnupg');
     mkdirSync(keyHome, { mode: 0o700 });
     const key = resolve('.azure-pipelines/keys/microsoft.asc');
-    run(process.env.GPG || 'gpg', ['--batch', '--homedir', keyHome, '--import', key]);
-    const status = run(process.env.GPG || 'gpg', ['--batch', '--homedir', keyHome, '--status-fd', '1',
-      '--verify', `${inputArchive}.sig`, inputArchive]).stdout;
+    const gpg = process.env.GPG || 'gpg';
+    run(gpg, ['--batch', '--homedir', gpgPath(keyHome), '--import', gpgPath(key)]);
+    const status = run(gpg, ['--batch', '--homedir', gpgPath(keyHome), '--status-fd', '1',
+      '--verify', gpgPath(`${inputArchive}.sig`), gpgPath(inputArchive)]).stdout;
     verifyGpgStatus(status);
     copyFileSync(`${inputArchive}.sig`, join(output, `${name}.tar.gz.sig`));
     copyFileSync(key, join(output, 'microsoft.asc'));

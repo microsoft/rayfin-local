@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { assemble } from './assemble-release.mjs';
-import { verifyAppleIdentity, verifyGpgStatus, verifyLinuxElf, linuxFingerprint, targets } from './unix-release.mjs';
+import { gpgPath, verifyAppleIdentity, verifyGpgStatus, verifyLinuxElf, linuxFingerprint, targets } from './unix-release.mjs';
 
 function elfFixture() {
   const binary = Buffer.alloc(64);
@@ -62,6 +62,12 @@ test('Apple identity must have expected Developer ID, team, hardened runtime and
     details.replace('0x10000(runtime)', '0x0(none)'),
     details.replace('Developer ID Application: Microsoft Corporation', 'Apple Development: Microsoft Corporation'),
   ]) assert.throws(() => verifyAppleIdentity(invalid));
+});
+
+test('GPG paths use the MSYS form on Windows', () => {
+  assert.equal(gpgPath('D:\\a\\_work\\_temp\\gnupg', 'win32'), '/d/a/_work/_temp/gnupg');
+  assert.equal(gpgPath('C:/keys/microsoft.asc', 'win32'), '/c/keys/microsoft.asc');
+  assert.equal(gpgPath('/tmp/gnupg', 'linux'), '/tmp/gnupg');
 });
 
 function checkPackaging(platform) {
