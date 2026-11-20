@@ -1,0 +1,141 @@
+parameters:
+  - name: publish
+    type: boolean
+    default: false
+
+stages:
+  - stage: PackNpm
+    displayName: Pack verified rayfin-local executables for npm
+    dependsOn: [ValidateWindows, VerifyUnix, SDLSources]
+    variables:
+      ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
+    jobs:
+      - job: PackSignedBinaries
+        # npm pack on Windows cannot preserve the executable modes on the Unix payloads.
+        pool:
+          name: Azure Pipelines
+          image: macos-15
+          hostArchitecture: amd64
+          os: macOS
+        templateContext:
+          outputs:
+            - output: pipelineArtifact
+              artifactName: npm-packages
+              targetPath: $(Build.ArtifactStagingDirectory)/npm
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+          - task: UseNode@1
+            inputs:
+              version: $(NodeVersion)
+          - download: current
+            artifact: windows-signed
+          - download: current
+            artifact: macos-signed
+          - download: current
+            artifact: linux-signed
+          - script: >-
+              node scripts/pack-npm-release.mjs
+              --artifacts "$(Pipeline.Workspace)"
+              --out "$(Build.ArtifactStagingDirectory)/npm"
+            displayName: Build the npm tarball from this run's signed artifacts
+            env:
+              RELEASE_TAG: $(ReleaseTag)
+
+      - job: SmokePackedClient
+        displayName: Install and test the packed client on Windows
+        dependsOn: PackSignedBinaries
+        steps:
+          - checkout: none
+          - task: UseNode@1
+            inputs:
+              version: $(NodeVersion)
+          - download: current
+            artifact: npm-packages
+          - pwsh: |
+              $ErrorActionPreference = 'Stop'
+              $version = $env:RELEASE_TAG.TrimStart('v')
+              if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'Expected a stable signed release version.' }
+              $file = "$env:PIPELINE_WORKSPACE/npm-packages/microsoft-rayfin-local-$version.tgz"
+              Set-Location (New-Item -ItemType Directory -Force -Path "$env:AGENT_TEMPDIRECTORY/npm-smoke").FullName
+              & npm install --offline --ignore-scripts --no-audit --no-fund $file
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot install the packed Rayfin client.' }
+              & node --input-type=module -e '
+                import assert from "node:assert/strict";
+                import { execFileSync } from "node:child_process";
+                import { createRequire } from "node:module";
+                import { startRayfinLocal } from "@microsoft/rayfin-local";
+                import { binaryPath } from "@microsoft/rayfin-local/binary";
+                assert.equal(typeof startRayfinLocal, "function");
+                assert.equal(createRequire(import.meta.url)("@microsoft/rayfin-local/server").startRayfinLocal, startRayfinLocal);
+                const info = JSON.parse(execFileSync(binaryPath, ["version", "--json"], { encoding: "utf8" }));
+                assert.equal(`v${info.version}`, process.env.RELEASE_TAG);
+                assert.equal(info.contract, 1);
+              '
+              if ($LASTEXITCODE -ne 0) { throw 'The installed client could not load its bundled executable.' }
+            displayName: Check installed exports, CLI version, and embedding contract
+            env:
+              RELEASE_TAG: $(ReleaseTag)
+
+  - ${{ if eq(parameters.publish, true) }}:
+    - stage: PublishNpm
+      displayName: Publish rayfin-local to public npm (preview)
+      dependsOn: [PackNpm, ValidateWindows]
+      variables:
+        ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
+      jobs:
+        - deployment: PublishNpmPackage
+          displayName: Submit approved npm preview through ESRP
+          environment: vscode-fabric-extension-release
+          templateContext:
+            type: releaseJob
+            isProduction: true
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: none
+                  - download: none
+                  - task: DownloadPipelineArtifact@2
+                    inputs:
+                      buildType: current
+                      artifactName: npm-packages
+                      targetPath: $(Pipeline.Workspace)/npm-packages
+                  - pwsh: |
+                      $ErrorActionPreference = 'Stop'
+                      foreach ($name in 'RELEASE_OWNERS', 'RELEASE_APPROVERS', 'RELEASE_ENDPOINT', 'RELEASE_PUBLISHER') {
+                        $value = [Environment]::GetEnvironmentVariable($name)
+                        if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('$(')) {
+                          throw "Ask the AppDev release owners to configure $name for this pipeline before npm publishing."
+                        }
+                      }
+                      $tarballs = @(Get-ChildItem "$env:PIPELINE_WORKSPACE/npm-packages" -File -Recurse)
+                      if ($env:RELEASE_TAG -cnotmatch '^v(\d+\.\d+\.\d+)$') { throw 'Expected a stable signed release tag.' }
+                      if ($tarballs.Count -ne 1 -or $tarballs[0].Name -cne "microsoft-rayfin-local-$($Matches[1]).tgz") {
+                        throw 'Expected exactly one verified Rayfin Local npm tarball for this version.'
+                      }
+                    displayName: Check publisher configuration and preview input
+                    env:
+                      RELEASE_TAG: $(ReleaseTag)
+                      RELEASE_OWNERS: $(EsrpOwners)
+                      RELEASE_APPROVERS: $(EsrpApprovers)
+                      RELEASE_ENDPOINT: $(EsrpServiceEndpointUrl)
+                      RELEASE_PUBLISHER: $(EsrpMainPublisher)
+                  - task: ESRPRelease@11
+                    displayName: Publish @microsoft/rayfin-local via ESRP
+                    inputs:
+                      ContentType: npm
+                      Intent: PackageDistribution
+                      ProductState: preview
+                      UseManagedIdentity: true
+                      ConnectedServiceName: Fabric-ESRP-Secure-AppDev
+                      ClientId: $(EsrpClientId)
+                      KeyVaultName: $(EsrpKeyVaultName)
+                      SignCertName: $(EsrpSignCertName)
+                      FolderLocation: $(Pipeline.Workspace)/npm-packages
+                      Owners: $(EsrpOwners)
+                      Approvers: $(EsrpApprovers)
+                      ServiceEndpointUrl: $(EsrpServiceEndpointUrl)
+                      MainPublisher: $(EsrpMainPublisher)
+                      DomainTenantId: $(EsrpAppRegistrationTenantId)

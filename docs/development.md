@@ -36,11 +36,13 @@ It uses explicit auth adapters and service factories and pins the SDK and worker
 
 `-v` shows rayfin-local's debug logs, and `RUST_LOG` (for example `rl_graphql=trace`) replaces the default filters.
 
-### Native npm package
+### In-process npm package (development only)
 
 `rl-runtime` owns shared service orchestration; the executable supplies CLI integration, and
 `rl-napi` supplies the private Node-API bridge. The supported JS API and binary-only export live in
-[`npm/rayfin-local-runtime`](../npm/rayfin-local-runtime/README.md). Nothing is published automatically.
+[`npm/rayfin-local-runtime`](../npm/rayfin-local-runtime/README.md). This package is not published.
+See the [npm preview runbook](release-signing.md#npm-preview-for-the-bundled-node-client) for
+the public package that runs the signed executable as a child process.
 
 Build both artifacts and assemble their exact-version platform package. For example, on macOS arm64:
 
@@ -48,11 +50,10 @@ Build both artifacts and assemble their exact-version platform package. For exam
 cargo build -p rayfin-local -p rl-napi
 node scripts/assemble-npm.mjs --target aarch64-apple-darwin \
   --binary target/debug/rayfin-local --addon target/debug/librl_napi.dylib
-npm ci --prefix tests/fixtures/apps/basic --ignore-scripts
-npm ci --prefix tests/fixtures/apps/basic/rayfin/functions --ignore-scripts
+npm ci --prefix tests/fixtures/apps/sdk-v2 --ignore-scripts
 node scripts/test-npm.mjs \
   --platform .artifacts/npm/rayfin-local-runtime-darwin-arm64 \
-  --project tests/fixtures/apps/basic
+  --project tests/fixtures/apps/sdk-v2
 ```
 
 Use the matching target and artifact paths on other systems: `librl_napi.so` on Linux, and
@@ -68,9 +69,8 @@ normal host exit, Vite/functions shutdown, and real SDK data/auth/function reque
 CI builds and runs this on all five target architectures. Local validation on one machine does
 not certify the other platforms.
 
-The assembler copies the final artifacts unchanged. When release signing is configured, sign
-and verify **both** the executable and addon before assembly, then hash/package/publish.
-npm publication, provenance and OS signing identities are intentionally not configured yet.
+The development assembler copies the final artifacts unchanged. Releasing this in-process
+package would require signing and verifying **both** the executable and addon before assembly.
 
 ## Lint and format
 
