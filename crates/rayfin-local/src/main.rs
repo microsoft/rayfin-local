@@ -1,19 +1,10 @@
 //! `rayfin-local`: run a Rayfin app and its whole backend on this machine.
 
-mod analysis;
 mod backup;
 mod commands;
-mod connectors;
-mod control;
-mod errors;
-mod events;
-mod integrations;
-mod ports;
-mod reload;
-mod seed;
 mod shutdown;
-mod tokens;
-mod ui;
+
+use rl_runtime::{analysis, errors, events, integrations, ports, ui};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -233,13 +224,16 @@ impl ServeArgs {
             open_sign_in: self.open_sign_in,
             open: self.open,
             verbose,
+            node_path: None,
+            control_token: None,
         }
     }
 }
 
 /// The crates whose logs `--verbose` shows at debug level.
-const OWN_CRATES: [&str; 13] = [
+const OWN_CRATES: [&str; 14] = [
     "rayfin_local",
+    "rl_runtime",
     "rl_project",
     "rl_node",
     "rl_model",
@@ -472,6 +466,6 @@ mod tests {
             panic!("not serve");
         };
         let options = args.into_options(false);
-        assert!(options.static_build && options.reuse_build, "{options:?}");
+        assert!(options.static_build && options.reuse_build);
     }
 }

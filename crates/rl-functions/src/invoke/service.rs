@@ -96,9 +96,20 @@ impl FunctionsService {
     /// (no folder, no usable `package.json` or `local.settings.json`); a failed build or load is
     /// logged and answered with 503 until a rebuild fixes it.
     pub async fn start(
+        config: FunctionsConfig,
+        callers: Arc<dyn CallerResolver>,
+        tokens: Arc<dyn TokenSource>,
+    ) -> Result<Arc<Self>, FunctionsError> {
+        Self::start_with_owner(config, callers, tokens, |_| {}).await
+    }
+
+    /// Registers the service before awaiting host startup. The owner must retain it and call
+    /// [`Self::stop`] if startup is cancelled.
+    pub async fn start_with_owner(
         mut config: FunctionsConfig,
         callers: Arc<dyn CallerResolver>,
         tokens: Arc<dyn TokenSource>,
+        own: impl FnOnce(Arc<Self>),
     ) -> Result<Arc<Self>, FunctionsError> {
         let dir = std::path::absolute(&config.functions_dir)
             .unwrap_or_else(|_| config.functions_dir.clone());
@@ -169,6 +180,7 @@ impl FunctionsService {
             compiler,
             compile_failure: Mutex::new(None),
         });
+        own(Arc::clone(&service));
 
         match service.unavailable() {
             Some(message) => service.report_build_failure(message, errors),

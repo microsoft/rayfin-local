@@ -1,0 +1,30 @@
+{
+  "name": "@microsoft/rayfin-local",
+  "private": true,
+  "description": "A Node client for the bundled Rayfin local executable.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/rayfin-local.git",
+    "directory": "npm/rayfin-local"
+  },
+  "engines": { "node": ">=20" },
+  "main": "./server.cjs",
+  "types": "./server.d.cts",
+  "exports": {
+    ".": {
+      "import": { "types": "./server.d.mts", "default": "./server.mjs" },
+      "require": { "types": "./server.d.cts", "default": "./server.cjs" }
+    },
+    "./server": {
+      "import": { "types": "./server.d.mts", "default": "./server.mjs" },
+      "require": { "types": "./server.d.cts", "default": "./server.cjs" }
+    },
+    "./binary": {
+      "import": { "types": "./binary.d.mts", "default": "./binary.mjs" },
+      "require": { "types": "./binary.d.cts", "default": "./binary.cjs" }
+    }
+  },
+  "files": ["*.cjs", "*.mjs", "*.cts", "*.mts", "bin/", "native-build.json"],
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" }
+}

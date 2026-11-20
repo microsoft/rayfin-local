@@ -1,4 +1,5 @@
 /target
+/.artifacts/
 node_modules/
 .rayfin-local/
 *.log

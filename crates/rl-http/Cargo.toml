@@ -1,0 +1,16 @@
+[package]
+name = "rl-http"
+description = "HTTP clients with instance-independent ring TLS configuration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true

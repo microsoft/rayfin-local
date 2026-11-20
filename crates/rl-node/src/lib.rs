@@ -88,6 +88,14 @@ impl NodeRuntime {
             Some(path) => PathBuf::from(path),
             None => which::which("node").map_err(|_| not_found())?,
         };
+        Self::at(path).await
+    }
+
+    /// Validates an explicitly selected Node executable without changing process environment.
+    pub async fn at(path: PathBuf) -> Result<Self, NodeError> {
+        let not_found = || NodeError::NotFound {
+            min: MIN_NODE_MAJOR,
+        };
         let output = Command::new(&path)
             .arg("--version")
             .stdin(Stdio::null())
@@ -349,7 +357,9 @@ impl ProcessSpec {
             shell_command: None,
             cwd: cwd.into(),
             env: Vec::new(),
-            env_remove: Vec::new(),
+            // Embedded hosts must retain their environment, but project children must not
+            // inherit a CLI control secret even when the host happens to have one.
+            env_remove: vec!["RAYFIN_LOCAL_CONTROL_TOKEN".into()],
             env_clear: false,
             sink: default_sink(),
         }
