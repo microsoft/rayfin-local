@@ -140,7 +140,7 @@ async function startRayfinLocal(options) {
       process.emitWarning('The Rayfin managed backend failed; restart the app dev server.', { code: error.code });
     }
     // Startup rejection is delayed until the child releases its listeners and project lock.
-    void stop().catch(() => {});
+    void stop().catch(rejectStart);
   }
   function event(value) {
     if (!value || value.v !== 1 || typeof value.type !== 'string') {
