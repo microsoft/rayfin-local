@@ -84,6 +84,16 @@ stages:
       dependsOn: [PackNpm, ValidateWindows]
       variables:
         ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
+        EsrpServiceEndpointUrl: https://api.esrp.microsoft.com
+        EsrpMainPublisher: ESRPRELPACMAN
+        EsrpOwners: >-
+          cpeth@microsoft.com, kywhi@microsoft.com, malerner@microsoft.com, mwade@microsoft.com,
+          sumuth@microsoft.com, chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com,
+          andersonc@microsoft.com, pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com
+        EsrpApprovers: >-
+          cpeth@microsoft.com, kywhi@microsoft.com, malerner@microsoft.com, mwade@microsoft.com,
+          sumuth@microsoft.com, chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com,
+          andersonc@microsoft.com, pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com
       jobs:
         - deployment: PublishNpmPackage
           displayName: Submit approved npm preview through ESRP
@@ -103,12 +113,6 @@ stages:
                   - checkout: none
                   - pwsh: |
                       $ErrorActionPreference = 'Stop'
-                      foreach ($name in 'RELEASE_OWNERS', 'RELEASE_APPROVERS', 'RELEASE_ENDPOINT', 'RELEASE_PUBLISHER') {
-                        $value = [Environment]::GetEnvironmentVariable($name)
-                        if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('$(')) {
-                          throw "Ask the AppDev release owners to configure $name for this pipeline before npm publishing."
-                        }
-                      }
                       $tarballs = @(Get-ChildItem -LiteralPath "$env:PIPELINE_WORKSPACE/npm-packages" -Filter '*.tgz' -File -Recurse)
                       if ($env:RELEASE_TAG -cnotmatch '^v(\d+\.\d+\.\d+)$') { throw 'Expected a stable signed release tag.' }
                       if ($tarballs.Count -ne 1 -or $tarballs[0].Name -cne "microsoft-rayfin-local-$($Matches[1]).tgz") {
@@ -116,13 +120,9 @@ stages:
                       }
                       $publishDir = New-Item -ItemType Directory -Path "$env:AGENT_TEMPDIRECTORY/npm-release"
                       Copy-Item -LiteralPath $tarballs[0].FullName -Destination $publishDir.FullName
-                    displayName: Check configuration and stage only the verified npm tarball
+                    displayName: Stage only the verified npm tarball
                     env:
                       RELEASE_TAG: $(ReleaseTag)
-                      RELEASE_OWNERS: $(EsrpOwners)
-                      RELEASE_APPROVERS: $(EsrpApprovers)
-                      RELEASE_ENDPOINT: $(EsrpServiceEndpointUrl)
-                      RELEASE_PUBLISHER: $(EsrpMainPublisher)
                   - task: ESRPRelease@11
                     displayName: Publish @microsoft/rayfin-local via ESRP
                     inputs:

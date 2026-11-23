@@ -82,14 +82,14 @@ in-process `@microsoft/rayfin-local-runtime` package or its Node-API addon.
 Manually queue a branch with `testReleasePr=0` and `npmRelease=pack` for artifacts only.
 Use `npmRelease=preview` to also request release approval. The default `none` leaves native
 releases unchanged. The npm preview lane requires a stable Cargo version; it doesn't publish
-a PR-test alpha or move `latest`. `native-build.json` records the exact branch build,
-which can differ from a GitHub Release at the same version. Don't reuse a published npm version.
+a PR-test alpha or move an existing `latest` (npm points `latest` at a new package's first
+version). `native-build.json` records the exact branch build, which can differ from a GitHub
+Release at the same version. Don't reuse a published npm version.
 
-Before the first preview, the AppDev release owners must authorize pipeline 20870 for the
-`vscode-fabric-extension-release` approval environment, configure its ESRP release variables
-(`EsrpOwners`, `EsrpApprovers`, `EsrpServiceEndpointUrl`, `EsrpMainPublisher`), and confirm
-that the publisher can distribute this new npm package. Existing binary-signing permissions
-do not grant npm publishing rights. The approval check still applies to every preview.
+Pipeline 20870 is authorized for the `vscode-fabric-extension-release` approval environment.
+The `PublishNpm` stage defines the ESRP release owners, approvers, endpoint, and publisher; they
+follow the Project Rayfin release pipeline's values, plus the Rayfin Local maintainers. The
+approval check still applies to every preview.
 
 ## Pipeline verification history
 
