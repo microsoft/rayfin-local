@@ -87,9 +87,10 @@ version). `native-build.json` records the exact branch build, which can differ f
 Release at the same version. Don't reuse a published npm version.
 
 Pipeline 20870 is authorized for the `vscode-fabric-extension-release` approval environment.
-The `PublishNpm` stage defines the ESRP release owners, approvers, endpoint, and publisher; they
-follow the Project Rayfin release pipeline's values, plus the Rayfin Local maintainers. The
-approval check still applies to every preview.
+The `PublishNpm` stage defines the ESRP release owners, approvers, endpoint, and publisher. The
+endpoint and publisher follow the Project Rayfin release pipeline; the owners and approvers are the
+Rayfin Local maintainers plus one Project Rayfin release owner, because ESRP rejects requests with
+more than 10 approvers. The approval check still applies to every preview.
 
 ## Pipeline verification history
 

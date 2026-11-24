@@ -86,14 +86,13 @@ stages:
         ReleaseTag: $[stageDependencies.ValidateWindows.BuildWindows.outputs['packageWindows.ReleaseTag']]
         EsrpServiceEndpointUrl: https://api.esrp.microsoft.com
         EsrpMainPublisher: ESRPRELPACMAN
+        # ESRP rejects requests with more than 10 approvers.
         EsrpOwners: >-
-          cpeth@microsoft.com, kywhi@microsoft.com, malerner@microsoft.com, mwade@microsoft.com,
-          sumuth@microsoft.com, chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com,
-          andersonc@microsoft.com, pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com
+          chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com, andersonc@microsoft.com,
+          pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com, kywhi@microsoft.com
         EsrpApprovers: >-
-          cpeth@microsoft.com, kywhi@microsoft.com, malerner@microsoft.com, mwade@microsoft.com,
-          sumuth@microsoft.com, chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com,
-          andersonc@microsoft.com, pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com
+          chcaruso@microsoft.com, spandya@microsoft.com, sapatney@microsoft.com, andersonc@microsoft.com,
+          pratraw@microsoft.com, seanwat@microsoft.com, bezulau@microsoft.com, kywhi@microsoft.com
       jobs:
         - deployment: PublishNpmPackage
           displayName: Submit approved npm preview through ESRP
