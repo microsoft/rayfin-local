@@ -108,13 +108,12 @@ impl Locator {
     /// `base_url` is the Fabric REST origin (`https://api.fabric.microsoft.com`); `cache_dir` the
     /// folder for `connectors/<name>.json`.
     pub fn new(base_url: &str, scope: String, cache_dir: Option<PathBuf>) -> Result<Self, String> {
-        // reqwest is built without a rustls provider; a no-op when one is installed.
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let base = Url::parse(&format!("{}/v1/", base_url.trim_end_matches('/')))
             .ok()
             .filter(|url| matches!(url.scheme(), "http" | "https"))
             .ok_or_else(|| format!("The Fabric API URL '{base_url}' isn't an http(s) URL."))?;
-        let client = reqwest::Client::builder()
+        let client = rl_http::client_builder()
+            .map_err(|error| format!("Couldn't configure TLS for the Fabric API: {error}."))?
             .user_agent(concat!("rayfin-local/", env!("CARGO_PKG_VERSION")))
             .timeout(TIMEOUT)
             .build()

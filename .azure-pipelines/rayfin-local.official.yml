@@ -13,6 +13,11 @@ parameters:
     displayName: PR number for an on-demand alpha prerelease (requires release-test label; 0 disables)
     type: number
     default: 0
+  - name: npmRelease
+    displayName: Package @microsoft/rayfin-local (preview also requests public npm publication)
+    type: string
+    default: none
+    values: [none, pack, preview]
 
 variables:
   RustVersion: '1.96.0'
@@ -65,6 +70,10 @@ extends:
                   if ($env:TEST_RELEASE_PR -notmatch '^\d+$') {
                     throw 'testReleasePr must be zero or a positive PR number.'
                   }
+                  if ($env:NPM_RELEASE -ne 'none' -and ($env:TEST_RELEASE_PR -ne '0' -or
+                      $env:BUILD_REASON -ne 'Manual' -or -not $env:BUILD_SOURCEBRANCH.StartsWith('refs/heads/'))) {
+                    throw 'npm releases must be queued manually from a branch with testReleasePr=0.'
+                  }
                   if ([int]$env:TEST_RELEASE_PR -gt 0) {
                     if ($env:BUILD_REASON -ne 'Manual' -or
                         -not $env:BUILD_SOURCEBRANCH.StartsWith('refs/heads/')) {
@@ -79,6 +88,7 @@ extends:
                 displayName: Determine automatic signed release eligibility
                 env:
                   TEST_RELEASE_PR: ${{ parameters.testReleasePr }}
+                  NPM_RELEASE: ${{ parameters.npmRelease }}
 
       - stage: ValidateWindows
         displayName: Build, sign, and package Windows binary
@@ -584,3 +594,8 @@ extends:
                   isPreRelease: $(ReleaseIsPrerelease)
                   makeLatest: $(ReleaseMakeLatest)
                   addChangeLog: false
+
+      - ${{ if ne(parameters.npmRelease, 'none') }}:
+        - template: /.azure-pipelines/templates/npm-release.yml@self
+          parameters:
+            publish: ${{ eq(parameters.npmRelease, 'preview') }}

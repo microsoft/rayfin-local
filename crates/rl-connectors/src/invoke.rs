@@ -45,9 +45,6 @@ pub(crate) fn router(
     callers: Arc<dyn CallerResolver>,
     tokens: Arc<dyn TokenSource>,
 ) -> Router {
-    // reqwest is built without a rustls provider: install ring before building the client. A
-    // no-op when the binary already did.
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let power_bi = PowerBi::new(&config.powerbi_base_url, config.powerbi_scope);
     if let Err(problem) = &power_bi {
         tracing::error!("{problem}");

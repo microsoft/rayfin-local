@@ -13,11 +13,15 @@ use crate::events::{self, WarningCode};
 
 /// [`TokenBroker`]'s tokens, reporting failures as `azure-sign-in` warnings.
 pub fn reporting(broker: Arc<TokenBroker>) -> Arc<dyn TokenSource> {
-    Arc::new(ReportingTokens { broker })
+    Arc::new(ReportingTokens {
+        broker,
+        events: events::current(),
+    })
 }
 
 struct ReportingTokens {
     broker: Arc<TokenBroker>,
+    events: Option<events::EventContext>,
 }
 
 impl ReportingTokens {
@@ -35,7 +39,7 @@ impl TokenSource for ReportingTokens {
         Box::pin(async move {
             let result = self.broker.token(scope).await;
             if let Err(err) = &result {
-                report(self.audience(scope), scope, err);
+                report(self.events.as_ref(), self.audience(scope), scope, err);
             }
             result
         })
@@ -48,7 +52,7 @@ impl TokenSource for ReportingTokens {
         Box::pin(async move {
             let result = self.broker.token_silently(scope).await;
             if let Err(err) = &result {
-                report(self.audience(scope), scope, err);
+                report(self.events.as_ref(), self.audience(scope), scope, err);
             }
             result
         })
@@ -65,26 +69,40 @@ impl TokenSource for ReportingTokens {
 }
 
 /// An `azure-sign-in` warning, the first time an audience (or another scope) fails in this run.
-fn report(audience: Option<Audience>, scope: &str, err: &TokenError) {
+fn report(
+    context: Option<&events::EventContext>,
+    audience: Option<Audience>,
+    scope: &str,
+    err: &TokenError,
+) {
     static REPORTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     let name = audience.map(Audience::udf_name);
     let key = name.unwrap_or(scope).to_owned();
-    let first = REPORTED
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(key);
+    let first = context.map_or_else(
+        || {
+            REPORTED
+                .get_or_init(Mutex::default)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(key.clone())
+        },
+        |context| context.first_warning(key.clone()),
+    );
     if !first {
         return;
     }
     let what = name.map_or_else(|| format!("the scope {scope}"), str::to_owned);
-    events::warning(
-        WarningCode::AzureSignIn,
-        format!(
+    let event = events::Event::Warning(events::Warning {
+        code: WarningCode::AzureSignIn,
+        message: format!(
             "No Azure token for {what}: {}.",
             err.message.trim_end_matches('.')
         ),
-        err.hint.clone(),
-        json!({ "audience": name, "scope": scope }),
-    );
+        hint: err.hint.clone(),
+        details: json!({ "audience": name, "scope": scope }),
+    });
+    match context {
+        Some(context) => context.emit(event),
+        None => events::emit(event),
+    }
 }

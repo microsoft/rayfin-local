@@ -15,6 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+rl-runtime.workspace = true
 rl-project.workspace = true
 rl-node.workspace = true
 rl-model.workspace = true

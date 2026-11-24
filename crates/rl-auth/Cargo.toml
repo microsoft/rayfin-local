@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+rl-http.workspace = true
 rl-model.workspace = true
 rl-db.workspace = true
 rl-tokens.workspace = true

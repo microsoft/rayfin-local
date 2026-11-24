@@ -195,15 +195,8 @@ impl EntraKeys {
         if let Some(client) = self.client.get() {
             return Ok(client.clone());
         }
-        // reqwest panics without a crypto provider; the binary installs ring at startup.
-        if rustls::crypto::CryptoProvider::get_default().is_none() {
-            return Err(
-                "TLS is not set up in this process (no rustls crypto provider is \
-                        installed), so Microsoft's token signing keys cannot be downloaded"
-                    .to_owned(),
-            );
-        }
-        let client = reqwest::Client::builder()
+        let client = rl_http::client_builder()
+            .map_err(|error| format!("could not configure TLS: {error}"))?
             .timeout(FETCH_TIMEOUT)
             .user_agent(concat!("rayfin-local/", env!("CARGO_PKG_VERSION")))
             .build()

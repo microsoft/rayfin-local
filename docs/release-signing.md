@@ -56,10 +56,10 @@ Signing or verification failure blocks release-archive output; there is no unsig
 GitHub publication additionally waits for both the build/output checks and separate source-security stage to succeed.
 
 Main version increases and explicit PR test requests enable a production-classified 1ES release job using the existing `github.com_christopheranderson` GitHub service connection.
-Other manually queued runs only output pipeline artifacts.
+Other manually queued runs do not change GitHub Releases.
 No ADO credentials are copied to GitHub Actions.
 Do not enable global service-connection access if publishing needs an additional resource approval.
-crates.io and npm publishing remain out of scope.
+Crates.io publishing remains out of scope. The native GitHub release does not publish to npm.
 
 An on-demand PR test release uses the `testReleasePr` queue parameter and requires the PR's explicit `release-test` label.
 That mode publishes a Windows, macOS and Linux prerelease named `v<base version>-alpha.<ADO build ID>` directly, never marking it latest.
@@ -67,6 +67,32 @@ The current base version produces names such as `v0.3.4-alpha.21422341`.
 GitHub Actions release publishing has been removed; there is no unsigned publishing path.
 New releases require verified signed Windows x64, macOS Apple Silicon and Linux x64 artifacts.
 Stable main releases become latest; prerelease versions and PR-test alphas never do.
+
+## npm preview for the bundled Node client
+
+[`@microsoft/rayfin-local`](../npm/rayfin-local/README.md) is a single npm tarball with the
+supervised CLI client and the three official executables. It does not publish the separate
+in-process `@microsoft/rayfin-local-runtime` package or its Node-API addon.
+
+| Stage in ADO 20870 | Input | Output |
+| --- | --- | --- |
+| `PackNpm` | The checked-out client and this run's `windows-signed`, `macos-signed`, and `linux-signed` artifacts | `npm-packages` with one `.tgz`, versioned from Cargo. It checks exact source/build/target and archive hashes, verifies the contents and permissions of the packed executable files, and installs the tarball offline on Windows. |
+| `PublishNpm` | The same `npm-packages` artifact | `ESRPRelease@11` distributes the tarball to public npm as `@microsoft/rayfin-local@preview`. This uses the [Project Rayfin approval and distribution pattern](https://github.com/microsoft/project-rayfin/blob/main/.azure-pipelines/templates/publish-npm-stage.yml). |
+
+Manually queue a branch with `testReleasePr=0` and `npmRelease=pack` for artifacts only.
+Use `npmRelease=preview` to also request release approval. The default `none` leaves native
+releases unchanged. The npm preview lane requires a stable Cargo version; it doesn't publish
+a PR-test alpha or move an existing `latest` (npm points `latest` at a new package's first
+version). `native-build.json` records the exact branch build, which can differ from a GitHub
+Release at the same version. Don't reuse a published npm version.
+
+Pipeline 20870 is authorized for the `vscode-fabric-extension-release` approval environment.
+The `PublishNpm` stage defines the ESRP release owners, approvers, endpoint, and publisher. The
+endpoint and publisher follow the Project Rayfin release pipeline; the owners and approvers are the
+Rayfin Local maintainers plus one Project Rayfin release owner, because ESRP rejects requests with
+more than 10 approvers. The approval check still applies to every preview.
+
+## Pipeline verification history
 
 The [unsigned validation run](https://dev.azure.com/powerbi/AppDev/_build/results?buildId=21383235&view=results)
 succeeded for commit `e2aba0e69627faf8cfdd2be8aa83ec4e71650f27`, including the
